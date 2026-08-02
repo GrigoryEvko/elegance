@@ -30,13 +30,18 @@ case "$FILE" in
     *.seed) exit 0 ;;  # recall fixtures are seeded smells by design
 esac
 
-# A plugin cannot ship a platform-specific binary, so it finds one. If
-# there is none, say so ONCE per session and then be quiet: a hook that
-# repeats an install hint on every edit is worse than one that does
-# nothing.
+# A plugin cannot ship a platform-specific binary, so install.sh fetched
+# the right one at SessionStart. A hand-installed elegance still wins:
+# someone who built from source meant it. If there is none at all, say so
+# ONCE per session and then be quiet — an install hint repeated on every
+# edit is worse than a hook that does nothing.
 STATE_DIR="${TMPDIR:-/tmp}/elegance-nudge/$SESSION"
 ELEGANCE=""
-for candidate in "$HOME/.local/bin/elegance" "$HOME/.cargo/bin/elegance" "$(command -v elegance 2>/dev/null || true)"; do
+for candidate in \
+    "$(command -v elegance 2>/dev/null || true)" \
+    "$HOME/.cargo/bin/elegance" \
+    "$HOME/.local/bin/elegance" \
+    "${CLAUDE_PLUGIN_DATA:-$HOME/.claude/elegance-nudge}/bin/elegance"; do
     if [ -n "$candidate" ] && [ -x "$candidate" ]; then
         ELEGANCE="$candidate"
         break
@@ -46,7 +51,7 @@ if [ -z "$ELEGANCE" ]; then
     mkdir -p "$STATE_DIR"
     if [ ! -f "$STATE_DIR/.missing" ]; then
         touch "$STATE_DIR/.missing"
-        echo "elegance-nudge: no elegance binary on PATH or in ~/.local/bin — cargo install --git https://github.com/GrigoryEvko/elegance"
+        echo "elegance-nudge: no elegance binary — cargo install --git https://github.com/GrigoryEvko/elegance"
     fi
     exit 0
 fi

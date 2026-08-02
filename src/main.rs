@@ -309,6 +309,23 @@ impl Parsers {
     }
 }
 
+/// Flags that answer and leave. They need no parsed state and no scan,
+/// so they are handled apart from the arguments that build one.
+///
+/// `--version` exists because a released binary has to be able to say
+/// which one it is, and this one updates itself through the Claude Code
+/// plugin, so "which build is this" has a moving answer. Without it,
+/// `elegance --version` scanned the working directory and replied "no
+/// supported source files found" — a sentence, just not that one.
+fn answers_and_exits(flag: &str) -> bool {
+    match flag {
+        "--help" | "-h" => println!("{USAGE}"),
+        "--version" | "-V" => println!("elegance {}", env!("CARGO_PKG_VERSION")),
+        _ => return false,
+    }
+    std::process::exit(0);
+}
+
 fn parse_args() -> Result<Args, Box<dyn Error>> {
     let mut args = Args {
         roots: Vec::new(),
@@ -346,10 +363,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
             "calibrate" if args.roots.is_empty() && !args.calibrate => args.calibrate = true,
             "install-hook" if args.roots.is_empty() => args.install_hook = true,
             "uninstall-hook" if args.roots.is_empty() => args.uninstall_hook = true,
-            "--help" | "-h" => {
-                println!("{USAGE}");
-                std::process::exit(0);
-            }
+            _ if answers_and_exits(flag) => unreachable!("it exited"),
             _ if takes_value(flag) => {
                 let v = it
                     .next()
@@ -385,6 +399,7 @@ fn set_switch(args: &mut Args, flag: &str) -> bool {
 
 const USAGE: &str = "\
 usage: elegance [paths...]                 report; defaults to .
+  --version | -V                           which build this is
   --top N                                  offenders shown per metric
   --json | --sarif                         machine output (schema 1 / SARIF 2.1.0)
   --explain file[:line]                    per-construct breakdown of one unit
