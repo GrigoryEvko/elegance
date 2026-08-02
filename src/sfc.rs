@@ -1,9 +1,12 @@
-//! Vue single-file components: the script inside the markup.
+//! Single-file components: the script inside the markup.
 //!
-//! A `.vue` file is a container, not a language. Its `<script>` blocks
-//! are ordinary TypeScript or JavaScript, and the whole rest of the
-//! file — template, styles — is not something this tool has anything
-//! true to say about.
+//! A `.vue` or `.svelte` file is a container, not a language. Its
+//! `<script>` blocks are ordinary TypeScript or JavaScript, and the
+//! whole rest of the file — template, styles — is not something this
+//! tool has anything true to say about. The two frameworks differ in
+//! everything except the part this module cares about: both spell
+//! their code `<script>`, both spell its language `lang=`, and both
+//! put everything else outside those tags.
 //!
 //! No new grammar. The community tree-sitter-vue is stale, and a
 //! container needs no parser: replacing everything outside the script
@@ -85,7 +88,11 @@ fn script_blocks(source: &str) -> Vec<Block> {
         blocks.push(Block {
             start: tag_end,
             end: close,
-            typed: attrs.contains("lang=\"ts\"") || attrs.contains("lang='ts'"),
+            // Vue writes `lang="ts"`; Svelte allows the same, and
+            // `lang=ts` unquoted. Any spelling picks the typed pack.
+            typed: attrs.contains("lang=\"ts\"")
+                || attrs.contains("lang='ts'")
+                || attrs.contains("lang=ts"),
         });
         at = close;
     }
@@ -132,6 +139,29 @@ mod tests {
         assert_eq!(greet.line, 7, "the unit reports its true file line");
         assert_eq!(greet.params.len(), 1);
         assert!(greet.params[0].typed, "TypeScript, not JavaScript");
+    }
+
+    #[test]
+    fn svelte_is_the_same_container_in_another_framework() {
+        // Module context and instance script, both kept, and
+        // `lang="ts"` on either picks the typed pack.
+        const SVELTE: &str = "<script context=\"module\" lang=\"ts\">\n  export function preload(page: Page): string {\n    return page.path;\n  }\n</script>\n\n<script>\n  let count = 0;\n</script>\n\n<button on:click={() => count++}>{count}</button>\n\n<style>\n  button { color: red; }\n</style>\n";
+        let (lang, script) = script_of(SVELTE).expect("has scripts");
+        assert_eq!(lang, Lang::TypeScript);
+        // `export function preload` is on line 2 of the real file.
+        let at = script
+            .lines()
+            .position(|l| l.contains("function preload"))
+            .expect("kept");
+        assert_eq!(at + 1, 2);
+        // Both blocks survive; markup and styles do not.
+        assert!(script.contains("let count = 0"));
+        assert!(!script.contains("on:click"));
+        assert!(!script.contains("color: red"));
+        assert_eq!(script.lines().count(), SVELTE.lines().count());
+        // Svelte also allows the attribute unquoted.
+        let (lang, _) = script_of("<script lang=ts>\nlet a: number = 1;\n</script>\n").unwrap();
+        assert_eq!(lang, Lang::TypeScript);
     }
 
     #[test]

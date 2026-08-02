@@ -271,8 +271,9 @@ written in every supported language must produce identical metrics.
 Python, Rust, TypeScript, TSX, Go, JavaScript, Zig, C, OCaml, shell.
 Next: C++.
 
-`.vue` single-file components are read as what they contain. A
-component is a container, not a language: its `<script>` blocks are
+`.vue` and `.svelte` single-file components are read as what they
+contain. A component is a container, not a language: its `<script>`
+blocks (Svelte's `context="module"` included) are
 ordinary TypeScript or JavaScript, and everything outside them is
 replaced with blank lines, so the pack reads real code at line numbers
 that are already true — `--explain`, `--diff` and the baseline need no

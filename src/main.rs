@@ -274,7 +274,7 @@ fn measurable<'a>(
     };
     let owned = |lang: Lang, text: String| (lang, std::borrow::Cow::Owned(text));
     match container {
-        ci::Container::Vue => sfc::script_of(source).map(|(lang, text)| owned(lang, text)),
+        ci::Container::Component => sfc::script_of(source).map(|(lang, text)| owned(lang, text)),
         ci::Container::Workflow => {
             ci::shell_of_workflow(source).map(|text| owned(Lang::Shell, text))
         }

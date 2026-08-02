@@ -24,8 +24,9 @@
 /// A file whose code is written in another file's format.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Container {
-    /// A Vue single-file component: `<script>` inside markup.
-    Vue,
+    /// A single-file component — Vue or Svelte — whose code lives in
+    /// `<script>` blocks inside markup.
+    Component,
     /// A GitHub Actions workflow: shell inside `run:` blocks.
     Workflow,
     /// A Dockerfile: shell inside `RUN`, assignments inside `ENV`.
@@ -35,8 +36,11 @@ pub enum Container {
 impl Container {
     /// What kind of container this path is, if it is one.
     pub fn of(path: &std::path::Path) -> Option<Container> {
-        if path.extension().is_some_and(|e| e == "vue") {
-            return Some(Container::Vue);
+        if path
+            .extension()
+            .is_some_and(|e| e == "vue" || e == "svelte")
+        {
+            return Some(Container::Component);
         }
         let name = path.file_name()?.to_str()?;
         if name == "Dockerfile" || name.starts_with("Dockerfile.") {
