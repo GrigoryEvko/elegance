@@ -236,6 +236,19 @@ output says the same thing in a `budget_source` field. Printing a
 measured budget and a guessed one identically would imply evidence the
 tool does not have.
 
+**Rung 7 — tensions.** Facts that are worse together than apart. Every
+other rung measures one property; a tension is a *co-occurrence* — a
+unit over budget, that no test mentions, in a file half the codebase
+imports, holding duplicated logic. Each is survivable alone and
+already reported at its own rung; arriving together they are not,
+because the thing hardest to change safely is the thing nobody is
+watching. Three independent facts must align, and correlated metrics
+count as one: cognitive, cyclomatic, length and live span all trip
+because a function is big, so counting each would let one fact reach
+the threshold by itself. Deliberately **no score** — a composite
+number is the `risk_score` this project refuses, and it would hide
+which of the facts is true.
+
 **Rung 5 — dependency graph and rates.** Reported, never gated: cycle
 mass at file and directory granularity, dependency depth, deletability,
 blast radius, orphans, interface depth (Parnas: hide a lot behind a

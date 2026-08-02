@@ -686,42 +686,12 @@ fn push_offender(heap: &mut Vec<Offender>, o: Offender, cap: usize) {
 }
 
 pub fn render(agg: &mut Agg, top: usize) -> String {
-    let mut out = String::new();
-    let langs: Vec<String> = LANGS
-        .iter()
-        .filter(|l| agg.files_by_lang[**l as usize] > 0)
-        .map(|l| format!("{} {}", l.name(), agg.files_by_lang[*l as usize]))
-        .collect();
-    let test_share = if agg.units > 0 {
-        format!(
-            " ({:.0}% test)",
-            100.0 * agg.test_units as f64 / agg.units as f64
-        )
-    } else {
-        String::new()
-    };
-    let _ = writeln!(
-        out,
-        "elegance — {} files ({}), {} units{}, {} lines{}{}{}{}{}\n",
-        agg.files,
-        langs.join(", "),
-        agg.units,
-        test_share,
-        agg.lines,
-        note(agg.skipped, "skipped"),
-        note(agg.generated, "generated skipped"),
-        note(agg.junk_files, "junk-drawer files"),
-        note(agg.error_files, "with parse errors"),
-        note(
-            agg.low_confidence.len() as u32,
-            "low-confidence excluded from metrics"
-        ),
-    );
-
+    let mut out = headline(agg);
     render_distributions(agg, &mut out);
     render_verdict(agg, &mut out);
     render_rates(agg, &mut out);
     render_architecture(agg, &mut out);
+    render_tensions(agg, &mut out);
     render_narrative(agg, &mut out);
     render_idioms(agg, &mut out);
     render_clones(agg, top, &mut out);
@@ -818,6 +788,146 @@ fn render_rates(agg: &Agg, out: &mut String) {
 }
 
 /// Rung-5 view: describes the dependency structure, gates nothing.
+/// What this run measured, and everything it declined to measure —
+/// the one line a reader sees before any finding.
+fn headline(agg: &Agg) -> String {
+    let langs: Vec<String> = LANGS
+        .iter()
+        .filter(|l| agg.files_by_lang[**l as usize] > 0)
+        .map(|l| format!("{} {}", l.name(), agg.files_by_lang[*l as usize]))
+        .collect();
+    let test_share = match agg.units > 0 {
+        true => format!(
+            " ({:.0}% test)",
+            100.0 * agg.test_units as f64 / agg.units as f64
+        ),
+        false => String::new(),
+    };
+    format!(
+        "elegance — {} files ({}), {} units{}, {} lines{}{}{}{}{}\n\n",
+        agg.files,
+        langs.join(", "),
+        agg.units,
+        test_share,
+        agg.lines,
+        note(agg.skipped, "skipped"),
+        note(agg.generated, "generated skipped"),
+        note(agg.junk_files, "junk-drawer files"),
+        note(agg.error_files, "with parse errors"),
+        note(
+            agg.low_confidence.len() as u32,
+            "low-confidence excluded from metrics"
+        ),
+    )
+}
+
+/// Facts must align at least this many ways before the alignment is
+/// worth a reader's attention. Two is a coincidence in any codebase of
+/// size; three is a place to look.
+const MIN_TENSIONS: usize = 3;
+
+/// A file this many others import is expensive to change.
+const LOAD_BEARING: u32 = 5;
+
+/// Rung 7: facts that are worse together than apart.
+///
+/// Every other rung measures ONE property and reports it. A tension is
+/// a CO-OCCURRENCE — a unit over budget, that no test mentions, in a
+/// file half the codebase imports. Each is already reported at its own
+/// rung, where each is survivable. Arriving together they are not: the
+/// thing hardest to change safely is also the thing nobody is watching.
+///
+/// Deliberately NOT a score. A composite number would be the
+/// risk_score this project refused: weights nobody can defend,
+/// normalisation that makes repositories incomparable, and a figure
+/// that launders a rung-5 description into the same currency as a
+/// rung-0 gate. A tension names every fact it is made of.
+fn render_tensions(agg: &mut Agg, out: &mut String) {
+    let untested: std::collections::HashSet<String> = select_untested(agg)
+        .into_iter()
+        .map(|(label, _)| label)
+        .collect();
+    let heavy = load_bearing_files(agg);
+    let duplicated: std::collections::HashSet<String> = recurring(agg)
+        .iter()
+        .flat_map(|c| c.sites.iter().map(|s| s.path.to_string()))
+        .collect();
+    let mut gated: HashMap<(String, u32, String), Vec<&'static str>> = HashMap::new();
+    for v in agg.violations() {
+        if METRICS[v.metric].rung > 2 {
+            continue;
+        }
+        gated
+            .entry((v.path.to_string(), v.line, v.unit.to_string()))
+            .or_default()
+            .push(METRICS[v.metric].name);
+    }
+    let mut aligned: Vec<(String, u32, String, Vec<String>)> = gated
+        .into_iter()
+        .filter_map(|((path, line, unit), mut metrics)| {
+            metrics.sort_unstable();
+            // ONE fact, however many metrics state it: cognitive,
+            // cyclomatic, length and live span move together, and
+            // counting each would let a single big function reach the
+            // threshold by itself, which is the opposite of a tension.
+            let mut facts = vec![format!("over budget on {}", metrics.join(", "))];
+            if untested.contains(&format!("{path}:{line}  {unit}")) {
+                facts.push("no test mentions it".to_string());
+            }
+            if let Some(n) = heavy.get(&path) {
+                facts.push(format!("{n} files import this one"));
+            }
+            if duplicated.contains(&*path) {
+                facts.push("its file holds duplicated logic".to_string());
+            }
+            (facts.len() >= MIN_TENSIONS).then_some((path, line, unit, facts))
+        })
+        .collect();
+    if aligned.is_empty() {
+        return;
+    }
+    aligned.sort_by(|a, b| {
+        b.3.len()
+            .cmp(&a.3.len())
+            .then_with(|| (&a.0, a.1).cmp(&(&b.0, b.1)))
+    });
+    let _ = writeln!(
+        out,
+        "\ntensions — {} places where independent facts align:",
+        aligned.len()
+    );
+    for (path, line, unit, facts) in aligned.iter().take(SHOW_TENSIONS) {
+        let _ = writeln!(out, "  {path}:{line}  {unit}");
+        for fact in facts {
+            let _ = writeln!(out, "      - {fact}");
+        }
+    }
+    if aligned.len() > SHOW_TENSIONS {
+        let _ = writeln!(out, "  ... and {} more", aligned.len() - SHOW_TENSIONS);
+    }
+    let _ = writeln!(
+        out,
+        "  Each fact is survivable alone and reported at its own rung.\n\
+         \x20 No score, deliberately: one number would hide which of them\n\
+         \x20 is true."
+    );
+}
+
+/// Tensions listed before the list stops being read.
+const SHOW_TENSIONS: usize = 10;
+
+/// Files enough of the codebase imports that changing them is costly.
+fn load_bearing_files(agg: &Agg) -> HashMap<String, u32> {
+    let Some(arch) = crate::graph::analyze(&agg.graph, &agg.mentions) else {
+        return HashMap::new();
+    };
+    arch.load_bearing
+        .iter()
+        .filter(|(_, n)| *n >= LOAD_BEARING)
+        .map(|(path, n)| (path.clone(), *n))
+        .collect()
+}
+
 fn render_architecture(agg: &mut Agg, out: &mut String) {
     crate::layers::render(&agg.breaches, agg.declared_layers, out);
     if agg.graph.iter().all(|g| g.imports.is_empty()) {
@@ -1826,6 +1936,36 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].count, 3);
         assert_eq!(hits[0].names, ["'a'", "'b'", "_"]);
+    }
+
+    #[test]
+    fn correlated_metrics_are_one_fact_not_four() {
+        // A function big enough to trip cognitive, cyclomatic, length
+        // and live span at once trips them BECAUSE it is big: they are
+        // one fact wearing four names. Counting each would let a
+        // single unit reach the threshold alone, which is the opposite
+        // of a tension. Tested and unimported, it says nothing.
+        let mut big = String::from("def sprawl(a):\n");
+        for i in 1..40 {
+            let _ = writeln!(big, "    if a == {i} and a != {i}:\n        return {i}");
+        }
+        let mut agg = Agg::new();
+        agg.add_file(&facts("prod.py", &big));
+        agg.add_file(&facts(
+            "test_prod.py",
+            "def test_sprawl_works():\n    assert sprawl(1) == 1\n",
+        ));
+        let gates = agg
+            .violations()
+            .filter(|v| METRICS[v.metric].rung <= 2)
+            .count();
+        assert!(gates >= 3, "the fixture must trip several gates: {gates}");
+        let mut out = String::new();
+        render_tensions(&mut agg, &mut out);
+        assert!(
+            out.is_empty(),
+            "one big TESTED function is one fact, not a tension:\n{out}"
+        );
     }
 
     #[test]
