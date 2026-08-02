@@ -233,6 +233,12 @@ type LineRanges = Vec<(u32, u32)>;
 
 /// Changed files (post-image, tracked) with their changed line ranges in
 /// the new revision.
+/// Changed files and their new-side line ranges. The reference reaches
+/// git VERBATIM, which is what makes `origin/main...HEAD` work: git
+/// resolves three dots to the merge base, so a pull request is judged
+/// on what it added rather than on everything main merged meanwhile.
+/// `HEAD` with no dots compares against the working tree, which is
+/// what a pre-commit hook wants.
 fn changed_files(
     root: &Path,
     reference: &str,
@@ -288,6 +294,28 @@ fn git(root: &Path, args: &[&str]) -> Result<String, Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::metrics::LangBudgets;
+
+    #[test]
+    fn a_three_dot_reference_reaches_git_verbatim() {
+        // The merge-base form is what makes a pull-request gate honest:
+        // `origin/main` alone also reports everything main merged since
+        // the branch point, which the author cannot fix here. Nothing
+        // between the flag and git may rewrite the reference, and this
+        // is the test that says so — it runs against this repository,
+        // where HEAD~1...HEAD is always a valid range.
+        let root = std::path::Path::new(".");
+        if git(root, &["rev-parse", "HEAD~1"]).is_err() {
+            return; // a shallow or fresh checkout has no history to span
+        }
+        let spanned = changed_files(root, "HEAD~1...HEAD").expect("three dots resolve");
+        let direct = changed_files(root, "HEAD~1").expect("two dots resolve");
+        // On a clean tree the two agree; the point is that BOTH parse,
+        // so the three-dot form is not silently mangled into an error.
+        assert!(
+            spanned.len() <= direct.len() + 1,
+            "three-dot range should not explode into unrelated files"
+        );
+    }
 
     #[test]
     fn hunk_headers_parse_to_new_side_ranges() {

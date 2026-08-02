@@ -18,6 +18,7 @@ elegance --explain file[:line]     # per-construct score breakdown
 elegance --baseline write          # record today's violations as the ledger
 elegance --baseline check          # exit 1 on NEW or WORSENED violations
 elegance --diff HEAD               # judge only what this change touched
+elegance --diff 'origin/main...'   # ...or only what a PR added (merge base)
 elegance --fail-on RUNG            # which rungs may block (default 2)
 elegance install-hook              # pre-commit hook running --diff HEAD
 elegance --sarif [paths...]        # SARIF 2.1.0 for code scanning / PR annotations
@@ -45,10 +46,17 @@ always reported, never blocking.
 
 ```yaml
 # .github/workflows/quality.yml
-- run: elegance --baseline check .          # blocks new or worsened sludge
-- run: elegance --diff origin/main .        # annotates what the PR touched
-- run: elegance --sarif . > elegance.sarif   # then upload-sarif for PR annotations
+- run: elegance --baseline check .              # blocks new or worsened sludge
+- run: elegance --diff 'origin/main...HEAD' .   # judges only what the PR added
+- run: elegance --sarif . > elegance.sarif      # then upload-sarif for annotations
 ```
+
+The three dots matter on a pull request. `--diff origin/main` compares
+against the branch tip, so everything main merged since you branched
+reads as a change of yours — findings you cannot fix in this PR.
+`origin/main...HEAD` compares against the merge base instead, which is
+exactly the code the PR introduced. Locally, `--diff HEAD` judges the
+working tree and is what a pre-commit hook wants.
 
 Reports tail distributions per metric (a codebase is as bad as the code
 you read most often — means hide monsters) and lists only budget
