@@ -1,0 +1,8 @@
+/target
+
+# Local measurement cache: content-addressed, rebuilt on demand.
+# The baseline and history ARE shared artifacts and stay tracked.
+.elegance/cache.json
+
+# Trend ledger: written by --history record, per-checkout.
+.elegance/history.jsonl

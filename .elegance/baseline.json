@@ -1,0 +1,192 @@
+{
+  "schema_version": 2,
+  "gated_max_rung": 2,
+  "violations": [
+    {
+      "metric": "cognitive",
+      "path": "./src/calibrate.rs",
+      "unit": "run",
+      "value": 24.0
+    },
+    {
+      "metric": "cognitive",
+      "path": "./src/lang/python.rs",
+      "unit": "imports",
+      "value": 18.0
+    },
+    {
+      "metric": "cognitive",
+      "path": "./src/ratchet.rs",
+      "unit": "run",
+      "value": 21.0
+    },
+    {
+      "metric": "cyclomatic",
+      "path": "./src/calibrate.rs",
+      "unit": "run",
+      "value": 16.0
+    },
+    {
+      "metric": "cyclomatic",
+      "path": "./src/facts/extract.rs",
+      "unit": "Extractor::record",
+      "value": 15.0
+    },
+    {
+      "metric": "cyclomatic",
+      "path": "./src/main.rs",
+      "unit": "main",
+      "value": 15.0
+    },
+    {
+      "metric": "cyclomatic",
+      "path": "./src/main.rs",
+      "unit": "parse_args",
+      "value": 16.0
+    },
+    {
+      "metric": "cyclomatic",
+      "path": "./src/ratchet.rs",
+      "unit": "run",
+      "value": 15.0
+    },
+    {
+      "metric": "demeter",
+      "path": "./src/facts/extract.rs",
+      "unit": "Extractor::is_magic",
+      "value": 2.0
+    },
+    {
+      "metric": "demeter",
+      "path": "./src/facts/extract.rs",
+      "unit": "Extractor::open_unit",
+      "value": 2.0
+    },
+    {
+      "metric": "depth",
+      "path": "./src/lang/python.rs",
+      "unit": "imports",
+      "value": 4.0
+    },
+    {
+      "metric": "depth",
+      "path": "./src/lang/typescript.rs",
+      "unit": "imports",
+      "value": 4.0
+    },
+    {
+      "metric": "depth",
+      "path": "./src/ratchet.rs",
+      "unit": "run",
+      "value": 4.0
+    },
+    {
+      "metric": "depth",
+      "path": "./src/report/mod.rs",
+      "unit": "Agg::collect_clumps",
+      "value": 4.0
+    },
+    {
+      "metric": "expr depth",
+      "path": "./src/calibrate.rs",
+      "unit": "run",
+      "value": 14.0
+    },
+    {
+      "metric": "expr depth",
+      "path": "./src/lang/rust.rs",
+      "unit": "use_edges",
+      "value": 13.0
+    },
+    {
+      "metric": "expr depth",
+      "path": "./src/report/mod.rs",
+      "unit": "quantile",
+      "value": 12.0
+    },
+    {
+      "metric": "expr depth",
+      "path": "./src/report/mod.rs",
+      "unit": "repeated_dispatch_needs_the_same_label_set_three_times",
+      "value": 12.0
+    },
+    {
+      "metric": "expr depth",
+      "path": "./src/report/mod.rs",
+      "unit": "select_clumps",
+      "value": 12.0
+    },
+    {
+      "metric": "length",
+      "path": "./src/metrics/mod.rs",
+      "unit": "for_each",
+      "value": 100.0
+    },
+    {
+      "metric": "length",
+      "path": "./src/report/json.rs",
+      "unit": "render_json",
+      "value": 101.0
+    },
+    {
+      "metric": "live span",
+      "path": "./src/calibrate.rs",
+      "unit": "run",
+      "value": 69.0
+    },
+    {
+      "metric": "live span",
+      "path": "./src/facts/extract.rs",
+      "unit": "extract",
+      "value": 88.0
+    },
+    {
+      "metric": "live span",
+      "path": "./src/metrics/mod.rs",
+      "unit": "for_each",
+      "value": 66.0
+    },
+    {
+      "metric": "live span",
+      "path": "./src/ratchet.rs",
+      "unit": "run",
+      "value": 80.0
+    },
+    {
+      "metric": "live span",
+      "path": "./src/report/json.rs",
+      "unit": "render_json",
+      "value": 85.0
+    },
+    {
+      "metric": "live span",
+      "path": "./src/report/mod.rs",
+      "unit": "render_architecture",
+      "value": 68.0
+    },
+    {
+      "metric": "magic numbers",
+      "path": "./src/facts/extract.rs",
+      "unit": "Extractor::scan",
+      "value": 4.0
+    },
+    {
+      "metric": "magic numbers",
+      "path": "./src/facts/extract.rs",
+      "unit": "mix",
+      "value": 6.0
+    },
+    {
+      "metric": "magic numbers",
+      "path": "./src/graph/metrics.rs",
+      "unit": "analyze",
+      "value": 4.0
+    },
+    {
+      "metric": "magic numbers",
+      "path": "./src/report/mod.rs",
+      "unit": "render_clones",
+      "value": 3.0
+    }
+  ]
+}

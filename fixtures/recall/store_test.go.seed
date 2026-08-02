@@ -1,0 +1,6 @@
+package store
+
+func TestKind(t *T) {
+	expectOk(true)
+	assertEqual(t, Kind(1), "a")
+}

@@ -1,0 +1,58 @@
+export async function loadConfig(p: string) {
+  const raw = fs.readFileSync(p);
+  // @ts-ignore legacy shape
+  const cfg = JSON.parse(raw as any);
+  return cfg!;
+}
+
+export function guard(input: unknown) {
+  try {
+    risky(input);
+  } catch (e) {
+    throw new Error('nope');
+  }
+  try {
+    other();
+  } catch (e) {}
+}
+
+export function sloppy(payload: any) {
+  return payload;
+}
+
+export function kindOf(v: number): string {
+  switch (v) {
+    case 1: return 'a';
+    case 2: return 'b';
+    default: return 'c';
+  }
+}
+
+const handlerPassword = 'm4k9x2v8q1hunter';
+
+export function isReady(): number {
+  return 1;
+}
+
+export function gateAll(cfg: Cfg, strict: boolean, checked: boolean) {
+  if (!(strict && checked)) {
+    return cfg.db.conn.host;
+  }
+  return null;
+}
+
+export function bare(payload) {
+  return payload;
+}
+
+export function evaluate(expr: string) {
+  return eval(expr);
+}
+
+export function fireAndForget() {
+  spawn(worker);
+}
+
+test('placeholder stays green', () => {
+  assert(true);
+});

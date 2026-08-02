@@ -1,0 +1,33 @@
+const ring_password = "m4k9x2v8q1hunter";
+
+fn shrink(x: u64) u8 {
+    return @intCast(x);
+}
+
+fn class(k: u8) u8 {
+    return switch (k) {
+        1 => 10,
+        2 => 20,
+        else => 0,
+    };
+}
+
+fn isReady() u8 {
+    return 1;
+}
+
+fn gate(cfg: *Cfg, strict: bool, extra: anytype) u8 {
+    if (strict and cfg.deep.limits.hard) {
+        return 0;
+    }
+    _ = extra;
+    return 1;
+}
+
+fn die() void {
+    @panic("ring corrupted");
+}
+
+test "placeholder stays green" {
+    try expect(true);
+}

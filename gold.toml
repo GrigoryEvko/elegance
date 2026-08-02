@@ -1,0 +1,322 @@
+# The gold corpus: codebases widely considered exemplary, pinned by SHA.
+# Calibration (budgets = gold percentiles per language) must be
+# reproducible: an unpinned corpus is an opinion, a pinned one is data.
+#
+# Fetch with: ./gold-fetch.sh [target-dir]   (default /tmp/gold)
+#
+# FOUR OR MORE PER LANGUAGE, deliberately. The first version of this file
+# had one Go repo and no JavaScript or TSX repo at all, and both mistakes
+# produced budgets that described a project rather than a language: with
+# no JS repo, JavaScript's numbers came from whatever .js files happened
+# to sit inside the TypeScript and Go checkouts -- build scripts, test
+# fixtures, colorizer inputs -- which is how it acquired a magic-numbers
+# budget of 14.
+#
+# Two entries were dropped AFTER measuring them, not before, and neither
+# for scoring badly. Both are fine software; both are unrepresentative
+# samples:
+#
+#   esbuild (go) -- deliberately unidiomatic style. visitExprInOut is
+#     2423 lines with 89 case arms and 379 ifs, verified by hand. It
+#     alone set Go's cognitive budget to 163 against Rust's 19. The four
+#     repos kept here read 32.
+#   date-fns (ts) -- 52.6% duplicated, which is 69 near-identical locale
+#     match/index.ts files. That is one template instantiated per
+#     language, so calibrating on it measures the template.
+#
+# vscode was checked for the same distortion and KEPT: TypeScript reads
+# p99 38 with it and 40 without, so it carries the at-scale evidence
+# without dictating the number.
+#
+# Known and accepted: Go's length p99 is inflated by table-driven tests
+# (go-cmp's TestOptions is 1099 lines), which is idiomatic Go rather than
+# a long function in the bad sense.
+
+# --- rust: the canonical community answer to 'what should I read'.
+[[repo]]
+lang = "rust"
+name = "ripgrep"
+url = "https://github.com/BurntSushi/ripgrep"
+sha = "435f59fc4b43af3ab32f34d53fa34978f393fe52"
+
+[[repo]]
+lang = "rust"
+name = "regex"
+url = "https://github.com/rust-lang/regex"
+sha = "2b527599eb9eea0dcc288c704584f242f26a5c61"
+
+[[repo]]
+lang = "rust"
+name = "fd"
+url = "https://github.com/sharkdp/fd"
+sha = "41532d114e2ba565fb5367d606c111b29b96450c"
+
+[[repo]]
+lang = "rust"
+name = "rayon"
+url = "https://github.com/rayon-rs/rayon"
+sha = "1f9bb2538e50f1e6d1bc2e3d06a361ba2af0b632"
+
+# --- py: the strongest claims to deliberate modern Python.
+[[repo]]
+lang = "py"
+name = "attrs"
+url = "https://github.com/python-attrs/attrs"
+sha = "92e12eae712ef88c1a7e322cc51b7cd9e271aa3c"
+
+[[repo]]
+lang = "py"
+name = "starlette"
+url = "https://github.com/encode/starlette"
+sha = "5174d4c8358a6f06aa8056bafd14c2272dab8dd1"
+
+[[repo]]
+lang = "py"
+name = "click"
+url = "https://github.com/pallets/click"
+sha = "00e592cea702e0b2caa0dee42489fdb1c22cd845"
+
+[[repo]]
+lang = "py"
+name = "httpx"
+url = "https://github.com/encode/httpx"
+sha = "b5addb64f0161ff6bfe94c124ef76f6a1fba5254"
+
+[[repo]]
+lang = "py"
+name = "rich"
+url = "https://github.com/Textualize/rich"
+sha = "9d8f9a372cc5916fd4781fec207ced7ddac2f08f"
+
+# --- go: libraries admired for their STYLE, which is what is measured.
+[[repo]]
+lang = "go"
+name = "go-cmp"
+url = "https://github.com/google/go-cmp"
+sha = "b133f1f1932e48f466f597a3346ce6f5a49a0dc1"
+
+[[repo]]
+lang = "go"
+name = "chi"
+url = "https://github.com/go-chi/chi"
+sha = "8b258c7bb28f97a5f2a856ff7ef962578fec9215"
+
+[[repo]]
+lang = "go"
+name = "cobra"
+url = "https://github.com/spf13/cobra"
+sha = "adbc8813901bba65827259daa8e22ff94ec1f30e"
+
+[[repo]]
+lang = "go"
+name = "toml"
+url = "https://github.com/BurntSushi/toml"
+sha = "c6d720d83547bb8d7afb067ba9df8bad0323e2d1"
+
+# --- ts: small libraries with a stated design, plus one at-scale product.
+[[repo]]
+lang = "ts"
+name = "zod"
+url = "https://github.com/colinhacks/zod"
+sha = "912f0f51b0ced654d0069741e7160834dca742ee"
+
+[[repo]]
+lang = "ts"
+name = "hono"
+url = "https://github.com/honojs/hono"
+sha = "224d2f5cbf2b4bc2ebb7482d0592149a8d9f0574"
+
+[[repo]]
+lang = "ts"
+name = "trpc"
+url = "https://github.com/trpc/trpc"
+sha = "dfbafa8ef178a5a3d23ef9461caa9494b3ef7f95"
+
+[[repo]]
+lang = "ts"
+name = "immer"
+url = "https://github.com/immerjs/immer"
+sha = "a3be9df762c1dbe9959a011ddbab0ce838cbc468"
+
+[[repo]]
+lang = "ts"
+name = "vscode"
+url = "https://github.com/microsoft/vscode"
+sha = "dd3c36b8e940449e840322af6406ee07003bcf58"
+
+# --- tsx: React written by people who publish their conventions.
+[[repo]]
+lang = "tsx"
+name = "radix"
+url = "https://github.com/radix-ui/primitives"
+sha = "9c9fabebec7f5450c952d3d67cdeca2778950c2a"
+
+[[repo]]
+lang = "tsx"
+name = "excalidraw"
+url = "https://github.com/excalidraw/excalidraw"
+sha = "786ab266ff3a9cfffaed16804cf9132b44bc08ae"
+
+# --- js: d3 and preact are the JS most often held up as models.
+[[repo]]
+lang = "js"
+name = "preact"
+url = "https://github.com/preactjs/preact"
+sha = "1d0d7fa6a5196803e73e2c0090e5947fa55a2f23"
+
+[[repo]]
+lang = "js"
+name = "d3-array"
+url = "https://github.com/d3/d3-array"
+sha = "be0ae0d2b36ab91b833294ad2cfc5d5905acbd0f"
+
+[[repo]]
+lang = "js"
+name = "d3-scale"
+url = "https://github.com/d3/d3-scale"
+sha = "d6904a4bde09e16005e0ad8ca3e25b10ce54fa0d"
+
+[[repo]]
+lang = "js"
+name = "mithril"
+url = "https://github.com/MithrilJS/mithril.js"
+sha = "bd0ee3fde38347abb8c720dfda6ac02570cc5eef"
+
+# --- zig: TigerBeetle embodies NASA-power-of-10 assertion culture.
+[[repo]]
+lang = "zig"
+name = "tigerbeetle"
+url = "https://github.com/tigerbeetle/tigerbeetle"
+sha = "97c7a8ef385270ebe0e1b75959d3d21d134629df"
+
+[[repo]]
+lang = "zig"
+name = "ghostty"
+url = "https://github.com/ghostty-org/ghostty"
+sha = "4d605bf0d819df901a0332bbb320dc849fdd82e4"
+
+[[repo]]
+lang = "zig"
+name = "river"
+url = "https://github.com/riverwm/river"
+sha = "011620314585a82ac6de9851448c3d7e1269d86b"
+
+[[repo]]
+lang = "zig"
+name = "zls"
+url = "https://github.com/zigtools/zls"
+sha = "8da87d4f3305a550e7b739bad764e34bf1e46a08"
+
+# --- c: lua is the C everyone agrees is beautiful; musl is that for a libc.
+[[repo]]
+lang = "c"
+name = "lua"
+url = "https://github.com/lua/lua"
+sha = "7579fc9d7ed90240487251dfb69168f8e64e9294"
+
+[[repo]]
+lang = "c"
+name = "musl"
+url = "https://github.com/kraj/musl"
+sha = "a42e9dee266f398026a33d0793c66225c7997755"
+
+[[repo]]
+lang = "c"
+name = "redis"
+url = "https://github.com/redis/redis"
+sha = "58d0fb9c62e88df331c55dec378cd149909d406b"
+# Vendored third-party trees are not redis's own style, and deps/ even
+# double-counts lua. (Was a hardcoded rm in gold-fetch.sh until the
+# shell corpus needed the same mechanism for a stated reason.)
+prune = "deps"
+
+[[repo]]
+lang = "c"
+name = "curl"
+url = "https://github.com/curl/curl"
+sha = "527573490eb2564b3d7c9dd51d8bff963b5d6303"
+
+# --- ocaml: the bar this project is named after, plus the wider ecosystem.
+[[repo]]
+lang = "ocaml"
+name = "base"
+url = "https://github.com/janestreet/base"
+sha = "28d466710aa1858a70fd3c1fcbeae07a07ac8106"
+
+[[repo]]
+lang = "ocaml"
+name = "core"
+url = "https://github.com/janestreet/core"
+sha = "dbceee5ddaf6b2fe88a9a395ffe9646b1c21f14a"
+
+[[repo]]
+lang = "ocaml"
+name = "dune"
+url = "https://github.com/ocaml/dune"
+sha = "6976614244f0705e2132731614a9ea2f142e2673"
+
+[[repo]]
+lang = "ocaml"
+name = "containers"
+url = "https://github.com/c-cube/ocaml-containers"
+sha = "4948d74e45994304e3dda764f6616c7f6988c493"
+
+# --- cpp: fetched for a pack that does not exist yet, so the corpus is not
+# chosen after the fact to suit it.
+[[repo]]
+lang = "cpp"
+name = "fmt"
+url = "https://github.com/fmtlib/fmt"
+sha = "e2243a6a7f4a8c09e9233a253f3d1f71e45d8cef"
+
+
+# --- shell: the language that provisions production, and the thinnest
+# section here. Three repos, deliberately.
+#
+# Shell is the one language here that lives INSIDE other people's
+# projects, and the corpus reflects that: these three repos contribute
+# 135 files, while the build and CI scripts sitting in the other 37
+# checkouts contribute 207 (vscode 68, dune 53, curl 29, redis 21,
+# ghostty 10). That is the JavaScript trap gold.toml warns about above,
+# and it is accepted HERE for a reason it was not accepted there: those
+# files are real reviewed shell from admired projects, not fixtures, and
+# shell genuinely appears in the world as a supporting script more often
+# than as a library. It is not free — the three chosen repos alone read
+# cognitive p99 34, and the pooled corpus reads 44, because platform
+# detection and feature probing really do branch harder than a library
+# does. A reader of shell's budgets should know they describe both.
+#
+# Three were measured and DROPPED, each for a stated reason:
+#   nvm (5 files, 6.1k lines) -- one 4000-line nvm.sh monolith. Adding it
+#     moved cognitive p99 from 34 to 42, a 24% loosening driven by a
+#     script nobody holds up as a model. Widely used is not admired.
+#   ohmyzsh (17 files, 7.6k lines) -- a zsh framework read by a bash
+#     grammar, and a community plugin collection of mixed authorship.
+#     Wrong dialect and uneven provenance at once.
+#   rbenv (3 files, 148 lines) -- contributes nothing measurable. Its
+#     real logic lives in extensionless libexec/rbenv-* scripts, which
+#     `Lang::from_path` does not see (documented in the shell pack).
+#
+# git carries `prune`, and it is the whole reason that field exists:
+# 94% of git's shell is the t/ test suite (326k of 346k lines), whose
+# bodies sit inside single-quoted `test_expect_success` strings the
+# parser cannot enter. Keeping t/ would calibrate shell on 326k lines
+# of code the tool cannot read, and drown the other repos 13:1.
+[[repo]]
+lang = "shell"
+name = "git"
+url = "https://github.com/git/git"
+sha = "a97fcc37c2bc6340a8d7ce78dedf227aac4e9aa7"
+prune = "t"
+
+[[repo]]
+lang = "shell"
+name = "bats-core"
+url = "https://github.com/bats-core/bats-core"
+sha = "ae4b94d7cc35f62468297791aa4ab8c3af7377ba"
+
+[[repo]]
+lang = "shell"
+name = "direnv"
+url = "https://github.com/direnv/direnv"
+sha = "b00e451f547f39be7ab836d969054114a465a0f9"

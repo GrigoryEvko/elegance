@@ -1,0 +1,5 @@
+let classify items limit =
+  match items with
+  | [] -> limit
+  | [ x ] -> x
+  | _ -> failwith "impossible bucket"

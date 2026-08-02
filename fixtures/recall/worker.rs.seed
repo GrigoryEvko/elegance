@@ -1,0 +1,49 @@
+async fn refresh_cache(url: &str) {
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let _ = url;
+}
+
+fn parse_len(raw: Option<&str>) -> u32 {
+    let text = raw.unwrap();
+    let n = text.len() as u32;
+    let wide = n as u64;
+    wide.try_into().expect("fits")
+}
+
+fn connect() -> usize {
+    let password = "m4k9x2v8q1hunter";
+    password.len()
+}
+
+fn peek() -> u32 {
+    let bits: u32 = unsafe { std::mem::transmute(1.0f32) };
+    bits
+}
+
+fn spawn_all() {
+    tokio::spawn(async {});
+}
+
+fn kind_of(k: Kind) -> u8 {
+    match k {
+        Kind::A => 1,
+        Kind::B => 2,
+        _ => 0,
+    }
+}
+
+fn is_done() -> u32 {
+    1
+}
+
+fn gate(cfg: &Cfg, strict: bool, checked: bool, verbose: bool) -> u32 {
+    if !(strict && checked) {
+        return cfg.db.conn.host;
+    }
+    verbose as u32
+}
+
+#[test]
+fn placeholder() {
+    assert!(true);
+}

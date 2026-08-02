@@ -1,0 +1,40 @@
+# The same gate the repository runs by hand: format, lint at deny,
+# tests (conformance + restraint + recall + parity), release build,
+# then elegance judging itself against its own baseline.
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly gold-corpus drift check (report-only).
+    - cron: "17 6 * * 1"
+
+jobs:
+  gate:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --release
+      - run: ./target/release/elegance --baseline check .
+
+  # Re-derives calibration from the pinned corpus and shows any drift.
+  # Report-only: a drift here means a detector changed behavior — the
+  # diff belongs in a commit, not in a red build.
+  gold-drift:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - run: ./gold-fetch.sh /tmp/gold
+      - run: ./target/release/elegance calibrate /tmp/gold
+      - run: git diff --stat calibration.toml && git diff calibration.toml

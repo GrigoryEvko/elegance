@@ -1,0 +1,11 @@
+import { useState, useMemo } from 'react';
+
+export function useAccount(id: string, verbose: boolean) {
+  const [account, setAccount] = useState(null);
+  if (verbose) {
+    const [trace] = useState([]);
+    log(trace);
+  }
+  const label = useMemo(() => account?.name ?? id, [account, id]);
+  return { account, setAccount, label };
+}
