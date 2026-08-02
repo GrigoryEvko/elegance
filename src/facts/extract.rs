@@ -1750,7 +1750,16 @@ fn longest_run(value: &str) -> usize {
 fn single_reassign_target<'t>(pack: &Pack, node: Node<'t>, field: &str) -> Option<Node<'t>> {
     let mut target = node.child_by_field_name(field)?;
     while pack.table_sem(target) != Sem::Ident && target.named_child_count() == 1 {
-        target = target.named_child(0)?;
+        let inner = target.named_child(0)?;
+        // Only a wrapper that ADDS NO TOKENS is transparent — Go's
+        // one-element expression_list. A deref or a paren spells more
+        // than its child: `*slot = true` writes through the pointer
+        // and rebinds nothing, which the first self-scan proved by
+        // flagging this repository's own `set_switch`.
+        if inner.byte_range() != target.byte_range() {
+            return None;
+        }
+        target = inner;
     }
     (pack.table_sem(target) == Sem::Ident).then_some(target)
 }

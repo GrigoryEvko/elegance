@@ -1790,6 +1790,17 @@ mod tests {
             ),
             0
         );
+        // A deref target writes THROUGH the pointer; nothing is
+        // rebound. This repository's own set_switch was the first
+        // false positive: `let slot = match ...; *slot = true`.
+        assert_eq!(
+            repurposed(
+                Lang::Rust,
+                "a.rs",
+                "fn f(flag: bool, args: &mut Args) {\n    let slot = match flag {\n        true => &mut args.a,\n        false => &mut args.b,\n    };\n    *slot = true;\n}\n"
+            ),
+            0
+        );
         // A shadowing `let` is a NEW binding — Rust's own remedy for
         // repurposing — and judging it without scopes would flag
         // sibling blocks.
