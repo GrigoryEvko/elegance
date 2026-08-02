@@ -1397,6 +1397,60 @@ mod tests {
         format!("{prefix}{payload}")
     }
 
+    #[test]
+    fn a_connection_string_carries_its_password_in_a_named_position() {
+        // The name promises nothing — DATABASE_URL is honestly a URL —
+        // but the scheme defines where the credential sits, which is
+        // the vendor-prefix argument in another spelling.
+        assert_eq!(
+            secrets(&format!(
+                "DATABASE_URL = \"postgres://admin:{}@db:5432/prod\"\n",
+                vendor("s3cr3t", "9xKfQ2")
+            )),
+            1
+        );
+        assert_eq!(
+            secrets("DATABASE_URL = \"postgres://admin@db:5432/prod\"\n"),
+            0,
+            "no password, no credential"
+        );
+        assert_eq!(
+            secrets("DATABASE_URL = \"postgres://admin:${DB_PASS}@db/prod\"\n"),
+            0,
+            "an interpolated password is the remedy, not the smell"
+        );
+        assert_eq!(
+            secrets("DATABASE_URL = \"postgres://user:password@localhost/db\"\n"),
+            0,
+            "a lowercase word is documentation"
+        );
+        assert_eq!(
+            secrets("DATABASE_URL = \"postgres://user:changeme123@localhost/db\"\n"),
+            0,
+            "the placeholder rules still govern"
+        );
+        assert_eq!(
+            secrets("HOMEPAGE = \"https://example.com/a:b@c\"\n"),
+            0,
+            "a colon and an at-sign in a PATH are not userinfo"
+        );
+        assert_eq!(
+            secrets("REDIS_URL = \"redis://:a1@localhost\"\n"),
+            0,
+            "too short to be worth a release to rotate"
+        );
+        // Prose that quotes a URL is not a connection string: an
+        // authority holds no whitespace. A tweet in trpc's gold corpus
+        // parsed its own words as userinfo before this rule.
+        assert_eq!(
+            secrets(
+                "QUOTE = \"impressed by @alexdotjs http://trpc.io: end-to-end safety is awesome in 2024\"\n"
+            ),
+            0,
+            "a sentence quoting a URL is a sentence"
+        );
+    }
+
     fn secrets(src: &str) -> usize {
         let pack = Lang::Python.pack();
         let mut parser = pack.make_parser();

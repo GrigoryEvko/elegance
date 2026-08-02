@@ -1737,6 +1737,9 @@ fn vendor_key(value: &str) -> bool {
     if value.contains("PRIVATE KEY-----") && value.len() >= PEM_WITH_MATERIAL {
         return true;
     }
+    if url_credential(value) {
+        return true;
+    }
     const PREFIXES: &[&str] = &[
         "ghp_",
         "gho_",
@@ -1769,14 +1772,60 @@ fn vendor_key(value: &str) -> bool {
     false
 }
 
+/// The shortest password a connection string is trusted to carry. Below
+/// this the userinfo is a fixture (`redis://:a@localhost`) or a scheme
+/// artifact, not a credential worth a release to rotate.
+const URL_PASS_MIN: usize = 8;
+
+/// A password in a connection string: `postgres://admin:s3cr3t9x@db/prod`.
+/// The NAME promises nothing here — `DATABASE_URL` is honestly a URL —
+/// but the scheme itself defines the position the credential sits in,
+/// which is exactly the vendor-prefix argument: the value declares what
+/// it is. `looks_like_a_key` can never see this, because it disqualifies
+/// on the `:`, `/` and `.` that every URL is made of.
+fn url_credential(value: &str) -> bool {
+    let Some((_, rest)) = value.split_once("://") else {
+        return false;
+    };
+    // Userinfo belongs to the authority, before any path or query —
+    // and an authority holds no WHITESPACE, which is what separates a
+    // connection string from a sentence that happens to quote a URL.
+    // Without that, a tweet in trpc's gold corpus ("impressed by
+    // @alexdotjs's http://trpc.io: ...") parsed its own prose as
+    // userinfo.
+    let authority = rest
+        .split(|c: char| c.is_whitespace() || matches!(c, '/' | '?' | '#'))
+        .next()
+        .unwrap_or(rest);
+    // Last `@` wins: a password may legitimately contain one.
+    let Some((userinfo, _host)) = authority.rsplit_once('@') else {
+        return false;
+    };
+    let Some((_user, pass)) = userinfo.split_once(':') else {
+        return false;
+    };
+    pass.len() >= URL_PASS_MIN
+        && !is_placeholder(pass)
+        // An interpolated password is a REFERENCE to a secret, which is
+        // the remedy this metric recommends.
+        && !pass.contains(['{', '$', '%', '<'])
+        // A word is a doc placeholder; a credential mixes classes.
+        && (pass.chars().any(|c| c.is_ascii_digit())
+            || (pass.chars().any(|c| c.is_ascii_uppercase())
+                && pass.chars().any(|c| c.is_ascii_lowercase())))
+}
+
 /// Does this literal carry the entropy of a real key? A placeholder, an
 /// interpolation, or a plain English word does not.
 fn looks_like_a_key(value: &str) -> bool {
     // Structure separators mean this NAMES a secret rather than being
     // one: an OAuth URN (colons), a dotted setting id, an interpolation.
-    // A dot also separates a JWT's segments, so a hardcoded JWT outside
-    // a test goes unseen; that is the price of a gate that never cries
-    // wolf, and JWTs in source are overwhelmingly test fixtures anyway.
+    // A dot also separates a JWT's segments, so a hardcoded JWT goes
+    // unseen — and that was checked rather than assumed. Every
+    // JWT-shaped literal in the gold corpus lives in a test file, and
+    // all of them are the same fixture, whose payload decodes to
+    // {"message":"hello world"}. Teaching this gate the `eyJ` shape
+    // would have bought seven false positives and no true one.
     if value.len() < 8
         || value.contains(['{', '$', '<', ' ', '%', ':', '.'])
         || value.starts_with('/')

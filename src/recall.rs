@@ -191,7 +191,7 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     ("base.ml", "wildcard match", 1.0),
     ("useAccount.ts", "conditional hook", 1.0),
     ("widget.js", "conditional hook", 1.0),
-    ("deploy.sh", "secrets", 1.0),
+    ("deploy.sh", "secrets", 2.0),
     ("deploy.sh", "spooky", 1.0),
     ("deploy.sh", "negations", 1.0),
     ("deploy.sh", "magic numbers", 1.0),

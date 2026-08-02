@@ -31,3 +31,9 @@ relabel() {
     label="final"
     push "$label"
 }
+
+
+connect_db() {
+    local dsn="postgres://svc_admin:r7Kq2mVx9Ttz@db.internal:5432/prod"
+    psql "$dsn" -c 'select 1'
+}
