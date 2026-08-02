@@ -180,14 +180,33 @@ pub(super) fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceF
 /// A declared tuple return (`): [A, B, C]`) is the one place this
 /// language states multi-value intent; an array VALUE alone stays a
 /// single value, which is why the JS pack answers 0.
-pub(super) fn return_arity(node: Node, _src: &[u8]) -> u16 {
+pub(super) fn return_arity(node: Node, src: &[u8]) -> u16 {
     let Some(annotation) = node.child_by_field_name("return_type") else {
         return 0;
     };
-    match annotation.named_child(0) {
-        Some(t) if t.kind() == "tuple_type" => t.named_child_count() as u16,
-        Some(_) => 1,
-        None => 0,
+    let Some(t) = annotation.named_child(0) else {
+        return 0;
+    };
+    if t.kind() == "tuple_type" {
+        return t.named_child_count() as u16;
+    }
+    // `Promise<[A, B]>` is the async spelling of the same tuple, and
+    // without it the entire async half of this language reads as 1.
+    // Only Promise unwraps: `Array<[A, B]>` is a list OF tuples, which
+    // is one value however many elements it holds.
+    if t.kind() != "generic_type"
+        || t.child_by_field_name("name")
+            .and_then(|n| n.utf8_text(src).ok())
+            != Some("Promise")
+    {
+        return 1;
+    }
+    match t
+        .child_by_field_name("type_arguments")
+        .and_then(|a| a.named_child(0))
+    {
+        Some(inner) if inner.kind() == "tuple_type" => inner.named_child_count() as u16,
+        _ => 1,
     }
 }
 

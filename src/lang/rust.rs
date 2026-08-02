@@ -153,14 +153,42 @@ fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
     }]
 }
 
-/// Only a declared tuple return widens the result: `-> (A, B, C)` is 3.
-/// A tuple inside `Result<(A, B), E>` is out of reach without type
-/// resolution, and a miss is cheaper than a guess.
-fn return_arity(node: Node, _src: &[u8]) -> u16 {
+/// A declared tuple return widens the result: `-> (A, B, C)` is 3, and
+/// so is `-> Result<(A, B, C), E>` — the fallible wrapper is not one of
+/// the values a caller destructures. One level only: past that the
+/// nesting is a type to resolve, not a shape to read.
+fn return_arity(node: Node, src: &[u8]) -> u16 {
     match node.child_by_field_name("return_type") {
-        Some(t) if t.kind() == "tuple_type" => t.named_child_count() as u16,
-        Some(_) => 1,
+        Some(t) => type_arity(t, src),
         None => 0,
+    }
+}
+
+fn type_arity(t: Node, src: &[u8]) -> u16 {
+    if t.kind() == "tuple_type" {
+        return t.named_child_count() as u16;
+    }
+    if t.kind() != "generic_type" {
+        return 1;
+    }
+    // `std::result::Result<..>` and `Result<..>` are the same wrapper.
+    let base = t
+        .child_by_field_name("type")
+        .and_then(|n| n.utf8_text(src).ok())
+        .unwrap_or("");
+    let unwrapped = matches!(
+        base.rsplit("::").next().unwrap_or(base),
+        "Result" | "Option"
+    );
+    if !unwrapped {
+        return 1;
+    }
+    match t
+        .child_by_field_name("type_arguments")
+        .and_then(|a| a.named_child(0))
+    {
+        Some(inner) if inner.kind() == "tuple_type" => inner.named_child_count() as u16,
+        _ => 1,
     }
 }
 

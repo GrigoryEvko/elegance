@@ -132,9 +132,44 @@ pub fn pack() -> Pack {
 }
 
 /// The widest tuple any `return` in this unit ships — `return a, b, c`
-/// is the language's multi-value idiom, annotation or not. Nested defs
+/// is the language's multi-value idiom, annotation or not — or what a
+/// `-> tuple[...]` annotation declares, whichever is wider. Nested defs
 /// keep their own returns: the walk stops at inner scope-formers.
-fn return_arity(node: Node, _src: &[u8]) -> u16 {
+fn return_arity(node: Node, src: &[u8]) -> u16 {
+    let declared = node
+        .child_by_field_name("return_type")
+        .map_or(0, |t| annotated_arity(t, src));
+    declared.max(returned_arity(node))
+}
+
+/// `-> tuple[int, str, bool]` is 3. A variadic `tuple[int, ...]` is a
+/// homogeneous sequence, which is ONE value however long it runs.
+fn annotated_arity(t: Node, src: &[u8]) -> u16 {
+    let Some(generic) = t.named_child(0).filter(|g| g.kind() == "generic_type") else {
+        return 0;
+    };
+    let base = generic
+        .named_child(0)
+        .and_then(|n| n.utf8_text(src).ok())
+        .unwrap_or("");
+    if !matches!(base, "tuple" | "Tuple") {
+        return 0;
+    }
+    let Some(args) = generic
+        .named_child(1)
+        .filter(|a| a.kind() == "type_parameter")
+    else {
+        return 0;
+    };
+    let mut cursor = args.walk();
+    let parts: Vec<Node> = args.named_children(&mut cursor).collect();
+    match parts.iter().any(|p| p.utf8_text(src) == Ok("...")) {
+        true => 1,
+        false => parts.len() as u16,
+    }
+}
+
+fn returned_arity(node: Node) -> u16 {
     let mut widest = 0u16;
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {

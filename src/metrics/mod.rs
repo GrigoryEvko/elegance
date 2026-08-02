@@ -2102,24 +2102,6 @@ mod tests {
             arity(Lang::Rust, "a.rs", "fn f() -> (u8, u8, u8) { (0, 0, 0) }\n"),
             3
         );
-        // A tuple hidden inside Result<> needs type resolution to see;
-        // a miss is cheaper than a guess, so this reads as one value.
-        assert_eq!(
-            arity(
-                Lang::Rust,
-                "a.rs",
-                "fn f() -> Result<(u8, u8, u8, u8), Error> { todo!() }\n"
-            ),
-            1
-        );
-        assert_eq!(
-            arity(
-                Lang::TypeScript,
-                "a.ts",
-                "function f(): [number, string] { return [0, '']; }\n"
-            ),
-            2
-        );
         // An array VALUE without a tuple type stays one value — JS has
         // no way to state the intent, so the JS pack answers 0.
         assert_eq!(
@@ -2147,6 +2129,91 @@ mod tests {
             arity(Lang::Python, "a.py", "def f():\n    return\n"),
             0,
             "a bare return ships nothing"
+        );
+    }
+
+    #[test]
+    fn one_generic_level_unwraps_the_value_but_never_a_collection() {
+        // The fallible wrapper is not one of the values a caller
+        // destructures: Result<(A,B,C,D), E> ships four, not one.
+        assert_eq!(
+            arity(
+                Lang::Rust,
+                "a.rs",
+                "fn f() -> Result<(u8, u8, u8, u8), Error> { todo!() }\n"
+            ),
+            4
+        );
+        assert_eq!(
+            arity(
+                Lang::Rust,
+                "a.rs",
+                "fn f() -> std::result::Result<(u8, u8), Error> { todo!() }\n"
+            ),
+            2,
+            "the same wrapper, however it is spelled"
+        );
+        assert_eq!(
+            arity(
+                Lang::Rust,
+                "a.rs",
+                "fn f() -> Vec<(u8, u8, u8)> { vec![] }\n"
+            ),
+            1,
+            "a Vec OF tuples is one value, however many it holds"
+        );
+        assert_eq!(
+            arity(
+                Lang::TypeScript,
+                "a.ts",
+                "function f(): [number, string] { return [0, '']; }\n"
+            ),
+            2
+        );
+        // Without this the entire async half of TypeScript read as 1.
+        assert_eq!(
+            arity(
+                Lang::TypeScript,
+                "a.ts",
+                "async function f(): Promise<[number, string, boolean, Error]> { return x; }\n"
+            ),
+            4
+        );
+        assert_eq!(
+            arity(
+                Lang::TypeScript,
+                "a.ts",
+                "function f(): Array<[number, string]> { return []; }\n"
+            ),
+            1,
+            "a list OF tuples is one value"
+        );
+        // Python's annotation is read beside its return sites, widest
+        // wins; a variadic tuple is a sequence, which is one value.
+        assert_eq!(
+            arity(
+                Lang::Python,
+                "a.py",
+                "def f() -> tuple[int, str, bool]:\n    return t\n"
+            ),
+            3
+        );
+        assert_eq!(
+            arity(
+                Lang::Python,
+                "a.py",
+                "def f() -> Tuple[int, str]:\n    return t\n"
+            ),
+            2
+        );
+        assert_eq!(
+            arity(
+                Lang::Python,
+                "a.py",
+                "def f() -> tuple[int, ...]:\n    return t\n"
+            ),
+            1,
+            "a variadic tuple is a sequence, however long it runs"
         );
     }
 

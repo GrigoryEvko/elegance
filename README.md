@@ -127,9 +127,16 @@ error entirely).
 
 **Rung 3 — interface shape.** `returns` (four values travelling
 together are a struct in hiding — the `params` argument pointed at the
-other end of the signature. Go reads its result list, Rust and TS a
-declared tuple return, Python the widest tuple a `return` ships; a JS
-array or an OCaml tuple is already one value and stays silent. A
+other end of the signature. Go reads its result list; Rust and TS a
+declared tuple return, unwrapping exactly one generic level, because
+`Result<(A,B,C), E>` and `Promise<[A,B]>` ship their tuples and the
+wrapper is not one of the values — without that the whole async half
+of TypeScript read as a single value. `Vec<(A,B)>` and `Array<[A,B]>`
+stay at one: a list *of* tuples is one value however many it holds.
+Python takes the wider of its `-> tuple[...]` annotation and the
+tuples its `return`s ship, and treats a variadic `tuple[int, ...]` as
+the sequence it is. A JS array or an OCaml tuple is already one value
+and stays silent. A
 suspicion rather than a gate because a TS tuple annotation is
 *optional*: its budget rides on how often gold annotates at all, and a
 declared `[value, setter]` pair is legitimate style), `interface width`
