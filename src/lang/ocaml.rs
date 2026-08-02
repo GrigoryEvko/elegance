@@ -76,6 +76,7 @@ pub fn pack() -> Pack {
         is_async: |_, _| false,
         refine,
         name_node,
+        composed_name: |_, _| None,
         imports,
         param_info,
         is_self_call,

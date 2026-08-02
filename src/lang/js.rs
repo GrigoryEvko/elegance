@@ -78,6 +78,7 @@ pub fn pack() -> Pack {
         types_declared: false,
         refine: typescript::refine,
         name_node: typescript::test_label,
+        composed_name: |_, _| None,
         imports: typescript::imports,
         param_info,
         is_self_call: typescript::is_self_call,

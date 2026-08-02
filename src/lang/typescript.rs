@@ -105,6 +105,7 @@ pub fn pack(dialect: Dialect) -> Pack {
         types_declared: true,
         refine,
         name_node: test_label,
+        composed_name: |_, _| None,
         imports,
         param_info,
         is_self_call,

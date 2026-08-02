@@ -4,6 +4,7 @@
 //! self-call detection). Packs classify syntax; only the core assigns meaning.
 
 mod c;
+mod cpp;
 mod go;
 mod js;
 mod ocaml;
@@ -32,9 +33,10 @@ pub enum Lang {
     C,
     OCaml,
     Shell,
+    Cpp,
 }
 
-pub const LANGS: [Lang; 10] = [
+pub const LANGS: [Lang; 11] = [
     Lang::Python,
     Lang::Rust,
     Lang::TypeScript,
@@ -45,6 +47,7 @@ pub const LANGS: [Lang; 10] = [
     Lang::C,
     Lang::OCaml,
     Lang::Shell,
+    Lang::Cpp,
 ];
 
 impl Lang {
@@ -63,7 +66,51 @@ impl Lang {
             // real, but this is a pure path predicate the walk calls on
             // every file, and sniffing would change what a walk costs.
             "sh" | "bash" => Some(Lang::Shell),
+            // `.h` reads as C here; `of_source` is what decides it,
+            // because the extension genuinely does not.
+            "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some(Lang::Cpp),
             _ => None,
+        }
+    }
+
+    /// The language a file is MEASURED as. `.h` is the one extension in
+    /// this tool that underdetermines its language, and reading it as C
+    /// unconditionally was measurably wrong: of leveldb's 56 headers 47
+    /// failed to parse as C and 17 as C++, re2's 20 against 1, fmt's 23
+    /// against 11. Headers are where C++ keeps its classes, so a third
+    /// of every C++ repository was being dropped as unreadable.
+    ///
+    /// The grammar alone does not settle it, because the C++ grammar is
+    /// never worse on C headers either (musl 14% against 15%, redis 3%
+    /// against 2%, curl 9% against 7%) — so routing every `.h` to C++
+    /// would parse fine and then file musl's 655 headers under `cpp`,
+    /// which is the corpus trap gold.toml warns about. The LABEL has to
+    /// be decided too, and only the text can decide it.
+    ///
+    /// The rule is four line-anchored spellings that are not C. It was
+    /// validated before it was written: 0 of 1,027 headers from lua,
+    /// musl, redis and curl match, and 98 of 104 from fmt, leveldb and
+    /// re2 do. The six that do not are `c.h` (leveldb's C API),
+    /// `export.h`, `port.h` and `thread_annotations.h` — headers that
+    /// hold no C++ at all, so reading them as C is the right answer
+    /// rather than a missed one.
+    pub fn of_source(path: &Path, source: &str) -> Option<Lang> {
+        match Lang::from_path(path)? {
+            Lang::C if path.extension()? == "h" && looks_like_cpp(source) => Some(Lang::Cpp),
+            lang => Some(lang),
+        }
+    }
+
+    /// `of_source` for a caller holding only a path — it reads the file.
+    /// Used where files are PARTITIONED by language before scanning, so
+    /// that a C++ header cannot land in the `[c]` calibration section.
+    pub fn of(path: &Path) -> Option<Lang> {
+        match Lang::from_path(path)? {
+            Lang::C if path.extension()? == "h" => match std::fs::read_to_string(path) {
+                Ok(source) => Lang::of_source(path, &source),
+                Err(_) => Some(Lang::C),
+            },
+            lang => Some(lang),
         }
     }
 
@@ -79,6 +126,7 @@ impl Lang {
             Lang::C => "c",
             Lang::OCaml => "ml",
             Lang::Shell => "sh",
+            Lang::Cpp => "cpp",
         }
     }
 
@@ -95,6 +143,7 @@ impl Lang {
             Lang::C => c::pack(),
             Lang::OCaml => ocaml::pack(),
             Lang::Shell => shell::pack(),
+            Lang::Cpp => cpp::pack(),
         })
     }
 }
@@ -193,6 +242,14 @@ pub struct Pack {
     /// Node holding a unit's name when no `name` field exists (Zig `test`
     /// labels, C declarator chains). Consulted before the generic chain.
     pub name_node: for<'t> fn(Node<'t>) -> Option<Node<'t>>,
+    /// A name no single node spells. gtest writes a test's identity as
+    /// two macro arguments — `TEST(args_test, basic)` — and prints it
+    /// back as `args_test.basic`; judging `basic` alone judges half a
+    /// name and read 61% of the C++ gold corpus as lazily named, worse
+    /// than a corpus of notorious code. Returns an owned String because
+    /// the name is COMPOSED, which is exactly why `name_node` cannot
+    /// answer. Consulted before everything else.
+    pub composed_name: fn(Node, &[u8]) -> Option<String>,
     /// Import edges of one Import node (a `use` tree or `from` list may
     /// carry several).
     pub imports: fn(Node, &[u8]) -> Vec<ImportInfo>,
@@ -501,6 +558,25 @@ fn expectish(name: &str) -> bool {
             .is_some_and(|rest| rest.starts_with(char::is_uppercase))
 }
 
+/// Four spellings that are not C, judged at the START of a line so a
+/// mention inside a comment or a string cannot vote. `::` and
+/// `operator` were considered and dropped: both turn up in C comments,
+/// and these four already separate the corpora perfectly.
+fn looks_like_cpp(source: &str) -> bool {
+    source.lines().any(|line| {
+        let head = line.trim_start();
+        head.starts_with("namespace ")
+            || head.starts_with("template<")
+            || head.starts_with("template <")
+            || head.starts_with("public:")
+            || head.starts_with("private:")
+            || head.starts_with("protected:")
+            || head
+                .strip_prefix("class ")
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_alphabetic() || c == '_'))
+    })
+}
+
 /// Does this declared type text name one of the language's escape
 /// hatches? Split into identifier tokens so a hatch counts wherever it
 /// appears — `dict[str, Any]` and `Record<string, any>` hide behind a
@@ -660,6 +736,25 @@ long classify(const long *items, long limit) {
 }
 ";
 
+    /// C++ writes the loop as a range-for, which is its own grammar
+    /// kind — so this column also proves `for_range_loop` costs what
+    /// every other language's loop costs.
+    const CPP: &str = "
+long classify(const std::vector<long>& items, long limit) {
+    long total = 0;
+    for (long item : items) {
+        if (item > 0 && item < limit) {
+            total += item;
+        } else if (item < 0) {
+            total -= item;
+        } else {
+            continue;
+        }
+    }
+    return total;
+}
+";
+
     /// OCaml's imperative loop. Idiomatic OCaml would iterate with
     /// `List.iter` and a lambda, which the ontology correctly reads as a
     /// CALL rather than a loop — so the conformance case uses the form
@@ -688,6 +783,7 @@ let classify items limit =
         assert_eq!(signature(Lang::JavaScript, JS), expected, "javascript");
         assert_eq!(signature(Lang::Zig, ZIG), expected, "zig");
         assert_eq!(signature(Lang::C, C), expected, "c");
+        assert_eq!(signature(Lang::Cpp, CPP), expected, "cpp");
         assert_eq!(signature(Lang::OCaml, ML), expected, "ocaml");
     }
 
@@ -701,6 +797,7 @@ let classify items limit =
             (Lang::JavaScript, JS),
             (Lang::Zig, ZIG),
             (Lang::C, C),
+            (Lang::Cpp, CPP),
             (Lang::OCaml, ML),
         ] {
             let f = facts(lang, src);
@@ -836,6 +933,14 @@ let classify items limit =
             ),
             (2, 0),
             "numeric `as` is Rust's silent truncation"
+        );
+        assert_eq!(
+            counted(
+                Lang::Cpp,
+                "void *dup(void *p, unsigned n) {\n    char *q = static_cast<char *>(p);\n    return reinterpret_cast<void *>(q + n);\n}\n",
+            ),
+            (2, 0),
+            "the named casts have no node of their own: each parses as a call to a template function"
         );
     }
 
@@ -1415,6 +1520,53 @@ let classify items limit =
             "unawaited coroutine",
             "a promise is eagerly scheduled: the call RUNS — same verdict as TypeScript",
         ),
+        // C++ keeps C's verdicts wherever C++ kept C's semantics, and
+        // differs exactly where the language does: exceptions revive
+        // swallowed and broad catch, gtest revives the test family,
+        // and RAII kills unmanaged the way it kills it in Rust.
+        (
+            Lang::Cpp,
+            "lost context",
+            "`throw;` rethrows and `throw X(e)` is a constructor call — telling the two apart needs the catch parameter's flow",
+        ),
+        (
+            Lang::Cpp,
+            "unmanaged",
+            "RAII: a destructor runs on scope exit, so there is no guard to omit — the Rust verdict",
+        ),
+        (
+            Lang::Cpp,
+            "suppressions",
+            "NOLINT is clang-tidy configuration, not a checker-comment",
+        ),
+        (Lang::Cpp, "kw opacity", "no kwargs"),
+        (Lang::Cpp, "untyped params", "every parameter typed"),
+        (
+            Lang::Cpp,
+            "blocking async",
+            "`co_await` is a suspension operator, not a declaration: nothing marks a unit async, so nothing can block one",
+        ),
+        (
+            Lang::Cpp,
+            "unawaited coroutine",
+            "same absence of a declaration form; a coroutine is known by its return type, which needs resolution",
+        ),
+        (
+            Lang::Cpp,
+            "dropped tasks",
+            "a discarded `std::async` future BLOCKS in its destructor — the opposite failure, and unrecognized",
+        ),
+        (
+            Lang::Cpp,
+            "skipped tests",
+            "gtest skips with a `DISABLED_` prefix inside the test NAME; there is no declaration to point at",
+        ),
+        (Lang::Cpp, "conditional hook", "no call-order identity"),
+        (
+            Lang::Cpp,
+            "shelled out",
+            "system() takes a `const char*`, so an assembled command reaches it through a separate string and `.c_str()` — C's data flow with one more hop",
+        ),
     ];
 
     #[test]
@@ -1454,6 +1606,53 @@ let classify items limit =
     }
 
     #[test]
+    fn a_dot_h_is_read_as_the_dialect_it_is_written_in() {
+        // Reading every `.h` as C dropped a third of every C++ repository
+        // as unparseable — headers are where C++ keeps its classes.
+        // Reading every `.h` as C++ parses fine and then files musl's 655
+        // headers under `cpp`, which calibrates one language on another.
+        // So the text decides, on four line-anchored spellings.
+        let h = std::path::Path::new("port/port.h");
+        let cases: &[(&str, Option<Lang>, &str)] = &[
+            (
+                "#ifndef PORT_H_\nnamespace leveldb {\nclass Slice;\n}\n",
+                Some(Lang::Cpp),
+                "a namespace is not C",
+            ),
+            (
+                "template <typename T>\nT max(T a, T b) { return a > b ? a : b; }\n",
+                Some(Lang::Cpp),
+                "nor is a template",
+            ),
+            (
+                "struct Cfg {\npublic:\n  int n;\n};\n",
+                Some(Lang::Cpp),
+                "nor an access specifier",
+            ),
+            (
+                "#define LEVELDB_EXPORT __attribute__((visibility(\"default\")))\n",
+                Some(Lang::C),
+                "a macro-only header holds no C++ and reads as C",
+            ),
+            (
+                "/* the C API: see leveldb::DB and the class template */\nvoid leveldb_open(void);\n",
+                Some(Lang::C),
+                "a MENTION inside a comment must not vote — hence line anchors",
+            ),
+        ];
+        for (src, want, why) in cases {
+            assert_eq!(Lang::of_source(h, src), *want, "{why}");
+        }
+        // The extension still decides everywhere it can.
+        let unambiguous = [("a.c", Lang::C), ("a.cc", Lang::Cpp), ("a.hpp", Lang::Cpp)];
+        for (name, want) in unambiguous {
+            let path = std::path::Path::new(name);
+            assert_eq!(Lang::of_source(path, "namespace x {}\n"), Some(want));
+            assert_eq!(Lang::from_path(path), Some(want));
+        }
+    }
+
+    #[test]
     fn every_pack_name_resolves_in_its_grammar() {
         // The Zig @import lesson: an unmapped kind name silently zeroes a
         // metric, calibration then pins that zero, and the zero-guard
@@ -1477,7 +1676,7 @@ let classify items limit =
             .collect();
         assert_eq!(
             pinned.join(", "),
-            "py 15, rs 15, ts 14, tsx 14, go 15, js 15, zig 14, c 15, ml 14, sh 15"
+            "py 15, rs 15, ts 14, tsx 14, go 15, js 15, zig 14, c 15, ml 14, sh 15, cpp 14"
         );
     }
 

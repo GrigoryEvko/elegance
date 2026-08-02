@@ -51,14 +51,19 @@ pub fn run(reference: &str, root: &Path) -> Result<i32, Box<dyn Error>> {
     let mut findings = Vec::new();
     let mut checked = 0u32;
     for path in &changed {
-        let Some(lang) = Lang::from_path(Path::new(path)) else {
+        if Lang::from_path(Path::new(path)).is_none() {
             continue;
-        };
+        }
         checked += 1;
-        let before = at_ref(root, reference, path).map(|src| surface(lang, path, &src));
+        // Each side is read as the language ITS OWN text is: a header
+        // that gained C++ this commit changes surface in both dialects,
+        // and judging the old text by the new dialect would invent one.
+        let dialect =
+            |src: &str| Lang::of_source(Path::new(path), src).expect("extension already accepted");
+        let before = at_ref(root, reference, path).map(|src| surface(dialect(&src), path, &src));
         let after = std::fs::read_to_string(root.join(path))
             .ok()
-            .map(|src| surface(lang, path, &src));
+            .map(|src| surface(dialect(&src), path, &src));
         compare(before, after, path, &mut findings);
     }
     report(reference, checked, &findings);

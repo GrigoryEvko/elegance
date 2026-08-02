@@ -193,7 +193,10 @@ impl Index {
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => self.web(from, target),
             Lang::Go => self.go(target),
             Lang::Zig => self.zig(from, target),
-            Lang::C => self.c(from, target),
+            // C++ includes resolve exactly as C's do: a quoted path is
+            // relative to the including file, an angled one is a
+            // system header and definitionally external.
+            Lang::C | Lang::Cpp => self.c(from, target),
             // A sourced path is relative to the script — or assembled
             // at run time from a variable, which resolves to nothing
             // and lands in the honesty bucket where it belongs.

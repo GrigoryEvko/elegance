@@ -1,0 +1,23 @@
+#include <chrono>
+#include <thread>
+
+#include <gtest/gtest.h>
+
+#include "engine.h"
+
+namespace engine {
+
+TEST(PoolTest, TakesAKnownSlot) {
+    Pool pool;
+    EXPECT_EQ(pool.take("primary", true, false), 1);
+    ASSERT_TRUE(pool.isReady());
+}
+
+TEST(PoolTest, ExpiresAfterTheWindow) {
+    Pool pool;
+    pool.take("primary", false, false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_TRUE(true);
+}
+
+}  // namespace engine

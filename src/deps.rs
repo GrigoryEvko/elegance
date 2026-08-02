@@ -204,10 +204,11 @@ fn straddling(root: &Path, prints: &HashMap<u64, Print>) -> Result<Vec<Straddle>
             .fold(
                 || (Vec::new(), crate::Parsers::default()),
                 |(mut hits, mut parsers), path| {
-                    let lang = Lang::from_path(path).expect("collect_files filters by language");
                     if let Ok(source) = std::fs::read_to_string(path)
                         && !crate::config::is_generated(&source)
                     {
+                        let lang = Lang::of_source(path, &source)
+                            .expect("collect_files filters by language");
                         let f =
                             crate::facts::extract(lang.pack(), parsers.get(lang), path, &source);
                         if !f.low_confidence() {

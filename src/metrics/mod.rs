@@ -740,11 +740,13 @@ pub fn idiom_entropy(counts: &[u32; CASES]) -> f64 {
     h / (CASES as f64).log2()
 }
 
-/// Lowercased words of an identifier: snake, camel, and whitespace splits
-/// (Zig test labels are prose).
+/// Lowercased words of an identifier: snake, camel, whitespace (Zig test
+/// labels are prose) and dot splits — a dot joins two names in every
+/// language that writes one, and gtest's `args_test.basic` is three
+/// words rather than one.
 fn name_words(name: &str) -> Vec<String> {
     let mut words = Vec::new();
-    for chunk in name.split(|c: char| c == '_' || c == '-' || c.is_whitespace()) {
+    for chunk in name.split(|c: char| matches!(c, '_' | '-' | '.') || c.is_whitespace()) {
         let mut start = 0;
         let mut prev_lower = false;
         for (i, c) in chunk.char_indices() {
@@ -1220,6 +1222,26 @@ mod tests {
         assert!(
             readme.contains(&comments),
             "README drifted: {comments:?} missing"
+        );
+        let cpp = format!(
+            "cognitive p99 = {:.0} and length p99 = {:.0}, against C's {:.0} and {:.0}",
+            hi(Lang::Cpp, COGNITIVE),
+            hi(Lang::Cpp, LENGTH),
+            hi(Lang::C, COGNITIVE),
+            hi(Lang::C, LENGTH),
+        );
+        assert!(readme.contains(&cpp), "README drifted: {cpp:?} missing");
+        // The prose does not just quote those four numbers, it draws a
+        // conclusion from them — so the conclusion is pinned too. The
+        // first draft of this sentence called C++ the loosest of the
+        // eleven and this loop is what caught it.
+        assert!(
+            hi(Lang::Cpp, COGNITIVE) * 2.0 < hi(Lang::C, COGNITIVE),
+            "README claims C++ branches less than half as hard as C; it no longer does"
+        );
+        assert!(
+            hi(Lang::Cpp, LENGTH) * 3.0 < hi(Lang::C, LENGTH) * 2.0,
+            "README claims C++ units are under two thirds of C's length; they no longer are"
         );
     }
 

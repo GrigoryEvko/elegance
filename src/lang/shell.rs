@@ -88,6 +88,7 @@ pub fn pack() -> Pack {
         types_declared: false,
         refine,
         name_node: |_| None,
+        composed_name: |_, _| None,
         imports,
         // A shell function's parameters are `$1`, `$2` — read from the
         // caller's frame, declared nowhere.

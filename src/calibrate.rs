@@ -34,9 +34,12 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
     );
 
     for lang in LANGS {
+        // `of`, not `from_path`: a C++ header is a `.h`, and pooling it
+        // into the `[c]` section would calibrate one language on
+        // another's code.
         let subset: Vec<PathBuf> = files
             .iter()
-            .filter(|p| Lang::from_path(p) == Some(lang))
+            .filter(|p| Lang::of(p) == Some(lang))
             .cloned()
             .collect();
         if subset.is_empty() {

@@ -276,7 +276,8 @@ fn measurable<'a>(
     source: &'a str,
 ) -> Option<(Lang, std::borrow::Cow<'a, str>)> {
     let Some(container) = ci::Container::of(path) else {
-        return Lang::from_path(path).map(|lang| (lang, std::borrow::Cow::Borrowed(source)));
+        return Lang::of_source(path, source)
+            .map(|lang| (lang, std::borrow::Cow::Borrowed(source)));
     };
     let owned = |lang: Lang, text: String| (lang, std::borrow::Cow::Owned(text));
     match container {

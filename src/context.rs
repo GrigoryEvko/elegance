@@ -50,7 +50,7 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
         .map(|lang| {
             let subset: Vec<PathBuf> = files
                 .iter()
-                .filter(|p| Lang::from_path(p) == Some(lang))
+                .filter(|p| Lang::of(p) == Some(lang))
                 .cloned()
                 .collect();
             (

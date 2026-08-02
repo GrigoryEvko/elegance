@@ -95,6 +95,7 @@ pub fn pack() -> Pack {
                     .find(|c| matches!(c.kind(), "string" | "identifier" | "builtin_identifier"))
             })?
         },
+        composed_name: |_, _| None,
         imports,
         param_info,
         is_self_call,

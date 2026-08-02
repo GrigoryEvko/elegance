@@ -82,6 +82,16 @@ pub(crate) const FIXTURES: &[(&str, Lang, &str)] = &[
         Lang::Shell,
         include_str!("../fixtures/recall/deploy.sh.seed"),
     ),
+    (
+        "engine.cpp",
+        Lang::Cpp,
+        include_str!("../fixtures/recall/engine.cpp.seed"),
+    ),
+    (
+        "engine_test.cpp",
+        Lang::Cpp,
+        include_str!("../fixtures/recall/engine_test.cpp.seed"),
+    ),
 ];
 
 /// The manifest: (fixture, metric, minimum total planted). Sums may
@@ -237,6 +247,25 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     ("pool.c", "repurposed", 1.0),
     ("deploy.sh", "repurposed", 1.0),
     ("ring.zig", "repurposed", 1.0),
+    ("engine.cpp", "secrets", 1.0),
+    ("engine.cpp", "swallowed", 1.0),
+    ("engine.cpp", "broad catch", 1.0),
+    ("engine.cpp", "casts", 1.0),
+    ("engine.cpp", "loose types", 1.0),
+    ("engine.cpp", "demeter", 1.0),
+    ("engine.cpp", "negations", 1.0),
+    ("engine.cpp", "magic numbers", 1.0),
+    ("engine.cpp", "wildcard match", 1.0),
+    ("engine.cpp", "flag params", 1.0),
+    ("engine.cpp", "bool traps", 1.0),
+    ("engine.cpp", "repurposed", 1.0),
+    ("engine.cpp", "built query", 1.0),
+    ("engine.cpp", "spooky", 1.0),
+    ("engine.cpp", "unwraps", 1.0),
+    ("engine.cpp", "lying name", 1.0),
+    ("engine_test.cpp", "test asserts", 2.0),
+    ("engine_test.cpp", "vacuous asserts", 1.0),
+    ("engine_test.cpp", "sleepy test", 1.0),
 ];
 
 #[test]

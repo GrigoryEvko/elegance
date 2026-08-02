@@ -74,6 +74,7 @@ pub fn pack() -> Pack {
         types_declared: true,
         refine,
         name_node: |_| None,
+        composed_name: |_, _| None,
         imports,
         param_info,
         is_self_call,

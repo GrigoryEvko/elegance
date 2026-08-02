@@ -773,13 +773,16 @@ impl Extractor<'_> {
 
     /// A sleep of any flavour, judged by the trailing name alone —
     /// `time.sleep`, `asyncio.sleep`, `thread::sleep`,
-    /// `tokio::time::sleep`, Go's `time.Sleep`, shell's `sleep`. That
-    /// is deliberately the crude rule `blocking async` had to abandon:
-    /// there the qualifier decides, because a runtime sleep is the
-    /// remedy; here every flavour is the same fact, and only a TEST
-    /// reads it.
+    /// `tokio::time::sleep`, Go's `time.Sleep`, shell's `sleep`, and
+    /// C++'s `std::this_thread::sleep_for`. That is deliberately the
+    /// crude rule `blocking async` had to abandon: there the qualifier
+    /// decides, because a runtime sleep is the remedy; here every
+    /// flavour is the same fact, and only a TEST reads it.
     fn is_a_sleep(&self, call: Node) -> bool {
-        matches!(self.callee_trailing_name(call), Some("sleep" | "Sleep"))
+        matches!(
+            self.callee_trailing_name(call),
+            Some("sleep" | "Sleep" | "sleep_for" | "sleep_until")
+        )
     }
 
     /// Does this call allocate a fresh copy? Only the names that mean
@@ -1025,7 +1028,12 @@ impl Extractor<'_> {
     /// `Billing.Total` and `Invoice.Total` in one file would otherwise
     /// share a name — and with it a baseline identity.
     fn unit_names(&self, node: Node, recv: Option<&Receiver>) -> (Box<str>, Box<str>) {
-        let name: Box<str> = self.scope_name(node).unwrap_or("?").into();
+        // A composed name outranks every node-based route: it exists
+        // precisely because no single node spells the whole name.
+        let name: Box<str> = match (self.pack.composed_name)(node, self.src) {
+            Some(composed) => composed.into(),
+            None => self.scope_name(node).unwrap_or("?").into(),
+        };
         let mut scopes: Vec<&str> = Vec::new();
         let mut anc = node.parent();
         while let Some(a) = anc {
@@ -1405,9 +1413,15 @@ impl Extractor<'_> {
         // and a parser token all wear that name, and vscode's themes
         // alone put a thousand of them in the source. Only the
         // qualified forms promise a credential.
+        // Both spellings, because camelCase drops the separator and
+        // `apikey` was already here without one: `apiToken` is as much
+        // a promise as `api_token`, and only the qualified form is.
         "api_token",
+        "apitoken",
         "auth_token",
+        "authtoken",
         "access_token",
+        "accesstoken",
         "refresh_token",
         "bearer",
         "apikey",
