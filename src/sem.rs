@@ -38,6 +38,10 @@ pub enum Sem {
     /// `goto` — a flat +1 cognitive (Sonar): the reader must find the
     /// label. Unconditional, so no cyclomatic decision.
     Goto,
+    /// `await` — transparent to every complexity metric, but the fact
+    /// that a call sits under one is what separates a coroutine that
+    /// RUNS from one that was created and dropped.
+    Await,
     Call,
     /// A type the programmer asserted rather than proved: `as`, `x.(T)`,
     /// `(T)x`, `cast(T, x)`, `@intCast`. The compiler stops checking here

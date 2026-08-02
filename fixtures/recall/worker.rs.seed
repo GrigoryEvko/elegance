@@ -61,3 +61,10 @@ async fn snapshot(path: &str) -> String {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     text
 }
+
+
+async fn flush_queue() {}
+
+async fn shutdown() {
+    flush_queue();
+}

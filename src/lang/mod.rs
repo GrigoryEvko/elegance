@@ -954,6 +954,7 @@ let classify items limit =
         "test asserts",
         "conditional hook",
         "repurposed",
+        "unawaited coroutine",
     ];
 
     /// Pairs that can NEVER fire, each with its reason. Deliberate
@@ -1288,6 +1289,33 @@ let classify items limit =
             Lang::OCaml,
             "repurposed",
             "a let is a fresh binding and `:=` writes through a ref, never rebinding the name",
+        ),
+        (
+            Lang::Go,
+            "unawaited coroutine",
+            "a goroutine RUNS when spawned; there is no coroutine object to drop",
+        ),
+        (Lang::C, "unawaited coroutine", "no async"),
+        (
+            Lang::Zig,
+            "unawaited coroutine",
+            "async left the language; the grammar has no await to see",
+        ),
+        (
+            Lang::OCaml,
+            "unawaited coroutine",
+            "no await syntax — concurrency is a library of ordinary functions",
+        ),
+        (Lang::Shell, "unawaited coroutine", "no async"),
+        (
+            Lang::TypeScript,
+            "unawaited coroutine",
+            "a promise is eagerly scheduled: the call RUNS and only its rejection goes unobserved — a weaker claim admired code violates deliberately (144 telemetry sends in gold), owned by no-floating-promises",
+        ),
+        (
+            Lang::JavaScript,
+            "unawaited coroutine",
+            "a promise is eagerly scheduled: the call RUNS — same verdict as TypeScript",
         ),
     ];
 

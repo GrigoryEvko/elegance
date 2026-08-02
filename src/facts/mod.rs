@@ -178,6 +178,14 @@ pub struct UnitFacts {
     pub is_async: bool,
     /// Calls that park the thread inside an async unit.
     pub blocking_calls: u16,
+    /// `await` expressions in this unit.
+    pub awaits: u16,
+    /// Statement-position calls to a SAME-FILE async unit with no await
+    /// and the result discarded. In Python the coroutine never runs; in
+    /// Rust the future is dropped unpolled; in TS the promise floats
+    /// with nobody to catch its rejection. Same-file evidence only —
+    /// a cross-file callee is never guessed at.
+    pub unawaited: u16,
     /// Winnowed fingerprints of this unit's normalized token stream —
     /// the raw material of near-clone detection. Empty for units too
     /// short to say anything.

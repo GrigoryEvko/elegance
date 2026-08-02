@@ -204,6 +204,7 @@ pub const CONDITIONAL_HOOK: usize = 44;
 pub const RETURN_ARITY: usize = 45;
 pub const INTERFACE_WIDTH: usize = 46;
 pub const REPURPOSED: usize = 47;
+pub const UNAWAITED: usize = 48;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -484,6 +485,17 @@ pub const METRICS: &[MetricDef] = &[
     // compound operators, conditional overrides, loop refills, and
     // try-sheltered fills.
     MetricDef { name: "repurposed",    rung: 3, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::P99 },
+    // A statement-position call to a SAME-FILE async unit, no await,
+    // result discarded. In Python the coroutine is created and never
+    // runs; in Rust the future is dropped unpolled; in TS the promise
+    // floats with nobody to catch its rejection. Same-file,
+    // unambiguous-name evidence only — a cross-file callee or a name
+    // with a sync twin is never guessed at.
+    //
+    // Rung 2 and Policy: like the conditional hook, this is a rule the
+    // runtimes themselves state (Python warns "coroutine was never
+    // awaited" at runtime; the evidence here arrives at read time).
+    MetricDef { name: "unawaited coroutine", rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -697,6 +709,7 @@ fn unit_shape(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32, u
             f(SWALLOWED, u.swallowed as f32, u.line, &u.qualname);
             f(BROAD_CATCH, u.broad_catch as f32, u.line, &u.qualname);
             f(LOST_CONTEXT, u.lost_context as f32, u.line, &u.qualname);
+            f(UNAWAITED, u.unawaited as f32, u.line, &u.qualname);
             if !u.is_test {
                 f(UNWRAPS, u.unwraps as f32, u.line, &u.qualname);
                 f(CASTS, u.casts as f32, u.line, &u.qualname);
@@ -949,10 +962,11 @@ mod tests {
             (RETURN_ARITY, "returns"),
             (INTERFACE_WIDTH, "interface width"),
             (REPURPOSED, "repurposed"),
+            (UNAWAITED, "unawaited coroutine"),
         ] {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
-        assert_eq!(N, 48);
+        assert_eq!(N, 49);
     }
 
     #[test]
@@ -1890,6 +1904,81 @@ mod tests {
         );
     }
 
+    fn unawaited(lang: Lang, path: &str, src: &str) -> u16 {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        let f = extract(pack, &mut parser, Path::new(path), src);
+        f.units.iter().map(|u| u.unawaited).sum()
+    }
+
+    #[test]
+    fn an_unawaited_coroutine_is_judged_same_file_and_unambiguous_only() {
+        // The bug: work() builds a coroutine and throws it away — the
+        // body never runs, and Python only warns at runtime.
+        assert_eq!(
+            unawaited(
+                Lang::Python,
+                "a.py",
+                "async def work():\n    pass\n\nasync def main():\n    work()\n"
+            ),
+            1
+        );
+        // Awaited, assigned, passed, or returned: someone owns the
+        // coroutine, and ownership is not this metric's business.
+        assert_eq!(
+            unawaited(
+                Lang::Python,
+                "a.py",
+                "async def work():\n    pass\n\nasync def main():\n    await work()\n    t = work()\n    await asyncio.gather(work(), work())\n    return work()\n"
+            ),
+            0
+        );
+        // A cross-file callee is never guessed; a sync callee returns
+        // a value the caller may legitimately ignore.
+        assert_eq!(
+            unawaited(
+                Lang::Python,
+                "a.py",
+                "def log_it():\n    pass\n\nasync def main():\n    fetch_remote()\n    log_it()\n"
+            ),
+            0
+        );
+        // A name with a sync twin is ambiguous: no claim without types.
+        assert_eq!(
+            unawaited(
+                Lang::Python,
+                "a.py",
+                "async def flush():\n    pass\n\nclass Sink:\n    def flush(self):\n        pass\n\nasync def main():\n    flush()\n"
+            ),
+            0,
+            "a sync twin makes the name undecidable"
+        );
+        // Rust: a statement-position call drops the future unpolled;
+        // .await is ownership taken.
+        assert_eq!(
+            unawaited(
+                Lang::Rust,
+                "a.rs",
+                "async fn tick() {}\n\nasync fn run() {\n    tick();\n    tick().await;\n}\n"
+            ),
+            1
+        );
+        // TS/JS are declared dead, and the reason is semantic: a
+        // promise is EAGERLY scheduled — persist() runs, only its
+        // rejection goes unobserved. That weaker claim belongs to
+        // no-floating-promises, and gold showed admired code making
+        // this exact call on purpose, 144 times, for telemetry.
+        assert_eq!(
+            unawaited(
+                Lang::TypeScript,
+                "a.ts",
+                "async function persist(): Promise<void> {}\n\nexport async function save() {\n  persist();\n}\n"
+            ),
+            0,
+            "a floating promise still RAN; that is another tool's claim"
+        );
+    }
+
     fn widths(lang: Lang, path: &str, src: &str) -> Vec<(String, u16)> {
         let pack = lang.pack();
         let mut parser = pack.make_parser();
@@ -2261,6 +2350,10 @@ mod tests {
         (
             "repurposed",
             "repurposing_spares_collectors_overrides_and_sheltered_fills",
+        ),
+        (
+            "unawaited coroutine",
+            "an_unawaited_coroutine_is_judged_same_file_and_unambiguous_only",
         ),
     ];
 

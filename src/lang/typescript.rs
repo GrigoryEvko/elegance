@@ -12,6 +12,7 @@ const KINDS: &[(&str, Sem)] = &[
     ("function_declaration", Sem::FnDef),
     ("generator_function_declaration", Sem::FnDef),
     ("method_definition", Sem::FnDef),
+    ("await_expression", Sem::Await),
     ("arrow_function", Sem::Lambda),
     ("function_expression", Sem::Lambda),
     ("class_declaration", Sem::TypeDef),

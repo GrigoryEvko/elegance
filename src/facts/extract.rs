@@ -91,6 +91,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         tokens: vec![Vec::new()],
         import_roots: std::collections::HashSet::new(),
         mentions: std::collections::HashSet::new(),
+        stray_calls: Vec::new(),
         facts: &mut facts,
     };
     let root = ex.walk(
@@ -102,9 +103,19 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
             loops: 0,
             branched: false,
             sheltered: false,
+            awaited: false,
             depth: 0,
         },
     );
+    let mass = root.map_or(0, |sub| sub.mass);
+    finish(ex, &blank, mass);
+    facts
+}
+
+/// Every post-walk join: work that needs the whole file's units known
+/// before it can say anything (asyncness of callees, envy targets,
+/// live spans), plus the counts the walk only accumulated.
+fn finish(ex: Extractor, blank: &Rows, mass: u32) {
     let Extractor {
         commentary,
         live,
@@ -113,19 +124,56 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         import_roots,
         mentions,
         tokens,
+        stray_calls,
+        facts,
         ..
     } = ex;
-    fingerprint_units(&mut facts, &tokens);
+    fingerprint_units(facts, &tokens);
+    resolve_unawaited(facts, &stray_calls);
     facts.mentioned = mentions.into_iter().collect();
     facts.step_refs = step_refs(&facts.units, &callees);
     facts.pub_order = pub_order(&facts.units);
     resolve_envy(&mut facts.units, envy, &import_roots);
     facts.test_refs = resolve_locals(&mut facts.units, live, facts.is_test_file);
-    facts.mass = root.map_or(0, |sub| sub.mass);
-    facts.comment_lines = commentary.count_excluding(&blank) as u32;
+    facts.mass = mass;
+    facts.comment_lines = commentary.count_excluding(blank) as u32;
     let unit_syms = public_unit_names(&facts.units);
     facts.exports.extend(unit_syms);
-    facts
+}
+
+/// Same-file resolution of statement-position unawaited calls. A name
+/// is judged only when it is UNAMBIGUOUS: every same-file unit wearing
+/// it must be async, or the call stays silent — a sync twin means no
+/// claim can be made without types.
+///
+/// Python and Rust ONLY, because the claim is "this body never ran":
+/// a Python coroutine is created inert and a Rust future drops
+/// unpolled, but a JS promise is eagerly scheduled — the call RUNS
+/// and only its rejection goes unobserved. That weaker claim belongs
+/// to no-floating-promises, and gold showed admired code violating it
+/// deliberately: 144 fire-and-forget telemetry sends in vscode alone.
+fn resolve_unawaited(facts: &mut FileFacts, stray: &[(usize, Box<str>)]) {
+    if stray.is_empty()
+        || !matches!(
+            facts.lang,
+            crate::lang::Lang::Python | crate::lang::Lang::Rust
+        )
+    {
+        return;
+    }
+    let mut always_async: std::collections::HashMap<Box<str>, bool> =
+        std::collections::HashMap::new();
+    for u in facts.units.iter().filter(|u| !u.is_module) {
+        always_async
+            .entry(u.name.clone())
+            .and_modify(|v| *v &= u.is_async)
+            .or_insert(u.is_async);
+    }
+    for (unit, name) in stray {
+        if always_async.get(name.as_ref()).copied() == Some(true) {
+            facts.units[*unit].unawaited += 1;
+        }
+    }
 }
 
 /// Per-unit work that needs the whole file walked first: winnowed
@@ -285,6 +333,8 @@ impl UnitFacts {
             returns: "".into(),
             return_arity: 0,
             repurposed: 0,
+            awaits: 0,
+            unawaited: 0,
             mut_receiver: false,
             self_recursive: false,
             ctrl: Vec::new(),
@@ -307,6 +357,11 @@ struct Ctx {
     /// here leaves the OLD value live on the handler path and cannot
     /// be judged a repurposing.
     sheltered: bool,
+    /// Under an `await`. Deliberately covers the WHOLE subtree: a call
+    /// nested in an awaited expression (`await gather(f(), g())`) has
+    /// handed its coroutine to a consumer, and silence there is the
+    /// right direction to be wrong in.
+    awaited: bool,
     /// Nodes between here and the root. `walk` and `scan` are mutually
     /// recursive, so this is also the stack depth they are using.
     depth: u16,
@@ -360,6 +415,10 @@ struct Extractor<'a> {
     /// Every distinct identifier the file mentions, for the dead-export
     /// join. Deduplicated here so the aggregate counts FILES per name.
     mentions: std::collections::HashSet<Box<str>>,
+    /// Statement-position bare-name calls made without an await, result
+    /// discarded: (calling unit, callee name). Resolved after the walk,
+    /// when every unit's asyncness is known.
+    stray_calls: Vec<(usize, Box<str>)>,
     facts: &'a mut FileFacts,
 }
 
@@ -401,6 +460,7 @@ impl Extractor<'_> {
                         loops: 0,
                         branched: false,
                         sheltered: false,
+                        awaited: false,
                         depth: ctx.depth,
                     },
                     sem,
@@ -416,6 +476,10 @@ impl Extractor<'_> {
                 // branch does.
                 inner.branched = ctx.branched || sem.forks_control();
                 inner.sheltered = ctx.sheltered || sem == Sem::Try;
+                if sem == Sem::Await {
+                    inner.awaited = true;
+                    self.facts.units[ctx.unit].awaits += 1;
+                }
                 if sem == Sem::Loop {
                     inner.loops = ctx.loops.saturating_add(1);
                     let unit = &mut self.facts.units[ctx.unit];
@@ -600,6 +664,13 @@ impl Extractor<'_> {
     fn record_call(&mut self, node: Node, ctx: Ctx) {
         let unit_idx = ctx.unit;
         if let Some(name) = self.callee_simple_name(node).map(Box::<str>::from) {
+            // A statement-position call, unawaited, result thrown away.
+            // If the name resolves to a same-file async unit once the
+            // whole file is walked, the coroutine was created and
+            // dropped — it never ran.
+            if !ctx.awaited && discards_its_result(node) {
+                self.stray_calls.push((unit_idx, name.clone()));
+            }
             self.callees[unit_idx].push(name);
         }
         let unit = &mut self.facts.units[unit_idx];

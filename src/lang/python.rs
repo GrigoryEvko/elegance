@@ -7,6 +7,7 @@ const KINDS: &[(&str, Sem)] = &[
     ("function_definition", Sem::FnDef),
     ("lambda", Sem::Lambda),
     ("class_definition", Sem::TypeDef),
+    ("await", Sem::Await),
     ("if_statement", Sem::If),
     ("elif_clause", Sem::ElseIf),
     ("else_clause", Sem::Else),

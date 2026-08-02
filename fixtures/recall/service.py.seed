@@ -82,3 +82,12 @@ def relabel(row):
 async def mirror(url):
     body = requests.get(url)
     return body.text
+
+
+async def refresh_cache():
+    pass
+
+
+async def cycle():
+    refresh_cache()
+    return True

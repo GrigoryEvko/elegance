@@ -6,6 +6,7 @@ use crate::sem::Sem;
 const KINDS: &[(&str, Sem)] = &[
     ("function_item", Sem::FnDef),
     ("closure_expression", Sem::Lambda),
+    ("await_expression", Sem::Await),
     ("struct_item", Sem::TypeDef),
     ("enum_item", Sem::TypeDef),
     ("union_item", Sem::TypeDef),
