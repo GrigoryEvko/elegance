@@ -5,7 +5,7 @@
 
 use std::error::Error;
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::lang::{LANGS, Lang};
 use crate::metrics::{Calib, Fmt, LangBudgets, METRICS};
@@ -20,6 +20,52 @@ const GOLD_PIN: f64 = 0.99;
 const BAND_LO: f64 = 0.05;
 const BAND_HI: f64 = 0.95;
 
+/// Languages that collect INCIDENTALLY: their files count wherever they
+/// are found, whatever the checkout was fetched for. Shell is the only
+/// one, and it is a fact about shell rather than a convenience — 207 of
+/// its 342 corpus files are build and CI scripts living inside the
+/// other checkouts, and gold.toml defends that as how shell genuinely
+/// appears in the world.
+const INCIDENTAL: &[Lang] = &[Lang::Shell];
+
+/// May this file speak for this language? A corpus laid out as
+/// `<root>/<lang>/<repo>` DECLARES what each repository was fetched
+/// for, and calibration has to respect the declaration or a repo chosen
+/// for one language quietly rewrites another's budgets. Five CUDA
+/// repositories moved 46 budgets in four other languages before this
+/// existed — Python's length p99 from 80 to 252 — because a CUDA
+/// repository is a Python and C++ monorepo with kernels inside.
+///
+/// It also enforces this file's own four-per-language rule, which was
+/// being met on paper only: tsx held two repos and borrowed the rest of
+/// its evidence from the ts checkouts.
+///
+/// Only when the layout is recognisable. Someone calibrating their own
+/// tree has no such directories and keeps the pooled behaviour, which
+/// is the right answer there — in a real repository every file is the
+/// project's own.
+fn scoped(roots: &[PathBuf], path: &Path, lang: Lang, declared: bool) -> bool {
+    if !declared || INCIDENTAL.contains(&lang) {
+        return true;
+    }
+    roots.iter().any(|root| {
+        path.strip_prefix(root)
+            .ok()
+            .and_then(|rest| rest.components().next())
+            .is_some_and(|first| first.as_os_str() == lang.corpus_dir())
+    })
+}
+
+/// Does this corpus name its languages — is there a `py/` or a `cpp/`
+/// directly under a root?
+fn declares_languages(roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| names_a_language(root))
+}
+
+fn names_a_language(root: &Path) -> bool {
+    LANGS.iter().any(|l| root.join(l.corpus_dir()).is_dir())
+}
+
 /// Scans the corpus (e.g. /tmp/gold), prints the derived table, and writes
 /// calibration.toml next to the current directory. The snapshot is baked
 /// in at the NEXT build — commit it.
@@ -33,6 +79,7 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
          # then rebuild (the snapshot is compiled in).\n",
     );
 
+    let declared = declares_languages(roots);
     for lang in LANGS {
         // `of`, not `from_path`: a C++ header is a `.h`, and pooling it
         // into the `[c]` section would calibrate one language on
@@ -40,6 +87,7 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
         let subset: Vec<PathBuf> = files
             .iter()
             .filter(|p| Lang::of(p) == Some(lang))
+            .filter(|p| scoped(roots, p, lang, declared))
             .cloned()
             .collect();
         if subset.is_empty() {
@@ -121,8 +169,16 @@ fn lang_section(agg: &mut Agg, lang: Lang) -> String {
             shown
         );
     }
-    // Rate metrics: gold's coverage share, baked so a repo's rate
-    // renders beside the admired reference.
+    section.push_str(&rate_entries(agg, lang));
+    section
+}
+
+/// Gold's coverage share for the rate metrics, baked so that a repo's
+/// own rate renders beside the admired reference. Separate from the
+/// budget loop because it answers a different question — not "how much
+/// is too much" but "how much of admired code bothers".
+fn rate_entries(agg: &mut Agg, lang: Lang) -> String {
+    let mut section = String::new();
     for m in crate::metrics::RATE_METRICS {
         let dist = agg.sorted_dist(m);
         if dist.len() < MIN_SAMPLES {

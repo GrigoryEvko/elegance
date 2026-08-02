@@ -88,13 +88,7 @@ pub fn pack() -> Pack {
         types_declared: true,
         refine,
         // `test "label" { .. }`: the prose label names the unit.
-        name_node: |node| {
-            (node.kind() == "test_declaration").then(|| {
-                let mut cursor = node.walk();
-                node.named_children(&mut cursor)
-                    .find(|c| matches!(c.kind(), "string" | "identifier" | "builtin_identifier"))
-            })?
-        },
+        name_node: test_label,
         composed_name: |_, _| None,
         imports,
         param_info,
@@ -240,6 +234,18 @@ fn has_block_child(node: Node) -> bool {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .any(|c| c.kind() == "block")
+}
+
+/// `test "decodes a header" { ... }` names itself with a string, and
+/// `test decodeHeader { ... }` with an identifier. Nothing else in the
+/// grammar carries its name outside a `name` field.
+fn test_label(node: Node) -> Option<Node> {
+    if node.kind() != "test_declaration" {
+        return None;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .find(|c| matches!(c.kind(), "string" | "identifier" | "builtin_identifier"))
 }
 
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {

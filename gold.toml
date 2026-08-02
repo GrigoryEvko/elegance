@@ -12,6 +12,16 @@
 # fixtures, colorizer inputs -- which is how it acquired a magic-numbers
 # budget of 14.
 #
+# EVERY REPO SPEAKS ONLY FOR ITS DECLARED LANGUAGE. Adding repos was the
+# right response to that mistake and only half a fix, because the
+# incidental files stayed in the pool: JavaScript still read magic
+# numbers 7 with its own four repos present, and 2 once the borrowed
+# files were scoped out. Calibration now honours the `lang` field above,
+# and the rule is enforced rather than aspirational -- tsx was the case
+# that proved it, having met the four-repo rule on paper while borrowing
+# more than half its evidence from the ts checkouts. Shell is the single
+# declared exception and says why in its own section.
+#
 # Two entries were dropped AFTER measuring them, not before, and neither
 # for scoring badly. Both are fine software; both are unrepresentative
 # samples:
@@ -173,6 +183,21 @@ url = "https://github.com/microsoft/vscode"
 sha = "dd3c36b8e940449e840322af6406ee07003bcf58"
 
 # --- tsx: React written by people who publish their conventions.
+#
+# GREW FROM TWO TO FOUR, and the reason is the scoping rule below rather
+# than anything wrong with the two. Until calibration respected each
+# repo's declared language, this section was quietly resting on the ts
+# checkouts: 495 .tsx files live here and 519 more sat inside ts/ —
+# vscode 265, trpc 193, hono 32, zod 29 — and they were the disciplined
+# half. Scoping without growing first loosened tsx by about 30%
+# (cognitive 33 -> 43, length 186 -> 229) and left the section on two
+# repos, under this file's own four-per-language rule. So the rule was
+# never really met here; the pooling hid it.
+#
+# Measured and rejected, both fine code:
+#   tldraw   -- 18,926 units, more than the three kept repos together.
+#     One repo at half a section is grpc-go's rejection.
+#   mantine  -- 11,735 units across 393k lines, same objection.
 [[repo]]
 lang = "tsx"
 name = "radix"
@@ -184,6 +209,18 @@ lang = "tsx"
 name = "excalidraw"
 url = "https://github.com/excalidraw/excalidraw"
 sha = "786ab266ff3a9cfffaed16804cf9132b44bc08ae"
+
+[[repo]]
+lang = "tsx"
+name = "ariakit"
+url = "https://github.com/ariakit/ariakit"
+sha = "4b2ff5642b411cfd8425e2a8d03da5480ff4d99b"
+
+[[repo]]
+lang = "tsx"
+name = "primer-react"
+url = "https://github.com/primer/react"
+sha = "da3df9aba582c7bcedbe69f1bdc5ab64ac90d32b"
 
 # --- js: d3 and preact are the JS most often held up as models.
 [[repo]]
@@ -319,13 +356,13 @@ sha = "4948d74e45994304e3dda764f6616c7f6988c493"
 # which is the honest news that an application branches harder than a
 # generic library. For scale, the esbuild entry was rejected at 5x.
 #
-# The compiled [cpp] budgets read 32 and 117 rather than 30 and 113,
-# and the gap is 49 incidental C++ files living in checkouts fetched for
-# other languages: vscode 23, ghostty 12, dune 11, curl 2, git 1. Test
-# fixtures and interop shims, nobody's chosen style, and they loosen the
-# section by 7% and 3.5%. Recorded rather than removed -- calibration
-# partitions the whole corpus by language and has no per-repo language
-# filter, and inventing one to move two points would be the wrong trade.
+# The compiled [cpp] budgets used to read 32 and 117 rather than 30 and
+# 113, and the gap was 49 incidental C++ files living in checkouts
+# fetched for other languages: vscode 23, ghostty 12, dune 11, curl 2,
+# git 1. Test fixtures and interop shims, nobody's chosen style. That is
+# fixed rather than recorded now: calibration scopes each repo to the
+# language it was fetched for, so the section reads what these seven
+# repositories actually say.
 #
 # REJECTED among applications, again on measurement:
 #   btop      -- cognitive p99 230 and length p99 303, against 38 and 91
@@ -362,11 +399,11 @@ name = "immer"
 url = "https://github.com/arximboldi/immer"
 sha = "bd4fc749b97dfa2b66a8f3de00bbf234db4856ef"
 # lodash, mori, immutable.min and platform.js, vendored whole so the
-# JS benchmark has something to race against. Nobody's style, one of
-# them minified, and they moved JavaScript's params budget from 4 to 6
-# and its depth from 3 to 4 — a C++ entry loosening a JS budget, which
-# is the trap the head of this file describes, sprung from the one
-# direction it did not anticipate.
+# JS benchmark has something to race against. Nobody's style and one of
+# them minified. This was added when it moved JavaScript's params budget
+# from 4 to 6 and its depth from 3 to 4 — a C++ entry loosening a JS
+# budget — and scoping has since made that impossible. It stays for the
+# reason every other vendored tree is pruned: it is not immer's code.
 prune = "extra/js/lib"
 
 [[repo]]
@@ -419,44 +456,77 @@ sha = "8aa942972859644a7e3f74ba288fa5c660b68637"
 prune = "third-party test"
 
 
-# --- cu: DELIBERATELY EMPTY. The CUDA pack ships on compiled defaults,
-# and every one of its budgets reports budget_source "default" so a
-# reader can see it. This is a refusal with a measurement behind it, not
-# an omission.
+# --- cu: kernels, and the corpus that could only be added once
+# calibration respected declarations.
 #
-# The sample counts were never the problem: cutlass, flash-attention,
-# transformer-engine, llm.c and cuda-samples give 9,000+ CUDA units,
-# far past the 200 a percentile needs, and the derived numbers are
-# genuinely different from C++ — params p99 14 against 5, magic numbers
-# 30 against 10, length 208 against 117. A kernel really does take
-# fourteen arguments and really is full of tile sizes, so CUDA earns its
-# own section on the evidence.
+# The sample counts were never the obstacle: these five give 9,000+ CUDA
+# units against a floor of 200, and the derived numbers are genuinely
+# unlike C++ — params p99 14 against 5, magic numbers 30 against 10,
+# length 208 against 117. A kernel really does take fourteen arguments
+# and really is full of tile sizes, so CUDA earns its own section.
 #
-# What made it unshippable is that a modern CUDA repository is a Python
-# and C++ monorepo with kernels inside. cutlass alone brings 1,115 .cpp
-# files and 596 .py; transformer-engine brings 421 .py. Adding the five
-# moved 46 budgets in OTHER languages:
+# What blocked it was that a modern CUDA repository is a Python and C++
+# monorepo with kernels inside. cutlass alone brings 1,115 .cpp files
+# and 596 .py; transformer-engine brings 421 .py. Pooled by extension,
+# adding these five moved 46 budgets in OTHER languages — py length
+# 80 -> 252 and cognitive 22 -> 45, cpp params 5 -> 115 and confusable
+# 2 -> 112. Pruning could not fix it, because the .cpp files pushing cpp
+# params to 115 ARE cutlass, and cutting a repo's own C++ to protect
+# another section's number would be dishonest twice over. Scoping fixes
+# it at the root: a repo speaks only for the language it was fetched
+# for, so cutlass's build tooling stays out of Python's percentiles.
 #
-#   py   length 80 -> 252, cognitive 22 -> 45, live span 56 -> 196,
-#        params 9 -> 18, untyped params 4 -> 12
-#   cpp  params 5 -> 115, confusable 2 -> 112, length 117 -> 197
-#
-# That is not a corpus addition, it is four languages being overwritten
-# by NVIDIA's build tooling. Pruning cannot fix it either: the .cpp
-# files pushing cpp params to 115 ARE cutlass, and removing a repo's own
-# C++ to protect another section's numbers would be dishonest twice.
-#
-# The real defect is in calibration, not in the corpus: gold.toml
-# DECLARES each repo's language and `elegance calibrate` ignores the
-# declaration, pooling every file by extension across the whole tree.
-# Fixing that is a change to what calibration means for all eleven
-# existing sections — the shell section below depends on the current
-# behaviour on purpose — so it is a task of its own, not a thing to
-# bolt onto a dialect. Until then, defaults with provenance.
-#
-# cccl was also measured and rejected on its own terms: 612 of its
-# 2,021 CUDA files (30%) are unreadable, libcu++'s concept-heavy macros
+# cccl was measured and rejected on its own terms: 612 of its 2,021
+# CUDA files (30%) are unreadable, libcu++'s concept-heavy macros
 # defeating the grammar the way mp-units did.
+#
+# cutlass is 5,072 of the section's units and it TIGHTENS rather than
+# dictates — dropping it moves cognitive p99 from 55 to 79 and length
+# from 258 to 300, because the others are the branchy ones. That is the
+# opposite of the esbuild failure this file rejects repos for, so its
+# size is earning a stricter bar rather than an inflated one.
+[[repo]]
+lang = "cuda"
+name = "cutlass"
+url = "https://github.com/NVIDIA/cutlass"
+sha = "f94ec46f4f63f96003d6cfdf2014731e7672c281"
+# docs/: Doxygen's generated search index, 159 .js files plus a
+# vendored jquery, none of it anybody's style.
+#
+# include/cute/arch/: 32 files transcribing the tensor-core ISA, one
+# overload per instruction, each taking one argument per register —
+# 2,459 units and 195k lines of mechanically-shaped code. They were
+# dictating two of this section's budgets by themselves: params p99 67
+# against 15 without them, confusable 64 against 8, while cognitive
+# (55) and length (242 against 247) did not move at all. A params
+# budget of 67 is a budget that never fires. That is date-fns's
+# rejection exactly — calibrating on a template measures the template —
+# narrowed to the two metrics it actually captured.
+prune = "docs include/cute/arch"
+
+[[repo]]
+lang = "cuda"
+name = "flash-attention"
+url = "https://github.com/Dao-AILab/flash-attention"
+sha = "c75d019dea9d910312974417bc28f190dfdda6d9"
+
+[[repo]]
+lang = "cuda"
+name = "transformer-engine"
+url = "https://github.com/NVIDIA/TransformerEngine"
+sha = "bffde8f4a0a4eea9036dc753e28269247e5de69d"
+
+[[repo]]
+lang = "cuda"
+name = "llm.c"
+url = "https://github.com/karpathy/llm.c"
+sha = "f1e2ace651495b74ae22d45d1723443fd00ecd3a"
+
+[[repo]]
+lang = "cuda"
+name = "cuda-samples"
+url = "https://github.com/NVIDIA/cuda-samples"
+sha = "b7c5481c556c3fe98db060207ecaa41a4b9a9abc"
 
 # --- shell: the language that provisions production, and the thinnest
 # section here. Three repos, deliberately.

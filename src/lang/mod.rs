@@ -144,6 +144,22 @@ impl Lang {
         }
     }
 
+    /// The name gold.toml uses for this language, which is also the
+    /// corpus directory a repository fetched for it lands in. Mostly
+    /// `name()` and deliberately not always — the manifest is read by
+    /// people and spells three of them out. Matching on `name()`
+    /// instead silently emptied the `[rs]` and `[ml]` sections, since
+    /// no directory is called `rs` or `ml`.
+    pub fn corpus_dir(self) -> &'static str {
+        match self {
+            Lang::Rust => "rust",
+            Lang::OCaml => "ocaml",
+            Lang::Shell => "shell",
+            Lang::Cuda => "cuda",
+            other => other.name(),
+        }
+    }
+
     pub fn pack(self) -> &'static Pack {
         static PACKS: [OnceLock<Pack>; LANGS.len()] = [const { OnceLock::new() }; LANGS.len()];
         PACKS[self as usize].get_or_init(|| match self {

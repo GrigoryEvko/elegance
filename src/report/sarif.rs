@@ -253,6 +253,28 @@ const RECURRENCE_RULES: &[(&str, &str)] = &[
 
 /// Findings that are about a SET of sites: the first site is the result
 /// location, the rest are relatedLocations so a viewer can walk them.
+/// Exact clone classes. Split out from the recurrence sweep because
+/// each family there answers a different question and the sweep had
+/// grown to carry three at once.
+fn clone_results(agg: &mut Agg) -> Vec<SarifResult> {
+    let (clones, _) = select_clones(agg);
+    clones
+        .into_iter()
+        .map(|class| {
+            let (first, rest) = class.sites.split_first().expect("classes have >=2 sites");
+            SarifResult {
+                rule_id: rule_id("clones"),
+                level: "warning",
+                message: Text {
+                    text: suggest::for_clone(class.sites.len(), class.mass),
+                },
+                locations: vec![location(&first.path, first.line)],
+                related_locations: rest.iter().map(|s| location(&s.path, s.line)).collect(),
+            }
+        })
+        .collect()
+}
+
 fn recurrence_results(agg: &mut Agg) -> Vec<SarifResult> {
     let mut out = Vec::new();
     for pair in crate::near::pairs(&agg.prints, usize::MAX).pairs {
@@ -277,19 +299,7 @@ fn recurrence_results(agg: &mut Agg) -> Vec<SarifResult> {
             related_locations: rest.iter().map(|(p, l)| location(p, *l)).collect(),
         });
     }
-    let (clones, _) = select_clones(agg);
-    for class in clones {
-        let (first, rest) = class.sites.split_first().expect("classes have >=2 sites");
-        out.push(SarifResult {
-            rule_id: rule_id("clones"),
-            level: "warning",
-            message: Text {
-                text: suggest::for_clone(class.sites.len(), class.mass),
-            },
-            locations: vec![location(&first.path, first.line)],
-            related_locations: rest.iter().map(|s| location(&s.path, s.line)).collect(),
-        });
-    }
+    out.extend(clone_results(agg));
     for (id, groups, message) in [
         (
             "param clumps",

@@ -331,8 +331,8 @@ elegance calibrate /tmp/gold` and baked in at build time). One-sided
 budgets take gold p99; bands take p05/p95; policy metrics encode taste
 and are never calibrated — but the calibrate audit reports any policy
 the corpus itself violates (1% ceiling for gates, 5% for suspicions).
-What the gold data says: cognitive p99 lands at py 22, rs 17, ts 32;
-Rust's doc culture pushes its comment ceiling to 75%. (A test pins this
+What the gold data says: cognitive p99 lands at py 18, rs 16, ts 32;
+Rust's doc culture pushes its comment ceiling to 78%. (A test pins this
 paragraph to `calibration.toml` — the README cannot drift from the
 corpus.) Every metric carries a quality-ladder rung
 (0 token hygiene, 1 expression, 2 function, 3 interface, 4 class/module,
@@ -423,8 +423,8 @@ but `Lang::from_path` is a pure path predicate the walk calls on every
 file, and sniffing would change what a walk costs.
 
 OCaml is in the corpus as a control group. Its gold reads
-cognitive p99 = 6 and length p99 = 52, against admired Python's 22/80,
-Rust's 17/98 and TypeScript's 32/108 — three to five times as tight on
+cognitive p99 = 6 and length p99 = 52, against admired Python's 18/76,
+Rust's 16/93 and TypeScript's 32/106 — three to five times as tight on
 complexity and up to twice on function length. Idiomatic OCaml iterates
 with `List.iter` and a lambda, which the ontology reads as a call rather
 than a loop, so loop-based metrics read low for it by construction.
@@ -438,8 +438,8 @@ report header. C numbers are floors, not truths, for `.h` tricks.
 `#if`/`#elif`/`#else` count as real branches: conditional compilation is
 control flow the reader must follow.
 
-C++'s gold reads cognitive p99 = 32 and length p99 = 117, against C's 77
-and 201 — less than half the branching and well under two thirds the
+C++'s gold reads cognitive p99 = 30 and length p99 = 115, against C's 80
+and 205 — less than half the branching and well under two thirds the
 length, for a language that is very nearly a superset of the other.
 Conditional compilation is much of it: `#if` counts as real control
 flow, and the C corpus is musl, lua, redis and curl, where portability
@@ -474,17 +474,21 @@ tokens the tree never shows, `__shared__` arrives as an ordinary
 kinds to C++ — a whole language dialect for one table entry, which is
 what the hourglass was built to buy.
 
-Its budgets are the compiled defaults and say so: every `[cu]` number
-reports `budget_source: default`. That is a refusal with a measurement
-behind it. CUDA clears the sample floor easily (9,000+ units) and
-genuinely differs from C++ — params p99 14 against 5, magic numbers 30
-against 10 — but a modern CUDA repository is a Python and C++ monorepo
-with kernels inside, and adding five of them moved 46 budgets in other
-languages: Python's length 80 to 252, C++'s params 5 to 115. The defect
-is that calibration pools by extension across the whole corpus and
-ignores the language each repo is declared for; that is a change to
-what calibration means for eleven existing sections, so it is its own
-task. gold.toml carries the numbers.
+CUDA is not C++ statistically, however much it is syntactically: its
+gold reads params p99 = 15 against C++'s 5, magic numbers 30 against 10,
+and length 247 against 115. A kernel really does take fifteen arguments
+and really is full of tile sizes, and borrowing C++'s budgets would have
+flagged nearly every one.
+
+Getting those numbers took a change to calibration rather than to the
+corpus. A modern CUDA repository is a Python and C++ monorepo with
+kernels inside — cutlass alone carries 1,115 `.cpp` files and 596 `.py`
+— and pooled by extension, adding five of them moved 46 budgets in
+languages nobody was editing, Python's length from 80 to 252 and C++'s
+params from 5 to 115. **A repository now speaks only for the language it
+was declared for**, which is what gold.toml said all along and what
+calibration ignored. Shell opts back in, because 207 of its 342 corpus
+files are genuinely build scripts living inside other checkouts.
 
 **The C family is the one place where an extension does not settle the
 language, so the text does.** Reading every `.h` as C dropped a third of

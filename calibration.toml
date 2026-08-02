@@ -3,63 +3,61 @@
 # then rebuild (the snapshot is compiled in).
 
 [py]
-"cognitive" = { hi = 22.0 }
-"cyclomatic" = { hi = 14.0 }
-"depth" = { hi = 4.0 }
-"length" = { hi = 80.0 }
-"params" = { hi = 9.0 }
+"cognitive" = { hi = 18.0 }
+"cyclomatic" = { hi = 12.0 }
+"depth" = { hi = 3.0 }
+"length" = { hi = 76.0 }
+"params" = { hi = 10.0 }
 "expr depth" = { hi = 11.0 }
-"live span" = { hi = 56.0 }
-"magic numbers" = { hi = 9.0 }
+"live span" = { hi = 48.0 }
+"magic numbers" = { hi = 11.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.51 }
+"comment ratio" = { lo = 0.00, hi = 0.47 }
 "untyped params" = { hi = 4.0 }
 "loose types" = { hi = 1.0 }
 "casts" = { hi = 1.0 }
 "confusable" = { hi = 3.0 }
-"terse name" = { hi = 12.0 }
 "abbreviated" = { hi = 1.0 }
-"loop depth" = { hi = 2.0 }
+"loop depth" = { hi = 1.0 }
 "returns" = { hi = 2.0 }
 "magic strings" = { hi = 2.0 }
 "cohesion" = { hi = 3.0 }
-"asserts" = { rate = 0.16 }
-"public docs" = { rate = 0.33 }
+"asserts" = { rate = 0.12 }
+"public docs" = { rate = 0.40 }
 
 [rs]
-"cognitive" = { hi = 17.0 }
+"cognitive" = { hi = 16.0 }
 "cyclomatic" = { hi = 14.0 }
 "depth" = { hi = 3.0 }
-"length" = { hi = 98.0 }
+"length" = { hi = 93.0 }
 "params" = { hi = 4.0 }
 "expr depth" = { hi = 11.0 }
-"live span" = { hi = 65.0 }
+"live span" = { hi = 59.0 }
 "magic numbers" = { hi = 2.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.75 }
+"comment ratio" = { lo = 0.00, hi = 0.78 }
 "casts" = { hi = 1.0 }
 "confusable" = { hi = 2.0 }
 "terse name" = { hi = 19.0 }
 "abbreviated" = { hi = 1.0 }
 "wildcard match" = { hi = 1.0 }
-"loop depth" = { hi = 2.0 }
+"loop depth" = { hi = 1.0 }
 "returns" = { hi = 2.0 }
 "magic strings" = { hi = 2.0 }
 "cohesion" = { hi = 5.0 }
-"asserts" = { rate = 0.18 }
-"public docs" = { rate = 0.84 }
+"asserts" = { rate = 0.20 }
+"public docs" = { rate = 0.91 }
 
 [ts]
 "cognitive" = { hi = 32.0 }
-"cyclomatic" = { hi = 21.0 }
+"cyclomatic" = { hi = 20.0 }
 "depth" = { hi = 4.0 }
-"length" = { hi = 108.0 }
+"length" = { hi = 106.0 }
 "params" = { hi = 7.0 }
 "expr depth" = { hi = 13.0 }
 "demeter" = { hi = 2.0 }
-"live span" = { hi = 80.0 }
+"live span" = { hi = 79.0 }
 "magic numbers" = { hi = 2.0 }
-# gold p05 is zero: the low flank is vacuous by the corpus's verdict
 "comment ratio" = { lo = 0.00, hi = 0.57 }
 "untyped params" = { hi = 2.0 }
 "casts" = { hi = 3.0 }
@@ -74,30 +72,29 @@
 "public docs" = { rate = 0.28 }
 
 [tsx]
-"cognitive" = { hi = 33.0 }
-"cyclomatic" = { hi = 21.0 }
+"cognitive" = { hi = 34.0 }
+"cyclomatic" = { hi = 22.0 }
 "depth" = { hi = 3.0 }
-"length" = { hi = 186.0 }
-"params" = { hi = 5.0 }
-"expr depth" = { hi = 13.0 }
-"demeter" = { hi = 3.0 }
-"live span" = { hi = 125.0 }
-"magic numbers" = { hi = 9.0 }
+"length" = { hi = 168.0 }
+"params" = { hi = 4.0 }
+"expr depth" = { hi = 12.0 }
+"demeter" = { hi = 2.0 }
+"live span" = { hi = 118.0 }
+"magic numbers" = { hi = 7.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.23 }
+"comment ratio" = { lo = 0.00, hi = 0.44 }
 "untyped params" = { hi = 3.0 }
-"loose types" = { hi = 1.0 }
-"casts" = { hi = 3.0 }
+"casts" = { hi = 2.0 }
 "confusable" = { hi = 2.0 }
 "loop depth" = { hi = 1.0 }
 "returns" = { hi = 1.0 }
 "interface width" = { hi = 4.0 }
-"magic strings" = { hi = 2.0 }
-"asserts" = { rate = 0.03 }
-"public docs" = { rate = 0.13 }
+"magic strings" = { hi = 3.0 }
+"asserts" = { rate = 0.01 }
+"public docs" = { rate = 0.06 }
 
 [go]
-"cognitive" = { hi = 33.0 }
+"cognitive" = { hi = 31.0 }
 "cyclomatic" = { hi = 24.0 }
 "depth" = { hi = 4.0 }
 "length" = { hi = 202.0 }
@@ -105,41 +102,34 @@
 "expr depth" = { hi = 13.0 }
 "live span" = { hi = 168.0 }
 "magic numbers" = { hi = 2.0 }
-# gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.56 }
 "loose types" = { hi = 1.0 }
 "casts" = { hi = 2.0 }
-"confusable" = { hi = 2.0 }
-"terse name" = { hi = 61.0 }
+"confusable" = { hi = 1.0 }
+"terse name" = { hi = 63.0 }
 "abbreviated" = { hi = 1.0 }
 "wildcard match" = { hi = 1.0 }
-"stringly id" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
-"returns" = { hi = 2.0 }
-"repurposed" = { hi = 1.0 }
-"magic strings" = { hi = 1.0 }
+"returns" = { hi = 3.0 }
 "sleepy test" = { hi = 1.0 }
-"asserts" = { rate = 0.08 }
-"public docs" = { rate = 0.37 }
+"public docs" = { rate = 0.36 }
 
 [js]
-"cognitive" = { hi = 27.0 }
-"cyclomatic" = { hi = 17.0 }
+"cognitive" = { hi = 22.0 }
+"cyclomatic" = { hi = 14.0 }
 "depth" = { hi = 3.0 }
-"length" = { hi = 109.0 }
+"length" = { hi = 78.0 }
 "params" = { hi = 4.0 }
 "expr depth" = { hi = 12.0 }
 "demeter" = { hi = 3.0 }
-"live span" = { hi = 71.0 }
-"magic numbers" = { hi = 7.0 }
+"live span" = { hi = 60.0 }
+"magic numbers" = { hi = 2.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.46 }
+"comment ratio" = { lo = 0.00, hi = 0.32 }
 "abbreviated" = { hi = 1.0 }
 "loop depth" = { hi = 1.0 }
 "magic strings" = { hi = 1.0 }
 "skipped tests" = { hi = 1.0 }
-"asserts" = { rate = 0.03 }
-"public docs" = { rate = 0.25 }
+"public docs" = { rate = 0.27 }
 
 [zig]
 "cognitive" = { hi = 40.0 }
@@ -165,28 +155,28 @@
 "public docs" = { rate = 0.39 }
 
 [c]
-"cognitive" = { hi = 77.0 }
-"cyclomatic" = { hi = 42.0 }
+"cognitive" = { hi = 80.0 }
+"cyclomatic" = { hi = 43.0 }
 "depth" = { hi = 5.0 }
-"length" = { hi = 201.0 }
+"length" = { hi = 205.0 }
 "params" = { hi = 7.0 }
 "expr depth" = { hi = 10.0 }
 "demeter" = { hi = 3.0 }
-"live span" = { hi = 180.0 }
-"magic numbers" = { hi = 16.0 }
+"live span" = { hi = 184.0 }
+"magic numbers" = { hi = 21.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.67 }
+"comment ratio" = { lo = 0.00, hi = 0.64 }
 "loose types" = { hi = 2.0 }
-"casts" = { hi = 6.0 }
+"casts" = { hi = 7.0 }
 "confusable" = { hi = 3.0 }
-"terse name" = { hi = 62.0 }
+"terse name" = { hi = 68.0 }
 "abbreviated" = { hi = 1.0 }
 "wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "repurposed" = { hi = 2.0 }
-"magic strings" = { hi = 3.0 }
-"asserts" = { rate = 0.15 }
-"public docs" = { rate = 0.34 }
+"magic strings" = { hi = 1.0 }
+"asserts" = { rate = 0.21 }
+"public docs" = { rate = 0.45 }
 
 [ml]
 "cognitive" = { hi = 6.0 }
@@ -206,15 +196,15 @@
 "public docs" = { rate = 0.00 }
 
 [sh]
-"cognitive" = { hi = 42.0 }
-"cyclomatic" = { hi = 35.0 }
+"cognitive" = { hi = 44.0 }
+"cyclomatic" = { hi = 36.0 }
 "depth" = { hi = 4.0 }
 "length" = { hi = 114.0 }
 "expr depth" = { hi = 12.0 }
 "live span" = { hi = 92.0 }
-"magic numbers" = { hi = 4.0 }
+"magic numbers" = { hi = 5.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.55 }
+"comment ratio" = { lo = 0.00, hi = 0.54 }
 "abbreviated" = { hi = 1.0 }
 "wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
@@ -224,17 +214,17 @@
 "public docs" = { rate = 0.25 }
 
 [cpp]
-"cognitive" = { hi = 32.0 }
-"cyclomatic" = { hi = 22.0 }
+"cognitive" = { hi = 30.0 }
+"cyclomatic" = { hi = 21.0 }
 "depth" = { hi = 4.0 }
-"length" = { hi = 117.0 }
+"length" = { hi = 115.0 }
 "params" = { hi = 5.0 }
 "expr depth" = { hi = 14.0 }
 "demeter" = { hi = 1.0 }
 "live span" = { hi = 90.0 }
 "magic numbers" = { hi = 10.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.62 }
+"comment ratio" = { lo = 0.00, hi = 0.64 }
 "casts" = { hi = 4.0 }
 "confusable" = { hi = 2.0 }
 "terse name" = { hi = 16.0 }
@@ -244,3 +234,27 @@
 "magic strings" = { hi = 1.0 }
 "asserts" = { rate = 0.16 }
 "public docs" = { rate = 0.07 }
+
+[cu]
+"cognitive" = { hi = 55.0 }
+"cyclomatic" = { hi = 31.0 }
+"depth" = { hi = 5.0 }
+"length" = { hi = 247.0 }
+"params" = { hi = 15.0 }
+"expr depth" = { hi = 16.0 }
+"demeter" = { hi = 2.0 }
+"live span" = { hi = 196.0 }
+"magic numbers" = { hi = 30.0 }
+"comment ratio" = { lo = 0.08, hi = 0.58 }
+"loose types" = { hi = 2.0 }
+"casts" = { hi = 18.0 }
+"confusable" = { hi = 8.0 }
+"terse name" = { hi = 65.0 }
+"abbreviated" = { hi = 1.0 }
+"wildcard match" = { hi = 1.0 }
+"loop depth" = { hi = 3.0 }
+"repurposed" = { hi = 2.0 }
+"magic strings" = { hi = 2.0 }
+"commented code" = { hi = 1.0 }
+"asserts" = { rate = 0.15 }
+"public docs" = { rate = 0.29 }
