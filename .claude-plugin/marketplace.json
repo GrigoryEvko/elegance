@@ -1,0 +1,20 @@
+{
+  "name": "elegance",
+  "owner": {
+    "name": "Grigory Evko",
+    "email": "evko.grigory@gmail.com"
+  },
+  "metadata": {
+    "description": "Code-quality measurement for twelve languages, pinned to gold-corpus percentiles.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "elegance-nudge",
+      "source": "./plugins/elegance-nudge",
+      "description": "Reports what an edit introduced, in one line, as it happens.",
+      "category": "code-quality",
+      "tags": ["linter", "hooks", "metrics", "review"]
+    }
+  ]
+}

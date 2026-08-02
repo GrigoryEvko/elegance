@@ -1,0 +1,12 @@
+{
+  "name": "elegance-nudge",
+  "version": "0.1.0",
+  "description": "Measures every file Claude edits and reports, in one line, only what that edit introduced. Advisory, deduplicated per session, silent on clean files.",
+  "author": {
+    "name": "Grigory Evko",
+    "email": "evko.grigory@gmail.com"
+  },
+  "homepage": "https://github.com/GrigoryEvko/elegance",
+  "license": "MIT",
+  "keywords": ["code-quality", "hooks", "linter", "metrics"]
+}

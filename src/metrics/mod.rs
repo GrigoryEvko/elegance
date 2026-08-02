@@ -2325,6 +2325,29 @@ mod tests {
             ),
             1
         );
+        // A QUERY IS NOT A COMMAND. `exec` is in the shell list for
+        // Node's child_process and is also how half the world runs SQL,
+        // so `db.exec(f"SELECT ...")` was reported as a shelled-out
+        // command as well as a built query — two different accusations
+        // about two different attack surfaces, one of them wrong. Found
+        // by the editor hook firing twice on one line.
+        assert_eq!(
+            shelled(
+                Lang::Python,
+                "a.py",
+                "def lookup(db, t):\n    return db.exec(f\"SELECT * FROM {t}\")\n"
+            ),
+            0,
+            "a SQL verb is not a command; built query still reports the line"
+        );
+        assert_eq!(
+            shelled(
+                Lang::TypeScript,
+                "a.ts",
+                "export function lookup(db: Db, t: string) {\n  return db.exec(`INSERT INTO ${t} VALUES (1)`);\n}\n"
+            ),
+            0
+        );
         // THE REMEDY: an argument list needs no shell, so nothing is
         // re-parsed and there is no interpolation to see.
         assert_eq!(

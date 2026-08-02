@@ -1321,11 +1321,30 @@ impl Extractor<'_> {
                         .iter()
                         .any(|inner| self.is_assembled_string(*inner)))
         });
-        if assembled {
+        if assembled && !self.hands_over_a_query(call) {
             self.facts
                 .shelled_out
                 .push(call.start_position().row as u32 + 1);
         }
+    }
+
+    /// Is the thing being handed over SQL rather than a command? `exec`
+    /// earns its place in the shell list through Node's `child_process`,
+    /// and pays for it everywhere else: `db.exec(...)`, `conn.exec(...)`
+    /// and `cursor.exec(...)` are how half the world runs a query, so
+    /// `db.exec(f"SELECT * FROM {t}")` was reported BOTH as a built
+    /// query, correctly, and as a shelled-out command, which is a
+    /// different accusation about a different attack surface.
+    ///
+    /// A shell command does not begin with a SQL verb. That is the whole
+    /// rule, and it costs nothing real: `sh -c "SELECT ..."` is not a
+    /// thing. The built-query detector still reports the line, so the
+    /// finding is not lost — only the wrong name for it is.
+    fn hands_over_a_query(&self, call: Node) -> bool {
+        call_arguments(call).iter().any(|arg| {
+            arg.utf8_text(self.src)
+                .is_ok_and(|text| starts_a_statement(text.trim_start_matches(['f', 'r', 'b'])))
+        })
     }
 
     /// Is this node a string built from values rather than written?
