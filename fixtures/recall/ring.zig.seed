@@ -31,3 +31,10 @@ fn die() void {
 test "placeholder stays green" {
     try expect(true);
 }
+
+fn relabel(cfg: *Cfg) u32 {
+    var label = shortName(cfg);
+    emit(label);
+    label = fullName(cfg);
+    return label;
+}

@@ -47,9 +47,17 @@ const KINDS: &[(&str, Sem)] = &[
     ("boolean", Sem::BoolLit),
 ];
 
-// The grammar exposes no name field on variable_declaration, so
-// live-span tracking is off for Zig rather than wrong.
-const DEF_SITES: &[(&str, &str)] = &[];
+// The grammar labels nothing on `variable_declaration` — `var x: u32 =
+// 1` is an unfielded identifier followed by a type and a value — so
+// these bind POSITIONALLY, which the empty field name selects. The
+// loop variable lives one level down, inside `|it|`.
+const DEF_SITES: &[(&str, &str)] = &[("variable_declaration", ""), ("payload", "")];
+// The SAME kind, because this grammar spells a fresh binding and a
+// reassignment identically: `x = 3` also parses as a
+// variable_declaration. Nothing in the node distinguishes them, and
+// nothing has to — the repurposing check requires a STRICTLY EARLIER
+// definition of the name, which a fresh binding never has.
+const REASSIGNS: &[(&str, &str)] = &[("variable_declaration", "")];
 const ATTR: (&str, &str) = ("field_expression", "object");
 
 /// `anytype` defers the type to the call site: comptime-checked, but
@@ -61,19 +69,18 @@ pub fn pack() -> Pack {
     let kinds: &[&[(&str, Sem)]] = &[KINDS];
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
+    let reassigns = super::def_table(&ts, REASSIGNS);
     let attr = super::attr_site(&ts, ATTR.0, ATTR.1);
     Pack {
         lang: Lang::Zig,
         ts,
         kind_names: kinds,
         def_site_names: DEF_SITES,
-        // No def sites record a first binding — the same gap that keeps
-        // live spans untracked — so repurposing has nothing to compare.
-        reassign_names: &[],
+        reassign_names: REASSIGNS,
         attr_name: Some(ATTR),
         sems,
         def_sites,
-        reassigns: Box::new([]),
+        reassigns,
         attr,
         scope_sep: ".",
         return_type_field: "type",

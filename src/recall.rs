@@ -205,6 +205,7 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     ("store.go", "repurposed", 1.0),
     ("pool.c", "repurposed", 1.0),
     ("deploy.sh", "repurposed", 1.0),
+    ("ring.zig", "repurposed", 1.0),
 ];
 
 #[test]

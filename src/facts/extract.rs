@@ -1482,7 +1482,7 @@ impl Extractor<'_> {
     /// Binding sites: every identifier inside the bound pattern becomes a
     /// local of the current unit (first definition wins).
     fn record_defs(&mut self, node: Node, field: &str, unit: usize) {
-        let Some(target) = node.child_by_field_name(field) else {
+        let Some(target) = bound_pattern(node, field) else {
             return;
         };
         let row = node.start_position().row as u32 + 1;
@@ -1840,13 +1840,33 @@ fn python_parks(segs: &[&str]) -> bool {
     }
 }
 
+/// The pattern a binding site binds. An EMPTY field name means the
+/// grammar labels nothing and the first named child is the target —
+/// Zig spells `var x: u32 = 1` with an unfielded identifier, which is
+/// why its live spans went untracked for as long as they did.
+fn bound_pattern<'t>(node: Node<'t>, field: &str) -> Option<Node<'t>> {
+    match field.is_empty() {
+        true => node.named_child(0),
+        false => node.child_by_field_name(field),
+    }
+}
+
 /// The single bare identifier a reassignment writes, if that is what
 /// it writes. Go wraps the target in an `expression_list`, so one
 /// layer of single-child wrapper is unwrapped; two targets (a swap, a
 /// multi-assign) or a member/index target (`self.x`, `a[i]`) answer
 /// None — those mutate state THROUGH a name rather than rebinding it.
 fn single_reassign_target<'t>(pack: &Pack, node: Node<'t>, field: &str) -> Option<Node<'t>> {
-    let mut target = node.child_by_field_name(field)?;
+    let mut target = bound_pattern(node, field)?;
+    // A keyword BEFORE the name makes this a declaration, not a write.
+    // Zig spells `var x = 1` and `x = 3` with the same node kind, and
+    // position is what separates them: a fresh binding always states a
+    // keyword first, so its name cannot start where the node starts.
+    // Without this, ghostty's six sibling-scope `const run = ...`
+    // declarations read as five repurposings of the first.
+    if target.start_byte() != node.start_byte() {
+        return None;
+    }
     while pack.table_sem(target) != Sem::Ident && target.named_child_count() == 1 {
         let inner = target.named_child(0)?;
         // Only a wrapper that ADDS NO TOKENS is transparent — Go's

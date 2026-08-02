@@ -139,12 +139,14 @@
 "params" = { hi = 6.0 }
 "expr depth" = { hi = 12.0 }
 "demeter" = { hi = 7.0 }
+"live span" = { hi = 151.0 }
 "magic numbers" = { hi = 2.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
 "comment ratio" = { lo = 0.00, hi = 0.41 }
 "loose types" = { hi = 1.0 }
 "casts" = { hi = 5.0 }
 "confusable" = { hi = 2.0 }
+"terse name" = { hi = 44.0 }
 "abbreviated" = { hi = 1.0 }
 "wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }

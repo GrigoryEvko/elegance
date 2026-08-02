@@ -1793,6 +1793,35 @@ mod tests {
     }
 
     #[test]
+    fn a_declaration_is_not_a_rewrite_however_the_grammar_spells_it() {
+        // Zig spells a declaration and a write with the SAME node kind,
+        // so POSITION decides: a fresh binding states `var` or `const`
+        // first, and its name therefore cannot start where the node
+        // starts. Six sibling-scope `const run = ...` declarations in
+        // ghostty read as five repurposings until this landed.
+        assert_eq!(
+            repurposed(
+                Lang::Zig,
+                "a.zig",
+                "fn f(b: *Build) void {\n    {\n        const run = b.addRun();\n        run.step();\n    }\n    {\n        const run = b.addRun();\n        run.step();\n    }\n}\n"
+            ),
+            0,
+            "sibling-scope declarations are new bindings, not rewrites"
+        );
+        // And the rule stays narrow: a bare write in the same grammar,
+        // same kind, still fires.
+        assert_eq!(
+            repurposed(
+                Lang::Zig,
+                "a.zig",
+                "fn f() void {\n    var label = short();\n    emit(label);\n    label = full();\n}\n"
+            ),
+            1,
+            "the bare write still fires"
+        );
+    }
+
+    #[test]
     fn repurposing_fires_on_a_straight_line_second_meaning() {
         // The finding: the same name, a second meaning, in a straight
         // line — every earlier read the reader remembers is now wrong.

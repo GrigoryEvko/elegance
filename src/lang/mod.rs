@@ -1281,11 +1281,6 @@ let classify items limit =
         (Lang::OCaml, "conditional hook", "no call-order identity"),
         (Lang::Shell, "conditional hook", "no call-order identity"),
         (
-            Lang::Zig,
-            "repurposed",
-            "no def sites record a first binding — the gap that keeps live spans untracked",
-        ),
-        (
             Lang::OCaml,
             "repurposed",
             "a let is a fresh binding and `:=` writes through a ref, never rebinding the name",
