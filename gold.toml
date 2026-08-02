@@ -419,6 +419,45 @@ sha = "8aa942972859644a7e3f74ba288fa5c660b68637"
 prune = "third-party test"
 
 
+# --- cu: DELIBERATELY EMPTY. The CUDA pack ships on compiled defaults,
+# and every one of its budgets reports budget_source "default" so a
+# reader can see it. This is a refusal with a measurement behind it, not
+# an omission.
+#
+# The sample counts were never the problem: cutlass, flash-attention,
+# transformer-engine, llm.c and cuda-samples give 9,000+ CUDA units,
+# far past the 200 a percentile needs, and the derived numbers are
+# genuinely different from C++ — params p99 14 against 5, magic numbers
+# 30 against 10, length 208 against 117. A kernel really does take
+# fourteen arguments and really is full of tile sizes, so CUDA earns its
+# own section on the evidence.
+#
+# What made it unshippable is that a modern CUDA repository is a Python
+# and C++ monorepo with kernels inside. cutlass alone brings 1,115 .cpp
+# files and 596 .py; transformer-engine brings 421 .py. Adding the five
+# moved 46 budgets in OTHER languages:
+#
+#   py   length 80 -> 252, cognitive 22 -> 45, live span 56 -> 196,
+#        params 9 -> 18, untyped params 4 -> 12
+#   cpp  params 5 -> 115, confusable 2 -> 112, length 117 -> 197
+#
+# That is not a corpus addition, it is four languages being overwritten
+# by NVIDIA's build tooling. Pruning cannot fix it either: the .cpp
+# files pushing cpp params to 115 ARE cutlass, and removing a repo's own
+# C++ to protect another section's numbers would be dishonest twice.
+#
+# The real defect is in calibration, not in the corpus: gold.toml
+# DECLARES each repo's language and `elegance calibrate` ignores the
+# declaration, pooling every file by extension across the whole tree.
+# Fixing that is a change to what calibration means for all eleven
+# existing sections — the shell section below depends on the current
+# behaviour on purpose — so it is a task of its own, not a thing to
+# bolt onto a dialect. Until then, defaults with provenance.
+#
+# cccl was also measured and rejected on its own terms: 612 of its
+# 2,021 CUDA files (30%) are unreadable, libcu++'s concept-heavy macros
+# defeating the grammar the way mp-units did.
+
 # --- shell: the language that provisions production, and the thinnest
 # section here. Three repos, deliberately.
 #

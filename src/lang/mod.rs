@@ -34,9 +34,10 @@ pub enum Lang {
     OCaml,
     Shell,
     Cpp,
+    Cuda,
 }
 
-pub const LANGS: [Lang; 11] = [
+pub const LANGS: [Lang; 12] = [
     Lang::Python,
     Lang::Rust,
     Lang::TypeScript,
@@ -48,6 +49,7 @@ pub const LANGS: [Lang; 11] = [
     Lang::OCaml,
     Lang::Shell,
     Lang::Cpp,
+    Lang::Cuda,
 ];
 
 impl Lang {
@@ -69,6 +71,9 @@ impl Lang {
             // `.h` reads as C here; `of_source` is what decides it,
             // because the extension genuinely does not.
             "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some(Lang::Cpp),
+            // CUDA is C++ plus a launch operator, and the pack says so;
+            // the extensions stay separate because the budgets do.
+            "cu" | "cuh" => Some(Lang::Cuda),
             _ => None,
         }
     }
@@ -94,8 +99,14 @@ impl Lang {
     /// `export.h`, `port.h` and `thread_annotations.h` — headers that
     /// hold no C++ at all, so reading them as C is the right answer
     /// rather than a missed one.
+    /// CUDA is decided the same way and for the same reason: a launch is
+    /// not valid C++, so a `.h` full of `__global__` is handed to the C++
+    /// grammar and dies on the first `<<<`. flash-attention keeps its
+    /// launch templates in `flash_fwd_launch_template.h` and cutlass
+    /// keeps 76 headers that way.
     pub fn of_source(path: &Path, source: &str) -> Option<Lang> {
         match Lang::from_path(path)? {
+            Lang::C | Lang::Cpp if looks_like_cuda(source) => Some(Lang::Cuda),
             Lang::C if path.extension()? == "h" && looks_like_cpp(source) => Some(Lang::Cpp),
             lang => Some(lang),
         }
@@ -106,9 +117,11 @@ impl Lang {
     /// that a C++ header cannot land in the `[c]` calibration section.
     pub fn of(path: &Path) -> Option<Lang> {
         match Lang::from_path(path)? {
-            Lang::C if path.extension()? == "h" => match std::fs::read_to_string(path) {
+            // Every C-family extension is now readable: `.h` may be any
+            // of the three, and `.cpp`/`.hpp` may be CUDA.
+            lang @ (Lang::C | Lang::Cpp) => match std::fs::read_to_string(path) {
                 Ok(source) => Lang::of_source(path, &source),
-                Err(_) => Some(Lang::C),
+                Err(_) => Some(lang),
             },
             lang => Some(lang),
         }
@@ -127,6 +140,7 @@ impl Lang {
             Lang::OCaml => "ml",
             Lang::Shell => "sh",
             Lang::Cpp => "cpp",
+            Lang::Cuda => "cu",
         }
     }
 
@@ -143,7 +157,8 @@ impl Lang {
             Lang::C => c::pack(),
             Lang::OCaml => ocaml::pack(),
             Lang::Shell => shell::pack(),
-            Lang::Cpp => cpp::pack(),
+            Lang::Cpp => cpp::pack(cpp::Dialect::Cpp),
+            Lang::Cuda => cpp::pack(cpp::Dialect::Cuda),
         })
     }
 }
@@ -556,6 +571,29 @@ fn expectish(name: &str) -> bool {
         || name
             .strip_prefix(PAT)
             .is_some_and(|rest| rest.starts_with(char::is_uppercase))
+}
+
+/// The execution-space qualifiers, which are CUDA and are nothing else.
+/// Judged at token boundaries rather than as substrings, so a name like
+/// `my__device__id` cannot vote. Validated the same way the C++ rule
+/// was: 0 of 4,588 headers across the C and C++ gold corpora match, and
+/// 15 of flash-attention's and 76 of cutlass's do.
+fn looks_like_cuda(source: &str) -> bool {
+    const MARKERS: [&str; 5] = [
+        "__global__",
+        "__device__",
+        "__shared__",
+        "__constant__",
+        "__host__",
+    ];
+    source
+        .split(|c: char| !identifierish(c))
+        .any(|token| MARKERS.contains(&token))
+}
+
+/// A character an identifier may contain, so its absence ends a token.
+fn identifierish(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
 /// Four spellings that are not C, judged at the START of a line so a
@@ -1577,10 +1615,14 @@ let classify items limit =
         // fire. Both at once means the table is stale; neither means a
         // detector may be dying in silence right now.
         for lang in super::LANGS {
-            // The TSX pack is the TS pack under a JSX-aware grammar;
-            // its parity follows TypeScript's evidence.
+            // The TSX pack is the TS pack under a JSX-aware grammar
+            // and the CUDA pack is the C++ pack under a launch-aware
+            // one; each follows the evidence of the pack it IS. A
+            // dialect that needed its own row would be a dialect with
+            // its own hooks, which is the moment it stops being one.
             let evidence = match lang {
                 Lang::Tsx => Lang::TypeScript,
+                Lang::Cuda => Lang::Cpp,
                 l => l,
             };
             for metric in DETECTORS {
@@ -1676,7 +1718,7 @@ let classify items limit =
             .collect();
         assert_eq!(
             pinned.join(", "),
-            "py 15, rs 15, ts 14, tsx 14, go 15, js 15, zig 14, c 15, ml 14, sh 15, cpp 14"
+            "py 15, rs 15, ts 14, tsx 14, go 15, js 15, zig 14, c 15, ml 14, sh 15, cpp 14, cu 15"
         );
     }
 

@@ -1176,6 +1176,18 @@ mod tests {
         // A `rate` entry records coverage, not a budget, and must not
         // read as one.
         assert!(!is_pinned(Lang::Rust, PUBLIC_DOCS));
+        // CUDA ships on defaults DELIBERATELY: the units exist (9,000+)
+        // but the repositories holding them are Python and C++ monorepos
+        // that rewrote 46 budgets in other languages, so gold.toml
+        // refuses them and states why. If a corpus ever lands, this
+        // fails — which is the point. The README and gold.toml both
+        // claim these numbers are unpinned and must be corrected first.
+        for m in [COGNITIVE, LENGTH, PARAMS, MAGIC_NUMBERS] {
+            assert!(
+                !is_pinned(Lang::Cuda, m),
+                "CUDA gained a pinned budget: update the README and gold.toml, which both say it has none"
+            );
+        }
     }
 
     #[test]

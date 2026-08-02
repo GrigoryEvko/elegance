@@ -196,7 +196,7 @@ impl Index {
             // C++ includes resolve exactly as C's do: a quoted path is
             // relative to the including file, an angled one is a
             // system header and definitionally external.
-            Lang::C | Lang::Cpp => self.c(from, target),
+            Lang::C | Lang::Cpp | Lang::Cuda => self.c(from, target),
             // A sourced path is relative to the script — or assembled
             // at run time from a variable, which resolves to nothing
             // and lands in the honesty bucket where it belongs.

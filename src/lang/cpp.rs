@@ -25,11 +25,24 @@
 //! `TEST_CASE("a pool takes a slot")` puts a STRING where a parameter
 //! belongs and parses as an error, so Catch2 files declare no tests
 //! here at all. That is a stated limit, not a silent one.
+//!
+//! CUDA rides this pack the way TSX rides TypeScript: a second grammar,
+//! the same tables, one extra entry. That is not a shortcut, it is the
+//! measurement — `__global__` and `__device__` are unnamed tokens the
+//! tree never shows, `__shared__` arrives as an ordinary
+//! `type_qualifier`, and `add<<<grid, block>>>(x)` is already a
+//! `call_expression` with one extra child. CUDA adds exactly two named
+//! kinds to C++ and a kernel is an ordinary unit.
 
 use tree_sitter::Node;
 
 use super::{CatchSin, Lang, Pack, ParamInfo, field_text_is, sem_table};
 use crate::sem::Sem;
+
+pub enum Dialect {
+    Cpp,
+    Cuda,
+}
 
 const KINDS: &[(&str, Sem)] = &[
     ("function_definition", Sem::FnDef),
@@ -94,15 +107,35 @@ const ATTR: (&str, &str) = ("field_expression", "argument");
 /// the compiler knows the type exactly.
 const LOOSE: &[&str] = &["void"];
 
-pub fn pack() -> Pack {
-    let ts: tree_sitter::Language = tree_sitter_cpp::LANGUAGE.into();
-    let kinds: &[&[(&str, Sem)]] = &[KINDS];
+/// `add<<<grid, block>>>(x)` parses as a `call_expression` carrying an
+/// extra `kernel_call_syntax` child that holds the launch geometry. The
+/// call is ALREADY counted by the shared table, so mapping this to
+/// `Sem::Call` would price one launch as two calls. It is named here
+/// rather than left out so that a grammar bump which renames or drops
+/// it fails the resolution test instead of silently changing nothing.
+///
+/// `launch_bounds` is `__launch_bounds__(256, 4)` — a compiler hint on
+/// a declaration, which is configuration and not control flow.
+const CUDA_ONLY: &[(&str, Sem)] = &[
+    ("kernel_call_syntax", Sem::None),
+    ("launch_bounds", Sem::None),
+];
+
+pub fn pack(dialect: Dialect) -> Pack {
+    let (lang, ts): (Lang, tree_sitter::Language) = match dialect {
+        Dialect::Cpp => (Lang::Cpp, tree_sitter_cpp::LANGUAGE.into()),
+        Dialect::Cuda => (Lang::Cuda, tree_sitter_cuda::LANGUAGE.into()),
+    };
+    let kinds: &[&[(&str, Sem)]] = match lang {
+        Lang::Cuda => &[KINDS, CUDA_ONLY],
+        _ => &[KINDS],
+    };
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
     let reassigns = super::def_table(&ts, REASSIGNS);
     let attr = super::attr_site(&ts, ATTR.0, ATTR.1);
     Pack {
-        lang: Lang::Cpp,
+        lang,
         ts,
         kind_names: kinds,
         def_site_names: DEF_SITES,
@@ -550,11 +583,50 @@ fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
 mod tests {
     use crate::facts::extract;
     use crate::lang::Lang;
+    use crate::sem::Sem;
     use std::path::Path;
 
     fn facts(src: &str) -> crate::facts::FileFacts {
         let pack = Lang::Cpp.pack();
         extract(pack, &mut pack.make_parser(), Path::new("t.cpp"), src)
+    }
+
+    fn cuda(src: &str) -> crate::facts::FileFacts {
+        let pack = Lang::Cuda.pack();
+        extract(pack, &mut pack.make_parser(), Path::new("k.cu"), src)
+    }
+
+    #[test]
+    fn a_kernel_launch_is_one_call_and_a_kernel_is_an_ordinary_unit() {
+        // `f<<<g, b>>>(x)` is a call_expression that carries an extra
+        // `kernel_call_syntax` child. Pricing that child as a call too
+        // would read every launch in a CUDA codebase as two.
+        let f = cuda(
+            "__global__ void add(float* a, int n) {\n\
+             \x20 int i = blockIdx.x * blockDim.x + threadIdx.x;\n\
+             \x20 if (i < n) a[i] += 1.0f;\n\
+             }\n\n\
+             void host(float* d_a, int n) {\n\
+             \x20 add<<<grid, block>>>(d_a, n);\n\
+             }\n",
+        );
+        assert!(!f.low_confidence(), "the CUDA grammar must read CUDA");
+        let names: Vec<&str> = f.units[1..].iter().map(|u| &*u.name).collect();
+        assert_eq!(names, ["add", "host"], "a kernel is an ordinary unit");
+        let add = f.units.iter().find(|u| &*u.name == "add").expect("add");
+        assert_eq!(add.params.len(), 2, "__global__ hides no parameters");
+        assert_eq!(
+            add.ctrl.iter().filter(|c| c.sem == Sem::If).count(),
+            1,
+            "a kernel's guard is an ordinary branch"
+        );
+        // And the same source is unreadable to the plain C++ grammar,
+        // which is the whole reason the dialect exists.
+        assert!(
+            facts("void host(float* a, int n) {\n  add<<<grid, block>>>(a, n);\n}\n")
+                .low_confidence(),
+            "if C++ could read a launch there would be nothing to add"
+        );
     }
 
     #[test]

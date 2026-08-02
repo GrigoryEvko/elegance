@@ -364,7 +364,8 @@ written in every supported language must produce identical metrics.
 
 ## Languages
 
-Python, Rust, TypeScript, TSX, Go, JavaScript, Zig, C, OCaml, shell, C++.
+Python, Rust, TypeScript, TSX, Go, JavaScript, Zig, C, OCaml, shell, C++,
+CUDA.
 
 `.vue` and `.svelte` single-file components are read as what they
 contain. A component is a container, not a language: its `<script>`
@@ -440,8 +441,29 @@ which is how the bug announced itself. Catch2 is the stated limit:
 `TEST_CASE("a pool takes a slot")` puts a string where a parameter
 belongs and does not parse, so Catch2 files declare no tests at all.
 
-**`.h` is decided by its text, and it is the only extension that is.**
-Reading every `.h` as C dropped a third of every C++ repository as
+CUDA rides the C++ pack the way TSX rides TypeScript, and the size of
+that claim is the finding: `__global__` and `__device__` are unnamed
+tokens the tree never shows, `__shared__` arrives as an ordinary
+`type_qualifier`, and `add<<<grid, block>>>(x)` is already a
+`call_expression` with one extra child. CUDA adds exactly two named
+kinds to C++ — a whole language dialect for one table entry, which is
+what the hourglass was built to buy.
+
+Its budgets are the compiled defaults and say so: every `[cu]` number
+reports `budget_source: default`. That is a refusal with a measurement
+behind it. CUDA clears the sample floor easily (9,000+ units) and
+genuinely differs from C++ — params p99 14 against 5, magic numbers 30
+against 10 — but a modern CUDA repository is a Python and C++ monorepo
+with kernels inside, and adding five of them moved 46 budgets in other
+languages: Python's length 80 to 252, C++'s params 5 to 115. The defect
+is that calibration pools by extension across the whole corpus and
+ignores the language each repo is declared for; that is a change to
+what calibration means for eleven existing sections, so it is its own
+task. gold.toml carries the numbers.
+
+**The C family is the one place where an extension does not settle the
+language, so the text does.** Reading every `.h` as C dropped a third of
+every C++ repository as
 unparseable — leveldb lost 47 of 56 headers, re2 20 of 23, fmt 23 of 25
 — because headers are where C++ keeps its classes. Reading every `.h` as
 C++ parses at least as well on C too (musl 14% against 15%, redis 3%
