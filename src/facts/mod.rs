@@ -80,6 +80,20 @@ pub struct FileFacts {
     /// Public-before-private ordering: (public-first pairs, total
     /// public/private pairs) — entry points first, details after.
     pub pub_order: (u32, u32),
+    /// Declared method bundles (Go `interface`, Rust `trait`, TS
+    /// `interface`) and how many methods each one demands. The bigger
+    /// the interface, the weaker the abstraction — an implementer owes
+    /// every method whether or not a caller ever wanted them together.
+    pub interfaces: Vec<InterfaceFact>,
+}
+
+/// One declared interface: what it is called, where, and how many
+/// methods it requires. Data fields and embedded interfaces are not
+/// methods — a props shape is a record, and embedding is composition.
+pub struct InterfaceFact {
+    pub name: Box<str>,
+    pub line: u32,
+    pub methods: u16,
 }
 
 #[derive(Clone)]

@@ -107,6 +107,10 @@ pub fn pack() -> Pack {
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
         return_arity,
+        // An interface here is a convention — Protocol and ABC are
+        // imports, not syntax — and a class body full of defs cannot
+        // tell a contract from an implementation.
+        interfaces: |_, _| Vec::new(),
         magic_exempt: &[
             "default_parameter",
             "typed_default_parameter",

@@ -132,6 +132,9 @@ pub fn pack() -> Pack {
         // Multiple values come back as a named struct — the remedy the
         // metric would recommend, already applied by the language.
         return_arity: |_, _| 0,
+        // An interface is a comptime convention (a struct of function
+        // pointers, an anytype constraint) with no declared form.
+        interfaces: |_, _| Vec::new(),
         magic_exempt: &[
             "variable_declaration",
             "switch_case",

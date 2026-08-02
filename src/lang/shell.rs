@@ -128,6 +128,8 @@ pub fn pack() -> Pack {
         // A function returns an exit status; values leave through
         // streams and globals, neither of which has a width.
         return_arity: |_, _| 0,
+        // No types, so no interfaces.
+        interfaces: |_, _| Vec::new(),
         magic_exempt: &[
             // `>&2` — a file descriptor is not an unnamed constant.
             "file_redirect",

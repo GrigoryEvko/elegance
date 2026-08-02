@@ -143,6 +143,9 @@ pub fn pack() -> Pack {
         // One return value by construction; the rest leave through
         // out-parameters, which `params` already prices.
         return_arity: |_, _| 0,
+        // A vtable is a struct-of-function-pointers idiom, not a
+        // declaration the grammar can point at.
+        interfaces: |_, _| Vec::new(),
         magic_exempt: &[
             // Enum values and #defines ARE the named constants.
             "enumerator",

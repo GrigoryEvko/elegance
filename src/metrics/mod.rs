@@ -202,6 +202,7 @@ pub const LOOP_DEPTH: usize = 42;
 pub const ALLOC_IN_LOOP: usize = 43;
 pub const CONDITIONAL_HOOK: usize = 44;
 pub const RETURN_ARITY: usize = 45;
+pub const INTERFACE_WIDTH: usize = 46;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -464,6 +465,14 @@ pub const METRICS: &[MetricDef] = &[
     // annotates at all, and a declared `[value, setter]` pair is
     // legitimate style. One rung must fit the least-certain language.
     MetricDef { name: "returns",       rung: 3, lo: None,       hi: Some(3.0),  fmt: Fmt::Int, calib: Calib::P99 },
+    // The bigger the interface, the weaker the abstraction — Go's own
+    // proverb, and the Interface Segregation Principle in one number.
+    // An implementer owes every method whether or not any caller
+    // wanted them together, so width is a tax on every implementation
+    // that will ever exist. Methods only: a TS props shape is a
+    // record, and an embedded interface is composition — the cure for
+    // width, never billed as the disease.
+    MetricDef { name: "interface width", rung: 3, lo: None, hi: Some(12.0), fmt: Fmt::Int, calib: Calib::P99 },
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -729,6 +738,9 @@ fn file_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
             f(SPOOKY, facts.spooky_lines.len() as f32, first_spooky, "");
         }
     }
+    for i in &facts.interfaces {
+        f(INTERFACE_WIDTH, i.methods as f32, i.line, &i.name);
+    }
 }
 
 /// What a unit's NAME promises and whether the unit keeps it: honest
@@ -918,10 +930,11 @@ mod tests {
             (ALLOC_IN_LOOP, "alloc in loop"),
             (CONDITIONAL_HOOK, "conditional hook"),
             (RETURN_ARITY, "returns"),
+            (INTERFACE_WIDTH, "interface width"),
         ] {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
-        assert_eq!(N, 46);
+        assert_eq!(N, 47);
     }
 
     #[test]
@@ -1655,6 +1668,51 @@ mod tests {
         f.units.iter().map(|u| u.return_arity).max().unwrap_or(0)
     }
 
+    fn widths(lang: Lang, path: &str, src: &str) -> Vec<(String, u16)> {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        let f = extract(pack, &mut parser, Path::new(path), src);
+        f.interfaces
+            .iter()
+            .map(|i| (i.name.to_string(), i.methods))
+            .collect()
+    }
+
+    #[test]
+    fn interface_width_counts_methods_not_data_fields_or_embeds() {
+        // Go: two interfaces in one grouped declaration, each its own
+        // finding; the embedded io.Reader is composition and costs 0.
+        assert_eq!(
+            widths(
+                Lang::Go,
+                "a.go",
+                "type (\n\tStore interface {\n\t\tGet(k string) ([]byte, error)\n\t\tPut(k string, v []byte) error\n\t\tio.Reader\n\t}\n\tCloser interface {\n\t\tClose() error\n\t}\n)\n"
+            ),
+            [("Store".to_string(), 2), ("Closer".to_string(), 1)]
+        );
+        // Rust: defaulted methods still bind implementers; associated
+        // types and consts are not methods.
+        assert_eq!(
+            widths(
+                Lang::Rust,
+                "a.rs",
+                "trait T {\n    fn a(&self);\n    fn b(&self) {}\n    type Item;\n    const N: u8;\n}\n"
+            ),
+            [("T".to_string(), 2)]
+        );
+        // TS: a props shape full of data fields — even function-typed
+        // ones — is a record, not a contract, and reads width 0.
+        assert_eq!(
+            widths(
+                Lang::TypeScript,
+                "a.ts",
+                "interface Props {\n  title: string;\n  count: number;\n  onClick: (e: Event) => void;\n  render(): void;\n}\n"
+            ),
+            [("Props".to_string(), 1)],
+            "one method signature; three data fields cost nothing"
+        );
+    }
+
     #[test]
     fn return_arity_prices_the_declared_width_not_the_error_idiom() {
         // The idiom every Go signature carries: two values, one of them
@@ -1973,6 +2031,10 @@ mod tests {
         (
             "returns",
             "return_arity_prices_the_declared_width_not_the_error_idiom",
+        ),
+        (
+            "interface width",
+            "interface_width_counts_methods_not_data_fields_or_embeds",
         ),
     ];
 

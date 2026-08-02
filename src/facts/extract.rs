@@ -73,6 +73,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         mentioned: Vec::new(),
         step_refs: (0, 0),
         pub_order: (0, 0),
+        interfaces: Vec::new(),
     };
     let Some(tree) = parser.parse(source, None) else {
         facts.parse_errors = 1;
@@ -435,7 +436,10 @@ impl Extractor<'_> {
                 self.facts.units[ctx.unit].magic_numbers += 1;
             }
             Sem::Import => self.record_imports(node),
-            Sem::TypeDef => self.record_type_export(node),
+            Sem::TypeDef => {
+                self.record_type_export(node);
+                self.record_interfaces(node);
+            }
             Sem::Ident => self.record_ident(node, ctx.unit),
             Sem::Match => self.record_switch_sig(node, ctx.unit),
             Sem::Cast => self.facts.units[ctx.unit].casts += 1,
@@ -635,6 +639,13 @@ impl Extractor<'_> {
                 names: edge.names,
             });
         }
+    }
+
+    /// Declared method bundles under a TypeDef — the pack answers for
+    /// the languages whose interfaces are declarations at all.
+    fn record_interfaces(&mut self, node: Node) {
+        let found = (self.pack.interfaces)(node, self.src);
+        self.facts.interfaces.extend(found);
     }
 
     fn record_type_export(&mut self, node: Node) {

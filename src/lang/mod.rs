@@ -266,6 +266,12 @@ pub struct Pack {
     /// an OCaml tuple, a Zig struct) answer 0 — there is nothing to
     /// destructure that a name would not fix.
     pub return_arity: fn(Node, &[u8]) -> u16,
+    /// Declared method bundles under this TypeDef node — a Go
+    /// `interface`, a Rust `trait`, a TS `interface` — each with how
+    /// many methods it demands. A Vec because one Go `type (...)`
+    /// block declares several. Languages whose interfaces are
+    /// conventions rather than declarations answer nothing.
+    pub interfaces: fn(Node, &[u8]) -> Vec<crate::facts::InterfaceFact>,
     /// Ancestor kinds that legitimize a numeric literal: const items,
     /// parameter defaults, indexing, types, patterns.
     pub magic_exempt: &'static [&'static str],

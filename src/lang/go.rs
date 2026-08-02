@@ -134,6 +134,7 @@ pub fn pack() -> Pack {
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
         return_arity,
+        interfaces,
         magic_exempt: &[
             "const_declaration",
             "var_declaration",
@@ -145,6 +146,43 @@ pub fn pack() -> Pack {
         // Both spellings: `password := "..."` and `var password = "..."`.
         assign_kinds: &["short_var_declaration", "var_spec"],
     }
+}
+
+/// Every `interface` under one `type` declaration — a grouped
+/// `type (...)` block declares several. Width counts `method_elem`
+/// only: an embedded interface (`io.Reader`) is composition, the cure
+/// for width, and must not be billed as the disease.
+fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
+    let mut out = Vec::new();
+    let mut cursor = node.walk();
+    for spec in node.named_children(&mut cursor) {
+        if spec.kind() != "type_spec" {
+            continue;
+        }
+        let Some(body) = spec
+            .child_by_field_name("type")
+            .filter(|t| t.kind() == "interface_type")
+        else {
+            continue;
+        };
+        let Some(name) = spec
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(src).ok())
+        else {
+            continue;
+        };
+        let mut c = body.walk();
+        let methods = body
+            .named_children(&mut c)
+            .filter(|m| m.kind() == "method_elem" || m.kind() == "method_spec")
+            .count() as u16;
+        out.push(crate::facts::InterfaceFact {
+            name: name.into(),
+            line: spec.start_position().row as u32 + 1,
+            methods,
+        });
+    }
+    out
 }
 
 /// A result list's width: `(int, error)` is 2 and so is `(a, b int)` —

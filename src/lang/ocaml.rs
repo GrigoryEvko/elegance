@@ -99,6 +99,10 @@ pub fn pack() -> Pack {
         // result is just the tail expression — there is no declared
         // return position to read a width from.
         return_arity: |_, _| 0,
+        // The interface unit is the module signature, whose width is
+        // the module's surface — already measured, not a type's
+        // method contract.
+        interfaces: |_, _| Vec::new(),
         magic_exempt: &["type_definition"],
         assign_kinds: &[],
     }

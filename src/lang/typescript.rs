@@ -128,6 +128,7 @@ pub fn pack(dialect: Dialect) -> Pack {
         asserty,
         is_hook,
         return_arity,
+        interfaces,
         magic_exempt: &[
             "subscript_expression",
             "type_annotation",
@@ -139,6 +140,34 @@ pub fn pack(dialect: Dialect) -> Pack {
         ],
         assign_kinds: &["variable_declarator"],
     }
+}
+
+/// An interface's width is its `method_signature` count. Property
+/// signatures do not count even when function-typed: a TS interface
+/// doubles as the language's record type, and billing a 20-field props
+/// shape as a 20-method contract would flag every component's props.
+/// Extends-clauses are composition and stay free, as in Go.
+pub(super) fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
+    if node.kind() != "interface_declaration" {
+        return Vec::new();
+    }
+    let (Some(name), Some(body)) = (
+        node.child_by_field_name("name")
+            .and_then(|n| n.utf8_text(src).ok()),
+        node.child_by_field_name("body"),
+    ) else {
+        return Vec::new();
+    };
+    let mut cursor = body.walk();
+    let methods = body
+        .named_children(&mut cursor)
+        .filter(|m| m.kind() == "method_signature")
+        .count() as u16;
+    vec![crate::facts::InterfaceFact {
+        name: name.into(),
+        line: node.start_position().row as u32 + 1,
+        methods,
+    }]
 }
 
 /// A declared tuple return (`): [A, B, C]`) is the one place this

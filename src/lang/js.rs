@@ -106,6 +106,8 @@ pub fn pack() -> Pack {
         // No type syntax: `return [a, b]` is one value, and the tuple
         // intent a TS annotation would state does not exist here.
         return_arity: |_, _| 0,
+        // No interface declarations at all.
+        interfaces: |_, _| Vec::new(),
         magic_exempt: &[
             "subscript_expression",
             "decorator",

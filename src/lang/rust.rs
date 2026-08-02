@@ -101,6 +101,7 @@ pub fn pack() -> Pack {
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
         return_arity,
+        interfaces,
         magic_exempt: &[
             "const_item",
             "static_item",
@@ -116,6 +117,32 @@ pub fn pack() -> Pack {
         // let_declaration lacks, so that check is untouched.)
         assign_kinds: &["let_declaration"],
     }
+}
+
+/// A trait's width is its method count — signatures and defaulted
+/// bodies alike, since an implementer answers to both. Associated
+/// types and consts are not methods and do not count.
+fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
+    if node.kind() != "trait_item" {
+        return Vec::new();
+    }
+    let (Some(name), Some(body)) = (
+        node.child_by_field_name("name")
+            .and_then(|n| n.utf8_text(src).ok()),
+        node.child_by_field_name("body"),
+    ) else {
+        return Vec::new();
+    };
+    let mut cursor = body.walk();
+    let methods = body
+        .named_children(&mut cursor)
+        .filter(|m| matches!(m.kind(), "function_signature_item" | "function_item"))
+        .count() as u16;
+    vec![crate::facts::InterfaceFact {
+        name: name.into(),
+        line: node.start_position().row as u32 + 1,
+        methods,
+    }]
 }
 
 /// Only a declared tuple return widens the result: `-> (A, B, C)` is 3.
