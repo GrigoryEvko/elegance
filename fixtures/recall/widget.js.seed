@@ -49,3 +49,9 @@ export function relabel(row) {
   label = fullName(row);
   return label;
 }
+
+test('retry settles', async () => {
+  trigger();
+  await sleep(250);
+  assert(settled());
+});

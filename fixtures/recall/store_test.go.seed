@@ -4,3 +4,11 @@ func TestKind(t *T) {
 	expectOk(true)
 	assertEqual(t, Kind(1), "a")
 }
+
+func TestRetrySettles(t *testing.T) {
+	trigger()
+	time.Sleep(250)
+	if !settled() {
+		t.Fatal("no")
+	}
+}

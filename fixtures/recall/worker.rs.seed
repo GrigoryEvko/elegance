@@ -68,3 +68,10 @@ async fn flush_queue() {}
 async fn shutdown() {
     flush_queue();
 }
+
+#[test]
+fn retry_settles() {
+    trigger();
+    std::thread::sleep(d);
+    assert!(settled());
+}

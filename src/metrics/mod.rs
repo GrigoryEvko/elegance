@@ -206,6 +206,7 @@ pub const INTERFACE_WIDTH: usize = 46;
 pub const REPURPOSED: usize = 47;
 pub const UNAWAITED: usize = 48;
 pub const MAGIC_STRINGS: usize = 49;
+pub const SLEEPY_TEST: usize = 50;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -521,6 +522,12 @@ pub const METRICS: &[MetricDef] = &[
     // clone detection deliberately cannot see it (duplicated DATA is
     // content, not logic), so nothing else in the tool owns this.
     MetricDef { name: "magic strings", rung: 4, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
+    // A test that sleeps waits for a duration instead of a condition,
+    // and the duration is a guess about a machine it will not run on.
+    // Inside a test the async exemption REVERSES: `await
+    // asyncio.sleep(...)` is the right way to yield an executor and
+    // the wrong way to wait for a result, so every flavour counts.
+    MetricDef { name: "sleepy test",   rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -877,6 +884,7 @@ fn names_and_contracts(u: &UnitFacts, cog: u32, f: &mut impl FnMut(usize, f32, u
     // `test` blocks) — test-file helpers are exempt.
     if u.named_test {
         f(TEST_ASSERTS, asserts as f32, u.line, &u.qualname);
+        f(SLEEPY_TEST, u.sleep_calls as f32, u.line, &u.qualname);
         f(
             VACUOUS_ASSERTS,
             u.vacuous_asserts as f32,
@@ -1005,10 +1013,11 @@ mod tests {
             (REPURPOSED, "repurposed"),
             (UNAWAITED, "unawaited coroutine"),
             (MAGIC_STRINGS, "magic strings"),
+            (SLEEPY_TEST, "sleepy test"),
         ] {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
-        assert_eq!(N, 50);
+        assert_eq!(N, 51);
     }
 
     #[test]
@@ -2068,6 +2077,63 @@ mod tests {
         );
     }
 
+    fn sleeps(lang: Lang, path: &str, src: &str) -> u16 {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        let f = extract(pack, &mut parser, Path::new(path), src);
+        f.units
+            .iter()
+            .filter(|u| u.named_test)
+            .map(|u| u.sleep_calls)
+            .sum()
+    }
+
+    #[test]
+    fn a_sleep_is_judged_in_tests_where_every_flavour_is_timing() {
+        // A test that sleeps waits for a duration instead of a
+        // condition, and the duration is a guess about a machine it
+        // will not run on.
+        assert_eq!(
+            sleeps(
+                Lang::Python,
+                "tests/test_a.py",
+                "def test_settles():\n    trigger()\n    time.sleep(0.25)\n    assert settled()\n"
+            ),
+            1
+        );
+        // The reversal: asyncio.sleep is the RIGHT way to yield an
+        // executor, which is why `blocking async` exempts it — and the
+        // WRONG way to wait for a result, which is why this does not.
+        assert_eq!(
+            sleeps(
+                Lang::Python,
+                "tests/test_a.py",
+                "async def test_settles():\n    trigger()\n    await asyncio.sleep(0.25)\n    assert settled()\n"
+            ),
+            1,
+            "every flavour of sleep is timing dependence in a test"
+        );
+        // Production sleeping is another metric's jurisdiction.
+        assert_eq!(
+            sleeps(
+                Lang::Python,
+                "a.py",
+                "def poll_until_ready():\n    while not ready():\n        time.sleep(0.25)\n"
+            ),
+            0
+        );
+        // A helper in a test file declares no test, so it is exempt —
+        // the same line the whole test-quality family draws.
+        assert_eq!(
+            sleeps(
+                Lang::Python,
+                "tests/test_a.py",
+                "def wait_for_port():\n    time.sleep(0.25)\n"
+            ),
+            0
+        );
+    }
+
     fn magic_strings(lang: Lang, path: &str, src: &str) -> usize {
         let pack = lang.pack();
         let mut parser = pack.make_parser();
@@ -2680,6 +2746,10 @@ mod tests {
         (
             "magic strings",
             "a_repeated_literal_is_only_magic_when_nothing_named_it",
+        ),
+        (
+            "sleepy test",
+            "a_sleep_is_judged_in_tests_where_every_flavour_is_timing",
         ),
     ];
 

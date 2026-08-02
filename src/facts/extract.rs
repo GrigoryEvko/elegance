@@ -323,6 +323,7 @@ impl UnitFacts {
             casts: 0,
             is_async: false,
             blocking_calls: 0,
+            sleep_calls: 0,
             fingerprints: Vec::new(),
             max_loop_depth: 0,
             allocs_in_loop: 0,
@@ -701,6 +702,9 @@ impl Extractor<'_> {
         if unit.is_async && self.parks_the_thread(node) {
             self.facts.units[unit_idx].blocking_calls += 1;
         }
+        if self.is_a_sleep(node) {
+            self.facts.units[unit_idx].sleep_calls += 1;
+        }
         if (self.pack.asserty)(node, self.src) && self.asserts_a_literal(node) {
             self.facts.units[unit_idx].vacuous_asserts += 1;
         }
@@ -723,6 +727,17 @@ impl Extractor<'_> {
         let unit = &mut self.facts.units[ctx.unit];
         unit.conditional_hooks += stray_hook as u16;
         unit.allocs_in_loop += copy_per_iteration as u16;
+    }
+
+    /// A sleep of any flavour, judged by the trailing name alone —
+    /// `time.sleep`, `asyncio.sleep`, `thread::sleep`,
+    /// `tokio::time::sleep`, Go's `time.Sleep`, shell's `sleep`. That
+    /// is deliberately the crude rule `blocking async` had to abandon:
+    /// there the qualifier decides, because a runtime sleep is the
+    /// remedy; here every flavour is the same fact, and only a TEST
+    /// reads it.
+    fn is_a_sleep(&self, call: Node) -> bool {
+        matches!(self.callee_trailing_name(call), Some("sleep" | "Sleep"))
     }
 
     /// Does this call allocate a fresh copy? Only the names that mean

@@ -4,3 +4,9 @@ def test_placeholder():
 
 def test_real_check():
     assert compute() == 4
+
+
+def test_retry_settles():
+    trigger()
+    time.sleep(0.25)
+    assert settled()

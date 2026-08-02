@@ -38,3 +38,9 @@ fn relabel(cfg: *Cfg) u32 {
     label = fullName(cfg);
     return label;
 }
+
+test "retry settles" {
+    trigger();
+    std.time.sleep(250);
+    try expect(settled());
+}

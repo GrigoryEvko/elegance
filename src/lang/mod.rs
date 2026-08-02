@@ -967,6 +967,7 @@ let classify items limit =
         "conditional hook",
         "repurposed",
         "unawaited coroutine",
+        "sleepy test",
     ];
 
     /// Pairs that can NEVER fire, each with its reason. Deliberate
@@ -1142,6 +1143,21 @@ let classify items limit =
             Lang::C,
             "vacuous asserts",
             "no test-declaration form; assert() is a production invariant",
+        ),
+        (
+            Lang::C,
+            "sleepy test",
+            "no test-declaration form; nothing here declares itself a test",
+        ),
+        (
+            Lang::OCaml,
+            "sleepy test",
+            "no test-declaration form; nothing here declares itself a test",
+        ),
+        (
+            Lang::Shell,
+            "sleepy test",
+            "no test-declaration form: `[` is both assertion and control flow",
         ),
         (Lang::C, "test asserts", "no test-declaration form"),
         (

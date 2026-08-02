@@ -116,6 +116,7 @@
 "returns" = { hi = 2.0 }
 "repurposed" = { hi = 1.0 }
 "magic strings" = { hi = 1.0 }
+"sleepy test" = { hi = 1.0 }
 "asserts" = { rate = 0.08 }
 "public docs" = { rate = 0.37 }
 

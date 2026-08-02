@@ -183,6 +183,11 @@ pub struct UnitFacts {
     pub is_async: bool,
     /// Calls that park the thread inside an async unit.
     pub blocking_calls: u16,
+    /// Sleeps of ANY flavour. Inside a test the async exemption
+    /// reverses: `await asyncio.sleep(...)` is the correct way to
+    /// yield an executor and the wrong way to wait for a result, so a
+    /// test that sleeps is timing-dependent whoever schedules it.
+    pub sleep_calls: u16,
     /// Statement-position calls to a SAME-FILE async unit with no await
     /// and the result discarded. In Python the coroutine never runs; in
     /// Rust the future is dropped unpolled; in TS the promise floats
