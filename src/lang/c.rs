@@ -140,6 +140,9 @@ pub fn pack() -> Pack {
         },
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
+        // One return value by construction; the rest leave through
+        // out-parameters, which `params` already prices.
+        return_arity: |_, _| 0,
         magic_exempt: &[
             // Enum values and #defines ARE the named constants.
             "enumerator",

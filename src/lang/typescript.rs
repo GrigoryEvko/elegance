@@ -127,6 +127,7 @@ pub fn pack(dialect: Dialect) -> Pack {
         test_path,
         asserty,
         is_hook,
+        return_arity,
         magic_exempt: &[
             "subscript_expression",
             "type_annotation",
@@ -137,6 +138,20 @@ pub fn pack(dialect: Dialect) -> Pack {
             "optional_parameter",
         ],
         assign_kinds: &["variable_declarator"],
+    }
+}
+
+/// A declared tuple return (`): [A, B, C]`) is the one place this
+/// language states multi-value intent; an array VALUE alone stays a
+/// single value, which is why the JS pack answers 0.
+pub(super) fn return_arity(node: Node, _src: &[u8]) -> u16 {
+    let Some(annotation) = node.child_by_field_name("return_type") else {
+        return 0;
+    };
+    match annotation.named_child(0) {
+        Some(t) if t.kind() == "tuple_type" => t.named_child_count() as u16,
+        Some(_) => 1,
+        None => 0,
     }
 }
 

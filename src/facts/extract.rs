@@ -281,6 +281,7 @@ impl UnitFacts {
             assert_calls: 0,
             vacuous_asserts: 0,
             returns: "".into(),
+            return_arity: 0,
             mut_receiver: false,
             self_recursive: false,
             ctrl: Vec::new(),
@@ -785,6 +786,7 @@ impl Extractor<'_> {
             .map(|t| t.trim_start_matches(':').trim())
             .unwrap_or("")
             .into();
+        unit.return_arity = (self.pack.return_arity)(node, self.src);
         self.facts.units.push(unit);
         self.live.push(LiveMap::new());
         self.envy.push(std::collections::HashMap::new());

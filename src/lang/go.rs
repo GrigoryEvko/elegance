@@ -133,6 +133,7 @@ pub fn pack() -> Pack {
         },
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
+        return_arity,
         magic_exempt: &[
             "const_declaration",
             "var_declaration",
@@ -144,6 +145,31 @@ pub fn pack() -> Pack {
         // Both spellings: `password := "..."` and `var password = "..."`.
         assign_kinds: &["short_var_declaration", "var_spec"],
     }
+}
+
+/// A result list's width: `(int, error)` is 2 and so is `(a, b int)` —
+/// grouped names share one declaration but each is a value the caller
+/// must place. A single bare type is 1.
+fn return_arity(node: Node, _src: &[u8]) -> u16 {
+    let Some(result) = node.child_by_field_name("result") else {
+        return 0;
+    };
+    if result.kind() != "parameter_list" {
+        return 1;
+    }
+    let mut cursor = result.walk();
+    result
+        .named_children(&mut cursor)
+        .filter(|d| d.kind() == "parameter_declaration")
+        .map(|d| {
+            let mut c = d.walk();
+            let names = d
+                .named_children(&mut c)
+                .filter(|n| n.kind() == "identifier")
+                .count() as u16;
+            names.max(1)
+        })
+        .sum()
 }
 
 /// `import ( alias "path/pkg" )` — the binding is the alias or the last

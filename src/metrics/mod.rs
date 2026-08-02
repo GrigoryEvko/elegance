@@ -201,6 +201,7 @@ pub const STRINGLY_ID: usize = 41;
 pub const LOOP_DEPTH: usize = 42;
 pub const ALLOC_IN_LOOP: usize = 43;
 pub const CONDITIONAL_HOOK: usize = 44;
+pub const RETURN_ARITY: usize = 45;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -449,6 +450,20 @@ pub const METRICS: &[MetricDef] = &[
     // percentile to calibrate but a rule the framework itself states,
     // and admired code obeys it — gold reads 0.0%.
     MetricDef { name: "conditional hook", rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
+    // Four values travelling together are a struct in hiding — the
+    // `params` argument pointed at the OTHER end of the signature, and
+    // the remedy is the same Introduce Parameter Object. Only languages
+    // that declare multi-value results play: a JS array or an OCaml
+    // tuple is already one value, and Go's `(value, error)` idiom sets
+    // that language's own budget through calibration (gold p99: go 3,
+    // rs 2, py 2, ts/tsx 1).
+    //
+    // Rung 3, not 2, and the reason is TS: Go and Rust DECLARE every
+    // width, so their budgets price width alone — but a TS tuple
+    // annotation is optional, so its p99 of 1 rides on how often gold
+    // annotates at all, and a declared `[value, setter]` pair is
+    // legitimate style. One rung must fit the least-certain language.
+    MetricDef { name: "returns",       rung: 3, lo: None,       hi: Some(3.0),  fmt: Fmt::Int, calib: Calib::P99 },
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -633,6 +648,7 @@ fn unit_shape(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32, u
             f(LIVE_SPAN, u.max_live_span as f32, u.line, &u.qualname);
             f(PARAMS, u.params.len() as f32, u.line, &u.qualname);
             f(FLAG_PARAMS, u.flag_params() as f32, u.line, &u.qualname);
+            f(RETURN_ARITY, u.return_arity as f32, u.line, &u.qualname);
             // Untyped surface only means something where the language has
             // type syntax at all: JavaScript would read a uniform 100%.
             if facts.lang.pack().types_declared {
@@ -901,10 +917,11 @@ mod tests {
             (LOOP_DEPTH, "loop depth"),
             (ALLOC_IN_LOOP, "alloc in loop"),
             (CONDITIONAL_HOOK, "conditional hook"),
+            (RETURN_ARITY, "returns"),
         ] {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
-        assert_eq!(N, 45);
+        assert_eq!(N, 46);
     }
 
     #[test]
@@ -1631,6 +1648,92 @@ mod tests {
         f.units.iter().map(|u| u.conditional_hooks).sum()
     }
 
+    fn arity(lang: Lang, path: &str, src: &str) -> u16 {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        let f = extract(pack, &mut parser, Path::new(path), src);
+        f.units.iter().map(|u| u.return_arity).max().unwrap_or(0)
+    }
+
+    #[test]
+    fn return_arity_prices_the_declared_width_not_the_error_idiom() {
+        // The idiom every Go signature carries: two values, one of them
+        // the error. Grouped names widen it the same as listed types.
+        assert_eq!(
+            arity(
+                Lang::Go,
+                "a.go",
+                "func f() ([]byte, error) { return nil, nil }\n"
+            ),
+            2
+        );
+        assert_eq!(
+            arity(Lang::Go, "a.go", "func g() (a, b int) { return }\n"),
+            2,
+            "grouped result names are each a value the caller places"
+        );
+        // The finding: a result a caller can only destructure by
+        // position, where a swapped pair type-checks.
+        assert_eq!(
+            arity(
+                Lang::Go,
+                "a.go",
+                "func f() (int, int, string, bool, error) { return 0, 0, \"\", false, nil }\n"
+            ),
+            5
+        );
+        assert_eq!(
+            arity(Lang::Rust, "a.rs", "fn f() -> (u8, u8, u8) { (0, 0, 0) }\n"),
+            3
+        );
+        // A tuple hidden inside Result<> needs type resolution to see;
+        // a miss is cheaper than a guess, so this reads as one value.
+        assert_eq!(
+            arity(
+                Lang::Rust,
+                "a.rs",
+                "fn f() -> Result<(u8, u8, u8, u8), Error> { todo!() }\n"
+            ),
+            1
+        );
+        assert_eq!(
+            arity(
+                Lang::TypeScript,
+                "a.ts",
+                "function f(): [number, string] { return [0, '']; }\n"
+            ),
+            2
+        );
+        // An array VALUE without a tuple type stays one value — JS has
+        // no way to state the intent, so the JS pack answers 0.
+        assert_eq!(
+            arity(
+                Lang::JavaScript,
+                "a.js",
+                "function f() { return [a, b, c, d]; }\n"
+            ),
+            0
+        );
+        assert_eq!(
+            arity(Lang::Python, "a.py", "def f():\n    return a, b, c\n"),
+            3
+        );
+        assert_eq!(
+            arity(
+                Lang::Python,
+                "a.py",
+                "def f():\n    def inner():\n        return a, b, c, d\n    return inner\n"
+            ),
+            4,
+            "the nested def's four-wide return belongs to inner, and inner reads 4"
+        );
+        assert_eq!(
+            arity(Lang::Python, "a.py", "def f():\n    return\n"),
+            0,
+            "a bare return ships nothing"
+        );
+    }
+
     #[test]
     fn a_hook_is_identified_by_call_order_so_a_branch_renumbers_it() {
         // The bug: the first time `ready` flips, every hook after this
@@ -1866,6 +1969,10 @@ mod tests {
         (
             "conditional hook",
             "a_hook_is_identified_by_call_order_so_a_branch_renumbers_it",
+        ),
+        (
+            "returns",
+            "return_arity_prices_the_declared_width_not_the_error_idiom",
         ),
     ];
 

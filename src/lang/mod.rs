@@ -259,6 +259,13 @@ pub struct Pack {
     /// rather than its name. Reached through a branch, it renumbers
     /// every hook after it the first time the condition flips.
     pub is_hook: fn(Node, &[u8]) -> bool,
+    /// How many values this definition makes its callers destructure:
+    /// a Go result list's width, a Rust or TS tuple return type's
+    /// width, the widest tuple a Python `return` ships. Languages
+    /// where a compound result is already a single value (a JS array,
+    /// an OCaml tuple, a Zig struct) answer 0 — there is nothing to
+    /// destructure that a name would not fix.
+    pub return_arity: fn(Node, &[u8]) -> u16,
     /// Ancestor kinds that legitimize a numeric literal: const items,
     /// parameter defaults, indexing, types, patterns.
     pub magic_exempt: &'static [&'static str],
@@ -475,6 +482,7 @@ mod conformance {
     //! are added.
 
     use super::Lang;
+
     use crate::facts::{FileFacts, extract};
     use crate::metrics::complexity;
     use std::path::Path;

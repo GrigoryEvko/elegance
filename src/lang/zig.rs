@@ -129,6 +129,9 @@ pub fn pack() -> Pack {
         },
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
+        // Multiple values come back as a named struct — the remedy the
+        // metric would recommend, already applied by the language.
+        return_arity: |_, _| 0,
         magic_exempt: &[
             "variable_declaration",
             "switch_case",

@@ -125,6 +125,9 @@ pub fn pack() -> Pack {
         asserty: |call, src| command_name(call, src).is_some_and(super::assertish),
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
+        // A function returns an exit status; values leave through
+        // streams and globals, neither of which has a width.
+        return_arity: |_, _| 0,
         magic_exempt: &[
             // `>&2` — a file descriptor is not an unnamed constant.
             "file_redirect",

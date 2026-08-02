@@ -197,6 +197,12 @@ pub struct UnitFacts {
     pub vacuous_asserts: u16,
     /// Declared return type text ("" when absent/untyped).
     pub returns: Box<str>,
+    /// How many values a caller must destructure: a Go result list's
+    /// width, a Rust or TS tuple return type's width, the widest tuple
+    /// a Python `return` ships. Four values travelling together are a
+    /// struct in hiding — the same argument `params` makes, pointed at
+    /// the other end of the signature.
+    pub return_arity: u16,
     /// Receiver taken mutably (`&mut self`) — a getter that mutates lies.
     pub mut_receiver: bool,
     pub self_recursive: bool,

@@ -95,6 +95,10 @@ pub fn pack() -> Pack {
         },
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
+        // A tuple is the language's ordinary single value and the
+        // result is just the tail expression — there is no declared
+        // return position to read a width from.
+        return_arity: |_, _| 0,
         magic_exempt: &["type_definition"],
         assign_kinds: &[],
     }

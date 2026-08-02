@@ -103,6 +103,9 @@ pub fn pack() -> Pack {
         test_path: typescript::test_path,
         asserty: typescript::asserty,
         is_hook: typescript::is_hook,
+        // No type syntax: `return [a, b]` is one value, and the tuple
+        // intent a TS annotation would state does not exist here.
+        return_arity: |_, _| 0,
         magic_exempt: &[
             "subscript_expression",
             "decorator",

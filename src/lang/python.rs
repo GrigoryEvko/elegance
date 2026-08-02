@@ -106,6 +106,7 @@ pub fn pack() -> Pack {
         },
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
+        return_arity,
         magic_exempt: &[
             "default_parameter",
             "typed_default_parameter",
@@ -117,6 +118,35 @@ pub fn pack() -> Pack {
         ],
         assign_kinds: &["assignment"],
     }
+}
+
+/// The widest tuple any `return` in this unit ships — `return a, b, c`
+/// is the language's multi-value idiom, annotation or not. Nested defs
+/// keep their own returns: the walk stops at inner scope-formers.
+fn return_arity(node: Node, _src: &[u8]) -> u16 {
+    let mut widest = 0u16;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.id() != node.id() && matches!(n.kind(), "function_definition" | "lambda") {
+            continue;
+        }
+        if n.kind() == "return_statement" {
+            let width = match n.named_child(0) {
+                Some(v) if matches!(v.kind(), "expression_list" | "tuple") => {
+                    v.named_child_count() as u16
+                }
+                Some(_) => 1,
+                None => 0,
+            };
+            widest = widest.max(width);
+            continue;
+        }
+        let mut cursor = n.walk();
+        for child in n.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    widest
 }
 
 /// `import a.b, c as d` and `from ..pkg import x, y as z` — one edge per

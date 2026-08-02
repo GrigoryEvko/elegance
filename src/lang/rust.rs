@@ -100,6 +100,7 @@ pub fn pack() -> Pack {
         },
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
+        return_arity,
         magic_exempt: &[
             "const_item",
             "static_item",
@@ -114,6 +115,17 @@ pub fn pack() -> Pack {
         // SCREAMING exemption reads left/name fields, which
         // let_declaration lacks, so that check is untouched.)
         assign_kinds: &["let_declaration"],
+    }
+}
+
+/// Only a declared tuple return widens the result: `-> (A, B, C)` is 3.
+/// A tuple inside `Result<(A, B), E>` is out of reach without type
+/// resolution, and a miss is cheaper than a guess.
+fn return_arity(node: Node, _src: &[u8]) -> u16 {
+    match node.child_by_field_name("return_type") {
+        Some(t) if t.kind() == "tuple_type" => t.named_child_count() as u16,
+        Some(_) => 1,
+        None => 0,
     }
 }
 
