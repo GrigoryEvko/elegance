@@ -42,6 +42,10 @@ pub struct FileFacts {
     /// entropy — a secret compiled into the artifact and committed to
     /// history, where rotating it means a release.
     pub secrets: Vec<u32>,
+    /// Rows carrying a debt marker — TODO, FIXME, HACK, XXX — in a
+    /// comment. A marker is a promise with no deadline; only its AGE
+    /// says whether it was a plan or a monument.
+    pub debt_markers: Vec<u32>,
     /// First line of each comment block that PARSES as this language:
     /// code someone commented out instead of deleting, which the
     /// version control system was already remembering for them.

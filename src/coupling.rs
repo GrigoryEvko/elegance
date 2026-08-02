@@ -50,7 +50,76 @@ pub fn run(root: &Path, show: usize) -> Result<i32, Box<dyn Error>> {
     let show = show.max(SHOW);
     print!("{}", render_pairs(&commits, show));
     print!("{}", render_owners(&commits, show));
+    print!("{}", render_debt(root, git::newest(&commits), show));
     Ok(0)
+}
+
+/// A debt marker with the age of the line it sits on.
+struct Debt {
+    path: String,
+    line: u32,
+    days: f64,
+}
+
+/// TODO, FIXME, HACK and XXX, dated by the commit that wrote them. A
+/// marker is a promise with no deadline; only its AGE says whether it
+/// was a plan or a monument. Blame runs only on files that carry one,
+/// so a repository with none pays nothing.
+fn render_debt(root: &Path, now: u64, show: usize) -> String {
+    let cfg = crate::config::Config::load(root).unwrap_or_default();
+    let files = crate::collect_files(std::slice::from_ref(&root.to_path_buf()), &cfg);
+    let mut found: Vec<Debt> = Vec::new();
+    for path in &files {
+        let Ok(source) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Some((lang, text)) = crate::measurable(path, &source) else {
+            continue;
+        };
+        let pack = lang.pack();
+        let facts = crate::facts::extract(pack, &mut pack.make_parser(), path, &text);
+        if facts.debt_markers.is_empty() {
+            continue;
+        }
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        let ages = git::line_ages(root, &rel);
+        found.extend(facts.debt_markers.iter().filter_map(|row| {
+            let at = ages.get(*row as usize - 1)?;
+            Some(Debt {
+                path: rel.clone(),
+                line: *row,
+                days: now.saturating_sub(*at) as f64 / git::DAY,
+            })
+        }));
+    }
+    if found.is_empty() {
+        return String::new();
+    }
+    found.sort_by(|a, b| b.days.total_cmp(&a.days));
+    let median = found[found.len() / 2].days;
+    let mut out = format!(
+        "\ndebt markers — {} TODO/FIXME/HACK/XXX, median age {:.0} days:\n",
+        found.len(),
+        median
+    );
+    for d in found.iter().take(show) {
+        let _ = writeln!(
+            out,
+            "  {:>5.1} years  {}:{}",
+            d.days / 365.0,
+            d.path,
+            d.line
+        );
+    }
+    let _ = writeln!(
+        out,
+        "  A marker states an intention; its age states what became of it."
+    );
+    out
 }
 
 /// Shared commits per unordered cross-directory pair.

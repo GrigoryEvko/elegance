@@ -25,7 +25,7 @@ elegance --sarif [paths...]        # SARIF 2.1.0 for code scanning / PR annotati
 elegance --history record|show     # trend ledger: are we getting better?
 elegance --hotspots                # rank complexity by how often it is edited
 elegance --by                      # roll findings up per directory, worst first
-elegance --coupling                # undeclared co-change and sole authorship
+elegance --coupling                # undeclared co-change, sole authorship, debt age
 elegance --deps                    # look inside the dependencies you did not write
 elegance --helm                    # values-overlay drift and credentials in YAML
 elegance --render                  # render each environment, measure what ships

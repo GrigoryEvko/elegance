@@ -67,6 +67,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         secrets: Vec::new(),
         sql_built: Vec::new(),
         shelled_out: Vec::new(),
+        debt_markers: Vec::new(),
         commented_code: Vec::new(),
         skipped_tests: Vec::new(),
         magic_strings: Vec::new(),
@@ -1782,13 +1783,21 @@ impl Extractor<'_> {
             || leading.starts_with("/**")
             || leading.starts_with("(**")
             || self.pack.doc_markers.iter().any(|m| leading.starts_with(m));
-        if documents {
-            return;
-        }
         let first = node.start_position().row as u32 + 1;
         for (offset, line) in text.lines().enumerate() {
-            self.comment_lines
-                .push((first + offset as u32, strip_comment_marker(line)));
+            let row = first + offset as u32;
+            // A debt marker counts wherever it is written. `/// TODO:
+            // handle the error case` is a promise in public, which is
+            // if anything the more binding kind.
+            if carries_debt(line) {
+                self.facts.debt_markers.push(row);
+            }
+            // The commented-out-code analysis is another matter: a doc
+            // comment is DOCUMENTATION whatever it contains, since an
+            // example in a docstring is the point of the docstring.
+            if !documents {
+                self.comment_lines.push((row, strip_comment_marker(line)));
+            }
         }
     }
 
@@ -2281,17 +2290,42 @@ fn interpolates(node: Node) -> bool {
     })
 }
 
+/// Does this comment line promise work that has not happened? Only
+/// the four conventional markers, and only as WORDS — `todos` in a
+/// sentence and a variable named `fixme_count` are not promises.
+pub fn carries_debt(line: &str) -> bool {
+    const MARKERS: [&str; 4] = ["TODO", "FIXME", "HACK", "XXX"];
+    // The comment's SUBJECT must be the debt. A marker that merely
+    // appears inside a sentence is prose ABOUT markers — this file is
+    // full of it, and the first draft dutifully reported its own
+    // documentation as six years-zero TODOs.
+    let body = strip_comment_marker(line);
+    MARKERS.iter().any(|m| {
+        let Some(rest) = body.strip_prefix(m) else {
+            return false;
+        };
+        // `TODO:`, `TODO(ada):`, `TODO fix the retry`, or bare.
+        match rest.chars().next() {
+            None => true,
+            Some(c) => matches!(c, ':' | '(' | ' ' | '\t' | '-' | '!'),
+        }
+    })
+}
+
 /// A comment line without its marker. Block comments carry a leading
 /// `*` on continuation lines, which is decoration, not content.
 fn strip_comment_marker(line: &str) -> String {
-    line.trim()
-        .trim_start_matches("//")
-        .trim_start_matches("/*")
-        .trim_end_matches("*/")
-        .trim_start_matches('#')
-        .trim_start_matches('*')
-        .trim()
-        .to_string()
+    // Ordered prefixes, longest first — NOT trim_start_matches, which
+    // repeats: on `/// TODO` it strips `//` and leaves a stray slash,
+    // so the body no longer began with the marker.
+    let text = line.trim();
+    let text = ["///", "//!", "//", "/**", "/*", "#!", "#"]
+        .iter()
+        .find_map(|p| text.strip_prefix(p))
+        .unwrap_or(text);
+    // A block comment's continuation lines are decorated with `*`.
+    let text = text.strip_prefix("* ").unwrap_or(text);
+    text.trim_end_matches("*/").trim().to_string()
 }
 
 /// A comment block must be at least this tall before it can be code:
@@ -2749,6 +2783,25 @@ fn mix(h: u64, x: u64) -> u64 {
 mod tests {
     use super::*;
     use crate::lang::Lang;
+
+    #[test]
+    fn a_debt_marker_leads_its_note_rather_than_appearing_in_one() {
+        // The conventional forms, in the comment styles that carry them.
+        assert!(carries_debt("# TODO: retry on timeout"));
+        assert!(carries_debt("    // TODO(ada): retry on timeout"));
+        assert!(carries_debt("// FIXME the retry is wrong"));
+        assert!(carries_debt(" * HACK"));
+        assert!(carries_debt("/// TODO: handle the error case"));
+        // Prose ABOUT markers is not a marker. This repository is full
+        // of it, and the first draft reported its own documentation as
+        // six TODOs aged zero days.
+        assert!(!carries_debt(
+            "/// TODO, FIXME, HACK and XXX, dated by the commit"
+        ));
+        assert!(!carries_debt("// markers — TODO/FIXME/HACK/XXX — in a"));
+        assert!(!carries_debt("// a variable named todo_count is not one"));
+        assert!(!carries_debt("// nothing here promises anything"));
+    }
 
     fn facts(source: &str) -> FileFacts {
         let pack = Lang::Python.pack();

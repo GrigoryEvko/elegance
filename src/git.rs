@@ -59,6 +59,29 @@ pub fn newest(commits: &[Commit]) -> u64 {
     commits.iter().map(|c| c.at).max().unwrap_or(0)
 }
 
+/// When each line of a file was last written, indexed by line number
+/// minus one. Empty when the file is untracked or git is unavailable —
+/// a line whose age cannot be read is left unjudged rather than dated
+/// to now.
+pub fn line_ages(root: &Path, path: &str) -> Vec<u64> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["blame", "--line-porcelain", "--", path])
+        .output();
+    let Ok(out) = out else { return Vec::new() };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    // Porcelain repeats a header block per line; `author-time` is the
+    // only field this needs, and it appears exactly once per line.
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.strip_prefix("author-time "))
+        .filter_map(|t| t.trim().parse().ok())
+        .collect()
+}
+
 /// A shallow clone has one commit, so every file's churn is 1.0 and
 /// every co-change is unobservable. Callers say so rather than present a
 /// flat column as a measurement.
