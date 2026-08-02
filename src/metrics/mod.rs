@@ -496,6 +496,24 @@ pub const METRICS: &[MetricDef] = &[
     // runtimes themselves state (Python warns "coroutine was never
     // awaited" at runtime; the evidence here arrives at read time).
     MetricDef { name: "unawaited coroutine", rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
+    // `pointless async` — an async unit that never awaits — was built,
+    // measured, and REJECTED. Admired code violates it 21.6% of the
+    // time in Python, 17.4% in TypeScript, 18.2% in TSX and 20.5% in
+    // JavaScript: three to four times the suspicion ceiling, in every
+    // language at once, which is the signature of a distributional
+    // fact rather than a defect.
+    //
+    // The samples say why, and every reason is legitimate: `__aiter__`
+    // MUST be async because the async-iterator protocol says so;
+    // `aiter_bytes`/`aiter_text` are async generators, where `yield`
+    // is the point and no await is required; httpx's `aread` exists to
+    // mirror `read` across an API boundary; and test frameworks accept
+    // async bodies uniformly whether or not a given test awaits. The
+    // remainder is interface conformance, which needs types to see.
+    //
+    // Same argument that turned `asserts` and `public docs` into rates
+    // and moved `demeter` off Policy. Do not re-propose without new
+    // evidence — the measurement is cheap to repeat and it said no.
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.

@@ -178,8 +178,6 @@ pub struct UnitFacts {
     pub is_async: bool,
     /// Calls that park the thread inside an async unit.
     pub blocking_calls: u16,
-    /// `await` expressions in this unit.
-    pub awaits: u16,
     /// Statement-position calls to a SAME-FILE async unit with no await
     /// and the result discarded. In Python the coroutine never runs; in
     /// Rust the future is dropped unpolled; in TS the promise floats

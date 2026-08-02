@@ -333,7 +333,6 @@ impl UnitFacts {
             returns: "".into(),
             return_arity: 0,
             repurposed: 0,
-            awaits: 0,
             unawaited: 0,
             mut_receiver: false,
             self_recursive: false,
@@ -476,10 +475,7 @@ impl Extractor<'_> {
                 // branch does.
                 inner.branched = ctx.branched || sem.forks_control();
                 inner.sheltered = ctx.sheltered || sem == Sem::Try;
-                if sem == Sem::Await {
-                    inner.awaited = true;
-                    self.facts.units[ctx.unit].awaits += 1;
-                }
+                inner.awaited = ctx.awaited || sem == Sem::Await;
                 if sem == Sem::Loop {
                     inner.loops = ctx.loops.saturating_add(1);
                     let unit = &mut self.facts.units[ctx.unit];
