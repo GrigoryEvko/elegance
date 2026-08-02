@@ -1,6 +1,6 @@
 {
   "name": "elegance-nudge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Measures every file Claude edits and reports, in one line, only what that edit introduced. Advisory, deduplicated per session, silent on clean files.",
   "author": {
     "name": "Grigory Evko",

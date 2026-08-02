@@ -102,5 +102,14 @@ mkdir -p "$BIN_DIR"
 mv "$TMP/bin" "$BIN"
 chmod 755 "$BIN"
 printf '%s' "$want" > "$STAMP"
+# Ask the binary what it is, and believe it only if it answers the
+# question. Releases before 0.1.1 have no --version, so they scan the
+# working directory instead and reply "no supported source files
+# found" — which would have gone into this message as if it were a
+# version string.
 version=$("$BIN" --version 2>/dev/null | head -1 || true)
+case "$version" in
+    elegance\ *) ;;
+    *) version="" ;;
+esac
 echo "elegance-nudge: installed $asset${version:+ ($version)} in $BIN_DIR, sha256 verified"
