@@ -113,3 +113,7 @@ def rebuild(cfg):
     # cache = load_cache(cfg)
     # cache.warm(cfg.entries)
     return build(cfg)
+
+
+def lookup(db, table, ident):
+    return db.execute(f"SELECT * FROM {table} WHERE id = 1")

@@ -40,3 +40,9 @@ unsigned relabel(struct cfg *cfg) {
 void relocate(struct node *n) {
     move_entry(n, true, false);
 }
+
+void lookup(struct db *d, const char *table) {
+    char q[256];
+    sprintf(q, "SELECT * FROM %s", table);
+    db_exec(d, q);
+}

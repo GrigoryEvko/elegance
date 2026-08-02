@@ -976,6 +976,7 @@ let classify items limit =
         "sleepy test",
         "skipped tests",
         "bool traps",
+        "built query",
     ];
 
     /// Pairs that can NEVER fire, each with its reason. Deliberate
@@ -1267,6 +1268,21 @@ let classify items limit =
             Lang::Shell,
             "bool traps",
             "no boolean literal: every argument is a string",
+        ),
+        (
+            Lang::Zig,
+            "built query",
+            "no SQL in the corpus and no format call this recognizes — allocPrint is the idiom, unmapped",
+        ),
+        (
+            Lang::OCaml,
+            "built query",
+            "the corpus is Base and Dune: no database access to build a statement for",
+        ),
+        (
+            Lang::Shell,
+            "built query",
+            "a heredoc to psql is the idiom, and its body is text this pack never enters",
         ),
         (Lang::Shell, "loose types", "no type syntax to be loose in"),
         (

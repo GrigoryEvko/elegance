@@ -57,6 +57,12 @@ pub struct FileFacts {
     /// cannot see these — duplicated DATA is content, not logic — so
     /// nothing else in the tool owns this smell.
     pub magic_strings: Vec<u32>,
+    /// Lines building an SQL statement by INTERPOLATION — an f-string,
+    /// a template literal, a format call. A literal query is safe
+    /// whatever it says; a query assembled from values is the oldest
+    /// vulnerability there is, and the remedy (a parameter marker) is
+    /// the shape this deliberately stays silent on.
+    pub sql_built: Vec<u32>,
     /// Lines where the text stops predicting the run: eval/exec, computed
     /// attribute access, metaclasses, transmute, mutable defaults.
     pub spooky_lines: Vec<u32>,

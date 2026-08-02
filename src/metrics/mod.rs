@@ -244,6 +244,7 @@ pub const SKIPPED_TESTS: usize = 51;
 pub const BOOL_TRAPS: usize = 52;
 pub const COMMENTED_CODE: usize = 53;
 pub const COHESION: usize = 54;
+pub const SQL_BUILT: usize = 55;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -606,6 +607,17 @@ pub const METRICS: &[MetricDef] = &[
     // are TRUE readings of the same number; only a person can say
     // which one wanted fixing, which is exactly what a suspicion is.
     MetricDef { name: "cohesion",      rung: 4, lo: None, hi: Some(1.0), fmt: Fmt::Int, calib: Calib::P99 },
+    // An SQL statement ASSEMBLED from values rather than written: an
+    // f-string, a template literal, a Sprintf. The oldest
+    // vulnerability there is, and the one whose remedy — a parameter
+    // marker — this deliberately cannot see, because a parameterized
+    // query carries no interpolation at all. A fully literal query is
+    // silent whatever it says.
+    //
+    // Anchored at the START of the string: a log line mentioning
+    // "select" is prose, and only a string that begins as a statement
+    // is one.
+    MetricDef { name: "built query",   rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -879,6 +891,8 @@ fn file_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
             first_suppression,
             "",
         );
+        let first_sql = facts.sql_built.first().copied().unwrap_or(1);
+        f(SQL_BUILT, facts.sql_built.len() as f32, first_sql, "");
         let first_dead = facts.commented_code.first().copied().unwrap_or(1);
         f(
             COMMENTED_CODE,
@@ -1124,10 +1138,11 @@ mod tests {
             (BOOL_TRAPS, "bool traps"),
             (COMMENTED_CODE, "commented code"),
             (COHESION, "cohesion"),
+            (SQL_BUILT, "built query"),
         ] {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
-        assert_eq!(N, 55);
+        assert_eq!(N, 56);
     }
 
     #[test]
@@ -2207,6 +2222,90 @@ mod tests {
         );
     }
 
+    fn built(lang: Lang, path: &str, src: &str) -> usize {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        extract(pack, &mut parser, Path::new(path), src)
+            .sql_built
+            .len()
+    }
+
+    #[test]
+    fn a_parameterized_query_is_the_remedy_and_stays_silent() {
+        // A statement assembled from a value: the oldest vulnerability
+        // there is.
+        assert_eq!(
+            built(
+                Lang::Python,
+                "a.py",
+                "def find(db, table):\n    return db.execute(f\"SELECT * FROM {table} WHERE id = 1\")\n"
+            ),
+            1
+        );
+        assert_eq!(
+            built(
+                Lang::TypeScript,
+                "a.ts",
+                "export function find(db: DB, id: string) {\n  return db.query(`SELECT * FROM users WHERE id = ${id}`);\n}\n"
+            ),
+            1
+        );
+        assert_eq!(
+            built(
+                Lang::Go,
+                "a.go",
+                "func find(db *DB, t string) *Rows {\n\treturn db.Query(fmt.Sprintf(\"SELECT * FROM %s\", t))\n}\n"
+            ),
+            1
+        );
+        // THE REMEDY. A parameterized query carries no interpolation
+        // at all, so the metric cannot see it — which is the point.
+        assert_eq!(
+            built(
+                Lang::Python,
+                "a.py",
+                "def find(db, id):\n    return db.execute(\"SELECT * FROM users WHERE id = %s\", (id,))\n"
+            ),
+            0
+        );
+        assert_eq!(
+            built(
+                Lang::TypeScript,
+                "a.ts",
+                "export function find(db: DB, id: string) {\n  return db.query('SELECT * FROM users WHERE id = $1', [id]);\n}\n"
+            ),
+            0
+        );
+        // A fully literal query is safe whatever it says.
+        assert_eq!(
+            built(
+                Lang::Python,
+                "a.py",
+                "def all_users(db):\n    return db.execute(\"SELECT * FROM users\")\n"
+            ),
+            0
+        );
+        // Anchored: prose that mentions a verb is prose. An
+        // interpolated log line is not a statement.
+        assert_eq!(
+            built(
+                Lang::Python,
+                "a.py",
+                "def log_it(n):\n    print(f\"about to select {n} rows and update the cache\")\n"
+            ),
+            0
+        );
+        // Tests build queries to exercise the builder.
+        assert_eq!(
+            built(
+                Lang::Python,
+                "tests/test_a.py",
+                "def test_builds(table):\n    assert q(f\"SELECT * FROM {table}\") == 1\n"
+            ),
+            0
+        );
+    }
+
     fn groups(lang: Lang, path: &str, src: &str) -> Vec<(String, u16)> {
         let pack = lang.pack();
         let mut parser = pack.make_parser();
@@ -3179,6 +3278,10 @@ mod tests {
         (
             "cohesion",
             "methods_that_share_a_field_or_call_each_other_are_one_object",
+        ),
+        (
+            "built query",
+            "a_parameterized_query_is_the_remedy_and_stays_silent",
         ),
     ];
 

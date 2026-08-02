@@ -65,6 +65,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         suppressions: Vec::new(),
         spooky_lines: Vec::new(),
         secrets: Vec::new(),
+        sql_built: Vec::new(),
         commented_code: Vec::new(),
         skipped_tests: Vec::new(),
         magic_strings: Vec::new(),
@@ -540,6 +541,7 @@ impl Extractor<'_> {
             Sem::StrLit => {
                 self.record_secret(node, ctx.unit);
                 self.record_repeatable_string(node, ctx.unit);
+                self.check_built_query(node, ctx.unit);
             }
             _ => {}
         }
@@ -1276,6 +1278,54 @@ impl Extractor<'_> {
             .entry(text.into())
             .or_default()
             .push((row, unit_idx));
+    }
+
+    /// An SQL statement being ASSEMBLED rather than written. A literal
+    /// query is safe whatever it says, and a parameter marker (`?`,
+    /// `$1`, `:name`, psycopg's `%s`) is the remedy — so only
+    /// interpolation counts, and it is judged at the START of the
+    /// string, where a statement announces itself.
+    fn check_built_query(&mut self, node: Node, unit_idx: usize) {
+        // A test builds queries to exercise the builder; the risk is
+        // in production. Same line the credential family draws.
+        if self.facts.is_test_file || self.facts.units[unit_idx].is_test {
+            return;
+        }
+        let Ok(raw) = node.utf8_text(self.src) else {
+            return;
+        };
+        if !starts_a_statement(raw) {
+            return;
+        }
+        let built =
+            (interpolates(node) || self.inside_a_format_call(node)) && interpolates_a_value(raw);
+        if built {
+            self.facts
+                .sql_built
+                .push(node.start_position().row as u32 + 1);
+        }
+    }
+
+    /// Is this literal an argument of a formatting call — `Sprintf`,
+    /// `format!`, `"...".format(...)`? Those spell interpolation as a
+    /// call, so the literal itself carries no interpolation node.
+    fn inside_a_format_call(&self, node: Node) -> bool {
+        let Some(parent) = node.parent() else {
+            return false;
+        };
+        let call = match self.pack.table_sem(parent) == Sem::Call {
+            true => Some(parent),
+            false => parent
+                .parent()
+                .filter(|g| self.pack.table_sem(*g) == Sem::Call),
+        };
+        call.and_then(|c| self.callee_trailing_name(c))
+            .is_some_and(|name| {
+                matches!(
+                    name,
+                    "Sprintf" | "Sprint" | "Sprintln" | "format" | "sprintf" | "printf"
+                )
+            })
     }
 
     /// Names that promise a credential. A literal bound to one of these
@@ -2068,6 +2118,102 @@ fn share_state(units: &[UnitFacts], callees: &[Vec<Box<str>>], a: usize, b: usiz
         units[from].own_members.contains(name) || callees[from].iter().any(|c| c == name)
     };
     shares_member || calls(a, b) || calls(b, a)
+}
+
+/// Does this literal OPEN an SQL statement? Anchored on purpose: a
+/// log line mentioning "select" is prose, and only a string that
+/// begins as a statement is one.
+fn starts_a_statement(raw: &str) -> bool {
+    // Each verb with the keyword that makes it a STATEMENT rather than
+    // an English sentence. `"Update File Error: ..."` opens with the
+    // word update and is prose; a real UPDATE reaches a SET.
+    const SHAPES: &[(&str, &str)] = &[
+        ("select ", " from "),
+        ("insert into ", ""),
+        ("update ", " set "),
+        ("delete from ", ""),
+        ("drop table", ""),
+        ("drop index", ""),
+        ("alter table", ""),
+        ("create table", ""),
+    ];
+    let body = raw
+        .trim_start_matches(|c: char| c.is_ascii_alphabetic())
+        .trim_start_matches(['"', '\'', '`'])
+        .trim_start()
+        .to_ascii_lowercase();
+    SHAPES
+        .iter()
+        .any(|(verb, rest)| body.starts_with(verb) && body.contains(rest))
+}
+
+/// Does an interpolation land where a VALUE goes, rather than where
+/// structure goes? The difference decides whether this is a
+/// vulnerability or the idiom for it.
+///
+/// `WHERE id = ${x}` splices a value into the statement: injection.
+/// `IN (${placeholders})` and `VALUES ${rows}` splice STRUCTURE — the
+/// generated `?` markers whose values travel separately, which is how
+/// a parameterized IN clause is written in every language. vscode does
+/// the safe one five times and the unsafe one once, and a gate that
+/// cannot tell them apart is not a gate.
+fn interpolates_a_value(raw: &str) -> bool {
+    let lower = raw.to_ascii_lowercase();
+    let mut at = 0;
+    while let Some(open) = next_hole(&lower, at) {
+        // Quotes around the hole are the author's, not the syntax's.
+        let mut before = lower[..open].trim_end_matches(['$', ' ', '\t', '\'', '"']);
+        while before.ends_with([' ', '\'', '"']) {
+            before = before.trim_end_matches([' ', '\'', '"']);
+        }
+        // Two positions where an interpolation is the vulnerability: a
+        // comparison, where a VALUE belongs, and an identifier slot,
+        // where a table or column name belongs. Both splice untrusted
+        // text into the statement's meaning.
+        //
+        // `IN (` and `VALUES ` are deliberately absent. That is the
+        // placeholder generator — `IN (${ids.map(() => '?').join()})`
+        // splices structure whose values travel separately, and it is
+        // how a parameterized IN clause is written in every language.
+        // vscode writes the safe one five times and the unsafe one
+        // once; a gate that cannot tell them apart is not a gate.
+        let value_slot = before.ends_with(['=', '<', '>']) || before.ends_with(" like");
+        let name_slot = ["from", "join", "table", "into", "update"]
+            .iter()
+            .any(|k| before.ends_with(k));
+        if value_slot || name_slot {
+            return true;
+        }
+        at = open + 1;
+    }
+    false
+}
+
+/// Where the next interpolation hole opens: `{` for f-strings,
+/// templates and `format!`, or a printf verb for `Sprintf`.
+fn next_hole(lower: &str, from: usize) -> Option<usize> {
+    let brace = lower[from..].find('{').map(|i| from + i);
+    let printf = lower[from..].match_indices('%').find_map(|(i, _)| {
+        let verb = lower[from + i + 1..].chars().next()?;
+        matches!(verb, 's' | 'd' | 'v' | 'q' | 'x').then_some(from + i)
+    });
+    match (brace, printf) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// Does this string node carry an interpolation, as the grammar
+/// names it? Plain literals have children too — a Python string is
+/// three nodes — so the kind is what decides.
+fn interpolates(node: Node) -> bool {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).any(|c| {
+        matches!(
+            c.kind(),
+            "interpolation" | "template_substitution" | "string_interpolation"
+        )
+    })
 }
 
 /// A comment line without its marker. Block comments carry a leading

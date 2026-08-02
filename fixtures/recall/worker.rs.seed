@@ -85,3 +85,7 @@ fn slow_backfill() {
 fn relocate(node: &Node) {
     move_entry(node, true, false);
 }
+
+fn lookup(db: &Db, table: &str) -> Rows {
+    db.query(&format!("SELECT * FROM {}", table))
+}

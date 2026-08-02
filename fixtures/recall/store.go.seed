@@ -46,3 +46,7 @@ func Relabel(cfg *Cfg) string {
 func Relocate(node *Node) {
 	moveEntry(node, true, false)
 }
+
+func Lookup(db *DB, table string) *Rows {
+	return db.Query(fmt.Sprintf("SELECT * FROM %s", table))
+}

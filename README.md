@@ -108,7 +108,17 @@ is rewarded), `demeter` (attribute chains ≥3 data links; fluent call
 chains exempt, `self` forgives one link), `negations` (double negatives,
 negated negative-polarity names, De Morgan candidates).
 
-**Rung 2 — function shape.** `conditional hook` (React identifies a hook
+**Rung 2 — function shape.** `built query` (an SQL statement assembled
+by interpolation rather than written — the oldest vulnerability there
+is, and the one whose remedy this deliberately cannot see, because a
+parameterized query carries no interpolation at all. Judged by where
+the hole lands: a comparison, where a *value* belongs, or an
+identifier slot, where a table name does. `IN (${placeholders})` and
+`VALUES ${rows}` are the placeholder generator — structure whose
+values travel separately — and stay silent, because vscode writes the
+safe form five times for every unsafe one and a gate that cannot tell
+them apart is not a gate. Two findings in 6.39M lines of gold, both
+real). Plus `conditional hook` (React identifies a hook
 by the *order* it is called in, so one reached through a branch
 renumbers every hook after it the moment the condition flips, and the
 component reads another hook's state — a corruption, not a style

@@ -78,3 +78,7 @@ test.skip('backfills the queue', () => {
 export function relocate(node: Node): void {
   moveEntry(node, true, false);
 }
+
+export function lookup(db: DB, ident: string) {
+  return db.query(`SELECT * FROM users WHERE id = ${ident}`);
+}
