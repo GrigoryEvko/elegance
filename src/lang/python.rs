@@ -116,7 +116,11 @@ pub fn pack() -> Pack {
         return_arity,
         // An interface here is a convention — Protocol and ABC are
         // imports, not syntax — and a class body full of defs cannot
-        // tell a contract from an implementation.
+        // tell a contract from an implementation. Measured before
+        // being left undone: the whole gold corpus holds nine files
+        // declaring a Protocol, which is two orders of magnitude below
+        // the 200-sample floor a budget needs, so the metric could only
+        // ever have reported against a compiled-in default.
         interfaces: |_, _| Vec::new(),
         magic_exempt: &[
             "default_parameter",

@@ -19,6 +19,9 @@ const KINDS: &[(&str, Sem)] = &[
     ("abstract_class_declaration", Sem::TypeDef),
     ("interface_declaration", Sem::TypeDef),
     ("enum_declaration", Sem::TypeDef),
+    // `type X = {...}` declares a type as surely as `interface X`, and
+    // an exported one is as much of the surface.
+    ("type_alias_declaration", Sem::TypeDef),
     ("if_statement", Sem::If),
     ("else_clause", Sem::Else),
     ("ternary_expression", Sem::Ternary),
@@ -155,13 +158,20 @@ pub fn pack(dialect: Dialect) -> Pack {
 /// shape as a 20-method contract would flag every component's props.
 /// Extends-clauses are composition and stay free, as in Go.
 pub(super) fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
-    if node.kind() != "interface_declaration" {
-        return Vec::new();
-    }
+    // `interface X { ... }` and `type X = { ... }` are the same
+    // declaration in two spellings, and a contract does not change
+    // width because its author preferred the newer keyword.
+    let body = match node.kind() {
+        "interface_declaration" => node.child_by_field_name("body"),
+        "type_alias_declaration" => node
+            .child_by_field_name("value")
+            .filter(|v| v.kind() == "object_type"),
+        _ => return Vec::new(),
+    };
     let (Some(name), Some(body)) = (
         node.child_by_field_name("name")
             .and_then(|n| n.utf8_text(src).ok()),
-        node.child_by_field_name("body"),
+        body,
     ) else {
         return Vec::new();
     };

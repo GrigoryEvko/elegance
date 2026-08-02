@@ -64,7 +64,7 @@
 "stringly id" = { hi = 1.0 }
 "loop depth" = { hi = 1.0 }
 "returns" = { hi = 1.0 }
-"interface width" = { hi = 14.0 }
+"interface width" = { hi = 13.0 }
 "asserts" = { rate = 0.04 }
 "public docs" = { rate = 0.28 }
 
@@ -86,7 +86,7 @@
 "confusable" = { hi = 2.0 }
 "loop depth" = { hi = 1.0 }
 "returns" = { hi = 1.0 }
-"interface width" = { hi = 2.0 }
+"interface width" = { hi = 4.0 }
 "asserts" = { rate = 0.03 }
 "public docs" = { rate = 0.13 }
 

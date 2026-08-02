@@ -2171,6 +2171,24 @@ mod tests {
             [("Props".to_string(), 1)],
             "one method signature; three data fields cost nothing"
         );
+        // `type X = { ... }` is the same declaration in a newer
+        // keyword, and a contract does not narrow because its author
+        // preferred one spelling — 2,144 of them in gold TypeScript.
+        assert_eq!(
+            widths(
+                Lang::TypeScript,
+                "a.ts",
+                "type Store = {\n  get(k: string): Uint8Array;\n  put(k: string, v: Uint8Array): void;\n  size: number;\n};\n"
+            ),
+            [("Store".to_string(), 2)],
+            "two methods; the data field costs nothing"
+        );
+        // A type alias that is not an object declares no contract.
+        assert_eq!(
+            widths(Lang::TypeScript, "a.ts", "type Id = string | number;\n"),
+            [],
+            "a union alias is not an interface"
+        );
     }
 
     #[test]
