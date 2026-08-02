@@ -91,19 +91,7 @@ pub fn pack() -> Pack {
         types_declared: true,
         refine,
         name_node,
-        // Quotes stripped, angle brackets kept: `<stdio.h>` is
-        // definitionally external. C binds no names.
-        imports: |node, src| {
-            node.child_by_field_name("path")
-                .and_then(|p| p.utf8_text(src).ok())
-                .map(|t| {
-                    vec![super::ImportInfo {
-                        target: t.trim_matches('"').into(),
-                        names: Vec::new(),
-                    }]
-                })
-                .unwrap_or_default()
-        },
+        imports,
         param_info,
         is_self_call,
         is_doc: |_| false,
@@ -119,13 +107,7 @@ pub fn pack() -> Pack {
         swallows_error: |_, _| false,
         // No exceptions, so no chain to break.
         loses_context: |_, _| false,
-        // abort() is C's panic; exit() is judgment we don't make.
-        panicky: |call, src| {
-            call.child_by_field_name("function")
-                .filter(|f| f.kind() == "identifier")
-                .and_then(|f| f.utf8_text(src).ok())
-                == Some("abort")
-        },
+        panicky,
         // No async in this language; goroutines and threads are not it.
         // Manual everywhere, so every fopen would fire and none would mean anything.
         // Designated initializers belong to a declared struct.
@@ -152,6 +134,8 @@ pub fn pack() -> Pack {
         // A vtable is a struct-of-function-pointers idiom, not a
         // declaration the grammar can point at.
         interfaces: |_, _| Vec::new(),
+        // No test-declaration form, so nothing to switch off.
+        skips_test: |_, _| false,
         magic_exempt: &[
             // Enum values and #defines ARE the named constants.
             "enumerator",
@@ -163,6 +147,28 @@ pub fn pack() -> Pack {
         ],
         assign_kinds: &["init_declarator"],
     }
+}
+
+/// Quotes stripped, angle brackets kept: `<stdio.h>` is definitionally
+/// external. C binds no names.
+fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    node.child_by_field_name("path")
+        .and_then(|p| p.utf8_text(src).ok())
+        .map(|t| {
+            vec![super::ImportInfo {
+                target: t.trim_matches('"').into(),
+                names: Vec::new(),
+            }]
+        })
+        .unwrap_or_default()
+}
+
+/// abort() is C's panic; exit() is judgment we don't make.
+fn panicky(call: Node, src: &[u8]) -> bool {
+    call.child_by_field_name("function")
+        .filter(|f| f.kind() == "identifier")
+        .and_then(|f| f.utf8_text(src).ok())
+        == Some("abort")
 }
 
 /// `&&`/`||` from the shared binary kind; `else if` flattens as in Rust.

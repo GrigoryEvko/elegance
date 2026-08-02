@@ -42,6 +42,12 @@ pub struct FileFacts {
     /// entropy — a secret compiled into the artifact and committed to
     /// history, where rotating it means a release.
     pub secrets: Vec<u32>,
+    /// Lines that switch a test off unconditionally — `#[ignore]`,
+    /// `it.skip(...)`, `t.Skip()`. A suppression wearing a test's
+    /// name: the suite still reports green, and nothing records what
+    /// the test would have said. A CONDITIONAL skip is absent by
+    /// design — `skipif(platform)` is stated judgment.
+    pub skipped_tests: Vec<u32>,
     /// The same non-trivial string literal, written out again and
     /// again in one file: a constant nobody named. Clone detection
     /// cannot see these — duplicated DATA is content, not logic — so

@@ -65,6 +65,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         suppressions: Vec::new(),
         spooky_lines: Vec::new(),
         secrets: Vec::new(),
+        skipped_tests: Vec::new(),
         magic_strings: Vec::new(),
         test_refs: Vec::new(),
         switch_sigs: Vec::new(),
@@ -689,27 +690,36 @@ impl Extractor<'_> {
             }
             self.callees[unit_idx].push(name);
         }
-        let unit = &mut self.facts.units[unit_idx];
-        if !unit.self_recursive && (self.pack.is_self_call)(node, self.src, &unit.name) {
-            unit.self_recursive = true;
-        }
-        if (self.pack.panicky)(node, self.src) {
-            unit.unwraps += 1;
-        }
-        if (self.pack.asserty)(node, self.src) {
-            unit.assert_calls += 1;
-        }
-        if unit.is_async && self.parks_the_thread(node) {
-            self.facts.units[unit_idx].blocking_calls += 1;
-        }
-        if self.is_a_sleep(node) {
-            self.facts.units[unit_idx].sleep_calls += 1;
-        }
-        if (self.pack.asserty)(node, self.src) && self.asserts_a_literal(node) {
-            self.facts.units[unit_idx].vacuous_asserts += 1;
-        }
+        self.record_call_kind(node, unit_idx);
         self.record_lifetime(node, unit_idx);
         self.record_placement(node, ctx);
+        // `t.Skip()` and `it.skip(...)` are calls; `#[ignore]` and a
+        // decorator are caught at open_unit instead. Branch context
+        // decides: `if runtime.GOOS == "windows" { t.Skip() }` is
+        // stated judgment, and only an UNCONDITIONAL skip suppresses.
+        if !ctx.branched && (self.pack.skips_test)(node, self.src) {
+            self.note_skipped_test(node);
+        }
+    }
+
+    /// What a call IS, judged by the callee alone: a panic where an
+    /// error belonged, an assertion, a recursion, a park, a sleep.
+    fn record_call_kind(&mut self, node: Node, unit_idx: usize) {
+        let asserts = (self.pack.asserty)(node, self.src);
+        let vacuous = asserts && self.asserts_a_literal(node);
+        let sleeps = self.is_a_sleep(node);
+        let panics = (self.pack.panicky)(node, self.src);
+        let unit = &self.facts.units[unit_idx];
+        let parks = unit.is_async && self.parks_the_thread(node);
+        let recursive =
+            !unit.self_recursive && (self.pack.is_self_call)(node, self.src, &unit.name);
+        let unit = &mut self.facts.units[unit_idx];
+        unit.unwraps += panics as u16;
+        unit.assert_calls += asserts as u16;
+        unit.vacuous_asserts += vacuous as u16;
+        unit.blocking_calls += parks as u16;
+        unit.sleep_calls += sleeps as u16;
+        unit.self_recursive |= recursive;
     }
 
     /// What a call's SURROUNDINGS make of it: a copy rebuilt on every
@@ -950,7 +960,16 @@ impl Extractor<'_> {
         })
     }
 
+    fn note_skipped_test(&mut self, node: Node) {
+        self.facts
+            .skipped_tests
+            .push(node.start_position().row as u32 + 1);
+    }
+
     fn open_unit(&mut self, node: Node) -> usize {
+        if (self.pack.skips_test)(node, self.src) {
+            self.note_skipped_test(node);
+        }
         let recv = self.receiver(node);
         let (name, qualname) = self.unit_names(node, recv.as_ref());
         let mut unit = UnitFacts {

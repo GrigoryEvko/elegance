@@ -139,6 +139,7 @@ pub fn pack(dialect: Dialect) -> Pack {
         is_hook,
         return_arity,
         interfaces,
+        skips_test,
         magic_exempt: &[
             "subscript_expression",
             "type_annotation",
@@ -274,6 +275,32 @@ pub(super) fn asserty(node: Node, src: &[u8]) -> bool {
                 .is_some_and(|o| text(o) == "assert")
                 || f.child_by_field_name("property")
                     .is_some_and(|p| text(p).starts_with("assert") || text(p).starts_with("expect"))
+        }
+        _ => false,
+    }
+}
+
+/// `it.skip(...)`, `describe.skip(...)`, `xit(...)` — the suite still
+/// reports green and nothing records what the test would have said.
+/// `it.only(...)` is deliberately absent: it silences its SIBLINGS
+/// rather than itself, which is a different claim, and CI usually
+/// catches it. A conditional skip is stated judgment.
+pub(super) fn skips_test(node: Node, src: &[u8]) -> bool {
+    let Some(f) = node.child_by_field_name("function") else {
+        return false;
+    };
+    const RUNNERS: &[&str] = &["it", "test", "describe", "suite", "context"];
+    match f.kind() {
+        "identifier" => matches!(
+            f.utf8_text(src),
+            Ok("xit" | "xdescribe" | "xtest" | "xspecify" | "xcontext")
+        ),
+        "member_expression" => {
+            let part = |field| {
+                f.child_by_field_name(field)
+                    .and_then(|n| n.utf8_text(src).ok())
+            };
+            part("property") == Some("skip") && part("object").is_some_and(|o| RUNNERS.contains(&o))
         }
         _ => false,
     }

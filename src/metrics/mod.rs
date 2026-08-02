@@ -207,6 +207,7 @@ pub const REPURPOSED: usize = 47;
 pub const UNAWAITED: usize = 48;
 pub const MAGIC_STRINGS: usize = 49;
 pub const SLEEPY_TEST: usize = 50;
+pub const SKIPPED_TESTS: usize = 51;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -528,6 +529,13 @@ pub const METRICS: &[MetricDef] = &[
     // asyncio.sleep(...)` is the right way to yield an executor and
     // the wrong way to wait for a result, so every flavour counts.
     MetricDef { name: "sleepy test",   rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
+    // The suppression that wears a test's name: the suite still
+    // reports green and nothing records what the test would have
+    // said — a sibling of `suppressions`, where a checker was told to
+    // stop looking. Unconditional skips only: `skipif(platform)` and a
+    // guarded `t.Skip()` are stated judgment, and the test still runs
+    // where it applies.
+    MetricDef { name: "skipped tests", rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -795,6 +803,13 @@ fn file_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
             first_suppression,
             "",
         );
+        let first_skip = facts.skipped_tests.iter().min().copied().unwrap_or(1);
+        f(
+            SKIPPED_TESTS,
+            facts.skipped_tests.len() as f32,
+            first_skip,
+            "",
+        );
         let first_magic = facts.magic_strings.first().copied().unwrap_or(1);
         f(
             MAGIC_STRINGS,
@@ -1014,10 +1029,11 @@ mod tests {
             (UNAWAITED, "unawaited coroutine"),
             (MAGIC_STRINGS, "magic strings"),
             (SLEEPY_TEST, "sleepy test"),
+            (SKIPPED_TESTS, "skipped tests"),
         ] {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
-        assert_eq!(N, 51);
+        assert_eq!(N, 52);
     }
 
     #[test]
@@ -2077,6 +2093,103 @@ mod tests {
         );
     }
 
+    fn skips(lang: Lang, path: &str, src: &str) -> usize {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        extract(pack, &mut parser, Path::new(path), src)
+            .skipped_tests
+            .len()
+    }
+
+    #[test]
+    fn only_an_unconditional_skip_is_a_suppression() {
+        // The suite reports green and nothing records what the test
+        // would have said — a suppression wearing a test's name.
+        assert_eq!(
+            skips(
+                Lang::Rust,
+                "a.rs",
+                "#[test]\n#[ignore]\nfn slow_path() {\n    assert!(check());\n}\n"
+            ),
+            1
+        );
+        assert_eq!(
+            skips(
+                Lang::TypeScript,
+                "a.test.ts",
+                "it.skip('handles retries', () => {\n  expect(f()).toBe(1);\n});\nxit('other', () => {});\n"
+            ),
+            2
+        );
+        assert_eq!(
+            skips(
+                Lang::Go,
+                "a_test.go",
+                "func TestSlow(t *testing.T) {\n\tt.Skip(\"flaky\")\n\tcheck(t)\n}\n"
+            ),
+            1
+        );
+        assert_eq!(
+            skips(
+                Lang::Python,
+                "tests/test_a.py",
+                "@pytest.mark.skip(reason=\"broken\")\ndef test_slow():\n    assert check()\n"
+            ),
+            1
+        );
+        // A CONDITIONAL skip is stated judgment: the test still runs
+        // where it applies, and nothing was silenced.
+        assert_eq!(
+            skips(
+                Lang::Python,
+                "tests/test_a.py",
+                "@pytest.mark.skipif(sys.platform == 'win32', reason=\"posix only\")\ndef test_slow():\n    assert check()\n"
+            ),
+            0
+        );
+        assert_eq!(
+            skips(
+                Lang::Go,
+                "a_test.go",
+                "func TestSlow(t *testing.T) {\n\tif runtime.GOOS == \"windows\" {\n\t\tt.Skip(\"posix only\")\n\t}\n\tcheck(t)\n}\n"
+            ),
+            0,
+            "a guarded skip is a platform decision"
+        );
+        // Rust spells the conditional form inside the attribute, and
+        // rayon carries dozens: the test runs wherever the predicate
+        // is false, so nothing was silenced.
+        assert_eq!(
+            skips(
+                Lang::Rust,
+                "a.rs",
+                "#[test]\n#[cfg_attr(not(panic = \"unwind\"), ignore)]\nfn slow_path() {\n    assert!(check());\n}\n"
+            ),
+            0,
+            "a cfg_attr ignore is conditional"
+        );
+        // An ALIAS hides the condition behind a name; rich binds five.
+        assert_eq!(
+            skips(
+                Lang::Python,
+                "tests/test_a.py",
+                "skip_py38 = pytest.mark.skipif(sys.version_info < (3, 9), reason=\"3.9+\")\n\n@skip_py38\ndef test_slow():\n    assert check()\n"
+            ),
+            0,
+            "an alias for skipif is still conditional"
+        );
+        // `.only` silences its SIBLINGS, not itself — a different
+        // claim, and one CI usually catches.
+        assert_eq!(
+            skips(
+                Lang::TypeScript,
+                "a.test.ts",
+                "it.only('handles retries', () => {\n  expect(f()).toBe(1);\n});\n"
+            ),
+            0
+        );
+    }
+
     fn sleeps(lang: Lang, path: &str, src: &str) -> u16 {
         let pack = lang.pack();
         let mut parser = pack.make_parser();
@@ -2750,6 +2863,10 @@ mod tests {
         (
             "sleepy test",
             "a_sleep_is_judged_in_tests_where_every_flavour_is_timing",
+        ),
+        (
+            "skipped tests",
+            "only_an_unconditional_skip_is_a_suppression",
         ),
     ];
 

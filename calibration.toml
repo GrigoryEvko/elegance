@@ -135,6 +135,7 @@
 "abbreviated" = { hi = 1.0 }
 "loop depth" = { hi = 1.0 }
 "magic strings" = { hi = 1.0 }
+"skipped tests" = { hi = 1.0 }
 "asserts" = { rate = 0.03 }
 "public docs" = { rate = 0.25 }
 

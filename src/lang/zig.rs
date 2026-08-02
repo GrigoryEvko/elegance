@@ -146,6 +146,9 @@ pub fn pack() -> Pack {
         // An interface is a comptime convention (a struct of function
         // pointers, an anytype constraint) with no declared form.
         interfaces: |_, _| Vec::new(),
+        // `test` blocks are compiled in or out by the build; the
+        // language has no per-test off switch.
+        skips_test: |_, _| false,
         magic_exempt: &[
             "variable_declaration",
             "switch_case",

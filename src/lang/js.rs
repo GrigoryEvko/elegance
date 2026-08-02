@@ -114,6 +114,7 @@ pub fn pack() -> Pack {
         return_arity: |_, _| 0,
         // No interface declarations at all.
         interfaces: |_, _| Vec::new(),
+        skips_test: typescript::skips_test,
         magic_exempt: &[
             "subscript_expression",
             "decorator",

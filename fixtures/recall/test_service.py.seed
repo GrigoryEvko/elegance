@@ -10,3 +10,8 @@ def test_retry_settles():
     trigger()
     time.sleep(0.25)
     assert settled()
+
+
+@pytest.mark.skip(reason="broken since the migration")
+def test_backfill():
+    assert backfilled()

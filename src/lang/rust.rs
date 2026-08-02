@@ -110,6 +110,9 @@ pub fn pack() -> Pack {
         is_hook: |_, _| false,
         return_arity,
         interfaces,
+        // `#[ignore]` compiles the test and never runs it. A reason
+        // string changes nothing: cargo still reports green.
+        skips_test: |node, src| node.kind() == "function_item" && has_bare_ignore(node, src),
         magic_exempt: &[
             "const_item",
             "static_item",
@@ -224,6 +227,32 @@ fn preceding_attr_contains(item: Node, src: &[u8], needle: &str) -> bool {
         match p.kind() {
             "attribute_item" => {
                 if p.utf8_text(src).is_ok_and(|t| t.contains(needle)) {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        prev = p.prev_named_sibling();
+    }
+    false
+}
+
+/// `#[ignore]`, bare or with a reason. The attribute must LEAD with
+/// it: `#[cfg_attr(not(panic = "unwind"), ignore)]` is a conditional
+/// ignore, which is stated judgment — the test runs wherever the
+/// predicate is false — and rayon alone carries dozens of them.
+fn has_bare_ignore(item: Node, src: &[u8]) -> bool {
+    let mut prev = item.prev_named_sibling();
+    while let Some(p) = prev {
+        match p.kind() {
+            "attribute_item" => {
+                let inner = p
+                    .utf8_text(src)
+                    .unwrap_or("")
+                    .trim_start_matches("#[")
+                    .trim();
+                if inner.starts_with("ignore") {
                     return true;
                 }
             }

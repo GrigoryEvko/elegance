@@ -107,6 +107,8 @@ pub fn pack() -> Pack {
         // the module's surface — already measured, not a type's
         // method contract.
         interfaces: |_, _| Vec::new(),
+        // No test-declaration form, so nothing to switch off.
+        skips_test: |_, _| false,
         magic_exempt: &["type_definition"],
         assign_kinds: &[],
     }

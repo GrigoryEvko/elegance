@@ -114,6 +114,7 @@ pub fn pack() -> Pack {
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
         return_arity,
+        skips_test,
         // An interface here is a convention — Protocol and ABC are
         // imports, not syntax — and a class body full of defs cannot
         // tell a contract from an implementation. Measured before
@@ -133,6 +134,41 @@ pub fn pack() -> Pack {
         ],
         assign_kinds: &["assignment"],
     }
+}
+
+/// `@pytest.mark.skip` and `@unittest.skip` switch a test off for
+/// good. `skipif` is deliberately excluded — a platform or version
+/// guard is stated judgment, and the test still runs where it applies.
+fn skips_test(node: Node, src: &[u8]) -> bool {
+    if node.kind() != "function_definition" {
+        return false;
+    }
+    let mut prev = node.prev_named_sibling();
+    while let Some(p) = prev {
+        if p.kind() != "decorator" {
+            break;
+        }
+        if names_a_skip(p, src) {
+            return true;
+        }
+        prev = p.prev_named_sibling();
+    }
+    false
+}
+
+/// The decorator must NAME the skip, not merely contain the word.
+/// `@pytest.mark.skipif` is conditional, and an ALIAS hides the
+/// condition behind a name — rich binds five of them
+/// (`skip_py38 = pytest.mark.skipif(...)`), and every one read as an
+/// unconditional skip while this matched on substring.
+fn names_a_skip(decorator: Node, src: &[u8]) -> bool {
+    let text = decorator.utf8_text(src).unwrap_or("");
+    let head = text
+        .trim_start_matches('@')
+        .split(['(', ' ', '\n'])
+        .next()
+        .unwrap_or("");
+    head.rsplit('.').next() == Some("skip")
 }
 
 /// The widest tuple any `return` in this unit ships — `return a, b, c`

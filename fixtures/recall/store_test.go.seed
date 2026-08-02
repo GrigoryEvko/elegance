@@ -12,3 +12,8 @@ func TestRetrySettles(t *testing.T) {
 		t.Fatal("no")
 	}
 }
+
+func TestBackfill(t *testing.T) {
+	t.Skip("broken since the migration")
+	checkBackfill(t)
+}

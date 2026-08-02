@@ -272,6 +272,12 @@ pub struct Pack {
     /// an OCaml tuple, a Zig struct) answer 0 — there is nothing to
     /// destructure that a name would not fix.
     pub return_arity: fn(Node, &[u8]) -> u16,
+    /// Does this node switch a test off UNCONDITIONALLY — `#[ignore]`,
+    /// `it.skip(...)`, `xit(...)`, `t.Skip()`? Consulted on calls and
+    /// on definitions, since languages spell it in both places. A
+    /// conditional skip (`skipif`, a platform guard) is stated
+    /// judgment and must never count.
+    pub skips_test: fn(Node, &[u8]) -> bool,
     /// Declared method bundles under this TypeDef node — a Go
     /// `interface`, a Rust `trait`, a TS `interface` — each with how
     /// many methods it demands. A Vec because one Go `type (...)`
@@ -968,6 +974,7 @@ let classify items limit =
         "repurposed",
         "unawaited coroutine",
         "sleepy test",
+        "skipped tests",
     ];
 
     /// Pairs that can NEVER fire, each with its reason. Deliberate
@@ -1148,6 +1155,26 @@ let classify items limit =
             Lang::C,
             "sleepy test",
             "no test-declaration form; nothing here declares itself a test",
+        ),
+        (
+            Lang::C,
+            "skipped tests",
+            "no test-declaration form, so nothing to switch off",
+        ),
+        (
+            Lang::OCaml,
+            "skipped tests",
+            "no test-declaration form, so nothing to switch off",
+        ),
+        (
+            Lang::Zig,
+            "skipped tests",
+            "`test` blocks are compiled in or out by the build; no per-test off switch",
+        ),
+        (
+            Lang::Shell,
+            "skipped tests",
+            "bats `skip` is a runner builtin indistinguishable from a command of that name",
         ),
         (
             Lang::OCaml,

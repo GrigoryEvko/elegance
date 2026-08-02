@@ -88,11 +88,7 @@ pub fn pack() -> Pack {
         is_public,
         unit_docs,
         spooky: |_, _, _| false,
-        negation_operand: |node, src| {
-            (node.kind() == "unary_expression"
-                && node.utf8_text(src).is_ok_and(|t| t.starts_with('!')))
-            .then(|| node.child_by_field_name("operand"))?
-        },
+        negation_operand,
         catch_sin: |_, _| None,
         swallows_error,
         // No exceptions, so no chain to break.
@@ -105,13 +101,7 @@ pub fn pack() -> Pack {
         unguarded_resource: |_, _| false,
         is_async: |_, _| false,
         declares_test: |_, _| false,
-        // Go's convention is names, and a name means "test" only in a
-        // _test.go file — a production TestConnection is a function.
-        names_test: |node, src| {
-            node.child_by_field_name("name")
-                .and_then(|n| n.utf8_text(src).ok())
-                .is_some_and(|n| n.starts_with("Test") || n.starts_with("Benchmark"))
-        },
+        names_test,
         is_test_code: |_, _| false,
         test_path: |p| p.ends_with("_test.go"),
         // Go's stdlib has no assert, so projects grow their own helpers
@@ -141,6 +131,7 @@ pub fn pack() -> Pack {
         is_hook: |_, _| false,
         return_arity,
         interfaces,
+        skips_test,
         magic_exempt: &[
             "const_declaration",
             "var_declaration",
@@ -152,6 +143,30 @@ pub fn pack() -> Pack {
         // Both spellings: `password := "..."` and `var password = "..."`.
         assign_kinds: &["short_var_declaration", "var_spec"],
     }
+}
+
+fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    (node.kind() == "unary_expression" && node.utf8_text(src).is_ok_and(|t| t.starts_with('!')))
+        .then(|| node.child_by_field_name("operand"))?
+}
+
+/// Go's convention is names, and a name means "test" only in a
+/// _test.go file — a production TestConnection is a function.
+fn names_test(node: Node, src: &[u8]) -> bool {
+    node.child_by_field_name("name")
+        .and_then(|n| n.utf8_text(src).ok())
+        .is_some_and(|n| n.starts_with("Test") || n.starts_with("Benchmark"))
+}
+
+/// `t.Skip()` / `t.Skipf()` / `t.SkipNow()`. Guarded skips are the
+/// common and legitimate form, so the BRANCH context decides — the
+/// extractor counts only unbranched ones.
+fn skips_test(node: Node, src: &[u8]) -> bool {
+    node.child_by_field_name("function")
+        .filter(|f| f.kind() == "selector_expression")
+        .and_then(|f| f.child_by_field_name("field"))
+        .and_then(|n| n.utf8_text(src).ok())
+        .is_some_and(|m| matches!(m, "Skip" | "Skipf" | "SkipNow"))
 }
 
 /// Every `interface` under one `type` declaration — a grouped

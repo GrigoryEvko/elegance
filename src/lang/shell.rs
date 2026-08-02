@@ -136,6 +136,9 @@ pub fn pack() -> Pack {
         return_arity: |_, _| 0,
         // No types, so no interfaces.
         interfaces: |_, _| Vec::new(),
+        // bats `skip` is a runner builtin indistinguishable from a
+        // command of that name; nothing declares a test to begin with.
+        skips_test: |_, _| false,
         magic_exempt: &[
             // `>&2` — a file descriptor is not an unnamed constant.
             "file_redirect",

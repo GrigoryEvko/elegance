@@ -55,3 +55,7 @@ test('retry settles', async () => {
   await sleep(250);
   assert(settled());
 });
+
+test.skip('backfills the queue', () => {
+  assert(backfilled());
+});

@@ -75,3 +75,9 @@ fn retry_settles() {
     std::thread::sleep(d);
     assert!(settled());
 }
+
+#[test]
+#[ignore]
+fn slow_backfill() {
+    assert!(backfilled());
+}
