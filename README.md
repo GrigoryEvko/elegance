@@ -125,7 +125,28 @@ boolean operators 1 per new sequence, direct recursion 1), `cyclomatic`
 variable is a mental register), `swallowed` (a handler that silences the
 error entirely).
 
-**Rung 3 — interface shape.** `flag params`, `kw opacity`, `pass-through`
+**Rung 3 — interface shape.** `returns` (four values travelling
+together are a struct in hiding — the `params` argument pointed at the
+other end of the signature. Go reads its result list, Rust and TS a
+declared tuple return, Python the widest tuple a `return` ships; a JS
+array or an OCaml tuple is already one value and stays silent. A
+suspicion rather than a gate because a TS tuple annotation is
+*optional*: its budget rides on how often gold annotates at all, and a
+declared `[value, setter]` pair is legitimate style), `interface width`
+(methods per declared interface — Go's "the bigger the interface, the
+weaker the abstraction" as one number. Methods only: a TS props shape
+is a record, and an embedded interface or extends clause is
+composition, the cure for width, never billed as the disease. The
+widest in gold is JQuery at 310, and Go gold's median width of 1 says
+the small-interface culture is real), `repurposed` (a straight-line
+`x = ...` whose new value never mentions the old gives the same name a
+second meaning — Fowler's Split Variable, the one def-use insight
+cheap at syntax cost. Collecting updates, compound operators,
+conditional overrides, loop refills, try-sheltered fills, swaps,
+member writes, and Rust let-shadowing are all exempt by construction;
+tests are exempt because a test refills one variable per scenario —
+gold said so at 82 refills inside redis's own test driver), `flag
+params`, `kw opacity`, `pass-through`
 (Ousterhout's shallow wrapper / Fowler's Middle Man), `generic name`,
 `lying name` (`is_`/`has_` must return bool; `get_` must not mutate),
 `broad catch`, `unwraps`, `spooky` (eval, computed attribute access,
