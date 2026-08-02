@@ -42,8 +42,13 @@ jobs:
           - name: elegance-aarch64-linux-musl
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
+          # `macos-13` is RETIRED, not merely old: a job asking for it
+          # is terminated, which reads as a queue that never drains.
+          # `macos-15-intel` is the last x86_64 macOS image Actions will
+          # offer and it goes away in August 2027, after which this row
+          # is deleted and Intel Mac users build from source.
           - name: elegance-x86_64-macos
-            os: macos-13
+            os: macos-15-intel
             target: x86_64-apple-darwin
           - name: elegance-aarch64-macos
             os: macos-14
