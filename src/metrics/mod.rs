@@ -205,6 +205,7 @@ pub const RETURN_ARITY: usize = 45;
 pub const INTERFACE_WIDTH: usize = 46;
 pub const REPURPOSED: usize = 47;
 pub const UNAWAITED: usize = 48;
+pub const MAGIC_STRINGS: usize = 49;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -514,6 +515,12 @@ pub const METRICS: &[MetricDef] = &[
     // Same argument that turned `asserts` and `public docs` into rates
     // and moved `demeter` off Policy. Do not re-propose without new
     // evidence — the measurement is cheap to repeat and it said no.
+    //
+    // The other half of `magic numbers`: the same non-trivial string
+    // written out again and again is a constant nobody named, and
+    // clone detection deliberately cannot see it (duplicated DATA is
+    // content, not logic), so nothing else in the tool owns this.
+    MetricDef { name: "magic strings", rung: 4, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -781,6 +788,13 @@ fn file_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
             first_suppression,
             "",
         );
+        let first_magic = facts.magic_strings.first().copied().unwrap_or(1);
+        f(
+            MAGIC_STRINGS,
+            facts.magic_strings.len() as f32,
+            first_magic,
+            "",
+        );
         let first_echo = facts.echo_comments.iter().min().copied().unwrap_or(1);
         f(
             ECHO_COMMENTS,
@@ -990,10 +1004,11 @@ mod tests {
             (INTERFACE_WIDTH, "interface width"),
             (REPURPOSED, "repurposed"),
             (UNAWAITED, "unawaited coroutine"),
+            (MAGIC_STRINGS, "magic strings"),
         ] {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
-        assert_eq!(N, 49);
+        assert_eq!(N, 50);
     }
 
     #[test]
@@ -2053,6 +2068,79 @@ mod tests {
         );
     }
 
+    fn magic_strings(lang: Lang, path: &str, src: &str) -> usize {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        extract(pack, &mut parser, Path::new(path), src)
+            .magic_strings
+            .len()
+    }
+
+    #[test]
+    fn a_repeated_literal_is_only_magic_when_nothing_named_it() {
+        // The smell: one decision spelled out in three separate
+        // functions, where a name would have said it once.
+        assert_eq!(
+            magic_strings(
+                Lang::Python,
+                "a.py",
+                "def a():\n    emit(\"connection refused\")\n\ndef b():\n    emit(\"connection refused\")\n\ndef c():\n    emit(\"connection refused\")\n"
+            ),
+            1
+        );
+        // A TABLE is content, not logic — the same reason clone
+        // detection refuses duplicated data. gold's worst offender was
+        // a TextMate grammar repeating one include 186 times inside a
+        // single object literal.
+        assert_eq!(
+            magic_strings(
+                Lang::Python,
+                "a.py",
+                "def build():\n    return [\n        {\"include\": \"ever_present\"},\n        {\"include\": \"ever_present\"},\n        {\"include\": \"ever_present\"},\n    ]\n"
+            ),
+            0,
+            "one unit repeating a literal is a table"
+        );
+        // A named constant IS the remedy, so it must not read as the
+        // disease — however many places then use the name.
+        assert_eq!(
+            magic_strings(
+                Lang::Python,
+                "a.py",
+                "REFUSED = \"connection refused\"\n\ndef a():\n    emit(REFUSED)\n\ndef b():\n    emit(REFUSED)\n\ndef c():\n    emit(REFUSED)\n"
+            ),
+            0
+        );
+        // Short literals are punctuation, flags and format fragments.
+        assert_eq!(
+            magic_strings(
+                Lang::Python,
+                "a.py",
+                "def a():\n    j(\", \")\n\ndef b():\n    j(\", \")\n\ndef c():\n    j(\", \")\n"
+            ),
+            0
+        );
+        // An interpolated literal is a computation; two of them
+        // sharing text are not one constant.
+        assert_eq!(
+            magic_strings(
+                Lang::Python,
+                "a.py",
+                "def a(x):\n    emit(f\"connection refused {x}\")\n\ndef b(x):\n    emit(f\"connection refused {x}\")\n\ndef c(x):\n    emit(f\"connection refused {x}\")\n"
+            ),
+            0
+        );
+        // Tests restate their subject by design.
+        assert_eq!(
+            magic_strings(
+                Lang::Python,
+                "tests/test_a.py",
+                "def test_a():\n    assert e() == \"connection refused\"\n\ndef test_b():\n    assert e() == \"connection refused\"\n\ndef test_c():\n    assert e() == \"connection refused\"\n"
+            ),
+            0
+        );
+    }
+
     fn unawaited(lang: Lang, path: &str, src: &str) -> u16 {
         let pack = lang.pack();
         let mut parser = pack.make_parser();
@@ -2588,6 +2676,10 @@ mod tests {
         (
             "unawaited coroutine",
             "an_unawaited_coroutine_is_judged_same_file_and_unambiguous_only",
+        ),
+        (
+            "magic strings",
+            "a_repeated_literal_is_only_magic_when_nothing_named_it",
         ),
     ];
 

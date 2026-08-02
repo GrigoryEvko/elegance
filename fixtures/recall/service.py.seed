@@ -91,3 +91,15 @@ async def refresh_cache():
 async def cycle():
     refresh_cache()
     return True
+
+
+def audit_open(evt):
+    record(evt, "cache eviction pending")
+
+
+def audit_close(evt):
+    record(evt, "cache eviction pending")
+
+
+def audit_retry(evt):
+    record(evt, "cache eviction pending")

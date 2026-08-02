@@ -198,6 +198,7 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     ("deploy.sh", "wildcard match", 1.0),
     ("service.py", "repurposed", 1.0),
     ("service.py", "unawaited coroutine", 1.0),
+    ("service.py", "magic strings", 1.0),
     ("worker.rs", "unawaited coroutine", 1.0),
     ("worker.rs", "repurposed", 1.0),
     ("handler.ts", "repurposed", 1.0),

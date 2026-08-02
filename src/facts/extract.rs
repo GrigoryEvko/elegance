@@ -65,6 +65,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         suppressions: Vec::new(),
         spooky_lines: Vec::new(),
         secrets: Vec::new(),
+        magic_strings: Vec::new(),
         test_refs: Vec::new(),
         switch_sigs: Vec::new(),
         record_shapes: Vec::new(),
@@ -92,6 +93,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         import_roots: std::collections::HashSet::new(),
         mentions: std::collections::HashSet::new(),
         stray_calls: Vec::new(),
+        string_rows: std::collections::HashMap::new(),
         facts: &mut facts,
     };
     let root = ex.walk(
@@ -125,9 +127,11 @@ fn finish(ex: Extractor, blank: &Rows, mass: u32) {
         mentions,
         tokens,
         stray_calls,
+        string_rows,
         facts,
         ..
     } = ex;
+    facts.magic_strings = repeated_strings(string_rows);
     fingerprint_units(facts, &tokens);
     resolve_unawaited(facts, &stray_calls);
     facts.mentioned = mentions.into_iter().collect();
@@ -418,6 +422,10 @@ struct Extractor<'a> {
     /// discarded: (calling unit, callee name). Resolved after the walk,
     /// when every unit's asyncness is known.
     stray_calls: Vec<(usize, Box<str>)>,
+    /// Repeatable string literals, each with the rows and the UNITS it
+    /// appeared in. A repeat is only visible once the whole file is
+    /// read, so the counting happens after the walk.
+    string_rows: std::collections::HashMap<Box<str>, Vec<(u32, usize)>>,
     facts: &'a mut FileFacts,
 }
 
@@ -513,7 +521,10 @@ impl Extractor<'_> {
             Sem::Match => self.record_switch_sig(node, ctx.unit),
             Sem::Cast => self.facts.units[ctx.unit].casts += 1,
             Sem::Assert => self.record_assert(node, ctx.unit),
-            Sem::StrLit => self.record_secret(node, ctx.unit),
+            Sem::StrLit => {
+                self.record_secret(node, ctx.unit);
+                self.record_repeatable_string(node, ctx.unit);
+            }
             _ => {}
         }
         self.record_ctrl(node, sem, ctx);
@@ -1187,6 +1198,48 @@ impl Extractor<'_> {
         }
     }
 
+    /// A string literal worth naming if it turns up again. Interpolated
+    /// literals are excluded — an f-string or a template is a
+    /// computation, and two of them sharing text are not one constant.
+    /// So are literals in constant position, which is the remedy: a
+    /// `const KIND = "user"` is the name, not the smell.
+    fn record_repeatable_string(&mut self, node: Node, unit_idx: usize) {
+        if self.facts.is_test_file || self.facts.units[unit_idx].is_test {
+            return;
+        }
+        // Interpolation is named by the grammar, not implied by having
+        // children: a plain Python string is already three nodes
+        // (start, content, end), so "has children" excluded every
+        // literal in the language.
+        let mut cursor = node.walk();
+        let interpolated = node.named_children(&mut cursor).any(|c| {
+            matches!(
+                c.kind(),
+                "interpolation" | "template_substitution" | "string_interpolation"
+            )
+        });
+        if interpolated {
+            return;
+        }
+        let Ok(raw) = node.utf8_text(self.src) else {
+            return;
+        };
+        // Strip a prefix sigil (b, r, f, rb) BEFORE the quotes — a
+        // blanket trim of those letters ate its way into the content
+        // and turned "buffer" into uffe.
+        let text = raw
+            .trim_start_matches(|c: char| c.is_ascii_alphabetic())
+            .trim_matches(['"', '\'', '`']);
+        if text.len() < MIN_MAGIC_STRING || !self.is_unnamed_literal(node) {
+            return;
+        }
+        let row = node.start_position().row as u32 + 1;
+        self.string_rows
+            .entry(text.into())
+            .or_default()
+            .push((row, unit_idx));
+    }
+
     /// Names that promise a credential. A literal bound to one of these
     /// is in the artifact and in the history, so rotating it is a
     /// release rather than a config change.
@@ -1238,7 +1291,7 @@ impl Extractor<'_> {
         let mut anc = node.parent();
         for _ in 0..4 {
             let Some(a) = anc else { break };
-            if self.pack.assign_kinds.contains(&a.kind())
+            if self.pack.binds_value(a.kind())
                 || a.kind().contains("parameter")
                 || a.kind() == "pair"
             {
@@ -1304,9 +1357,14 @@ impl Extractor<'_> {
             node.utf8_text(self.src),
             Ok("0" | "1" | "2" | "0.0" | "1.0" | "0.5" | "10" | "100" | "100.0")
         );
-        if trivial {
-            return false;
-        }
+        !trivial && self.is_unnamed_literal(node)
+    }
+
+    /// Is this literal unnamed — outside const definitions, parameter
+    /// defaults, indexing, types and patterns (Kernighan & Plauger;
+    /// McConnell ch. 12)? A SCREAMING binding IS the name, and is the
+    /// remedy both literal metrics ask for.
+    fn is_unnamed_literal(&self, node: Node) -> bool {
         let screaming = |text: &str| {
             text.chars().any(|c| c.is_ascii_alphabetic())
                 && !text.chars().any(|c| c.is_ascii_lowercase())
@@ -1315,21 +1373,24 @@ impl Extractor<'_> {
         for _ in 0..8 {
             let Some(a) = anc else { break };
             let kind = a.kind();
-            if self.pack.magic_exempt.contains(&kind) {
+            if self.pack.exempts_literal(kind) {
                 return false;
             }
-            if self.pack.assign_kinds.contains(&kind) {
-                let bound = a
-                    .child_by_field_name("left")
-                    .or_else(|| a.child_by_field_name("name"))
-                    .and_then(|n| n.utf8_text(self.src).ok());
-                if bound.is_some_and(screaming) {
-                    return false;
-                }
+            if self.pack.binds_value(kind) && self.binds_a_screaming_name(a, screaming) {
+                return false;
             }
             anc = a.parent();
         }
         true
+    }
+
+    /// Does this binding site name its value in SCREAMING_CASE? That
+    /// name is the remedy both literal metrics ask for.
+    fn binds_a_screaming_name(&self, site: Node, screaming: impl Fn(&str) -> bool) -> bool {
+        site.child_by_field_name("left")
+            .or_else(|| site.child_by_field_name("name"))
+            .and_then(|n| n.utf8_text(self.src).ok())
+            .is_some_and(screaming)
     }
 
     /// Law of Demeter (Lieberherr 1989): reaching through >=3 consecutive
@@ -1770,6 +1831,40 @@ fn vendor_key(value: &str) -> bool {
                 .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
     }
     false
+}
+
+/// Shorter literals than this are punctuation, flags and format
+/// fragments — `", "`, `"-v"`, `"%s"` — where repetition is not a
+/// missing name. PROVISIONAL: chosen from the gold distribution.
+const MIN_MAGIC_STRING: usize = 8;
+
+/// How many distinct UNITS must write the same literal before the
+/// repetition is a missing constant. Counting occurrences alone
+/// measured data, not logic: gold's worst offenders were a TextMate
+/// grammar repeating `include: '#ever_present_context'` 186 times
+/// inside ONE object literal, and git's CLI tables. A table is
+/// content — the same reason clone detection refuses duplicated data —
+/// while a literal spelled out in three separate functions is a
+/// decision nobody named.
+const MAGIC_STRING_UNITS: usize = 3;
+
+/// Literals written in that many distinct units, reported at the row
+/// of the first — the point where naming it became overdue.
+fn repeated_strings(rows: std::collections::HashMap<Box<str>, Vec<(u32, usize)>>) -> Vec<u32> {
+    let mut out: Vec<u32> = rows
+        .into_values()
+        .filter(|sites| {
+            sites
+                .iter()
+                .map(|(_, unit)| *unit)
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                >= MAGIC_STRING_UNITS
+        })
+        .filter_map(|sites| sites.into_iter().map(|(row, _)| row).min())
+        .collect();
+    out.sort_unstable();
+    out
 }
 
 /// The shortest password a connection string is trusted to carry. Below

@@ -299,6 +299,18 @@ impl Pack {
             .map(|(_, f)| *f)
     }
 
+    /// Does a literal under this kind sit in a position that already
+    /// names it — a const item, a parameter default, an index, a type,
+    /// a pattern?
+    pub fn exempts_literal(&self, kind: &str) -> bool {
+        self.magic_exempt.contains(&kind)
+    }
+
+    /// Is this kind a binding site whose name could name a literal?
+    pub fn binds_value(&self, kind: &str) -> bool {
+        self.assign_kinds.contains(&kind)
+    }
+
     /// Field holding a plain reassignment's target, if this kind is one.
     pub fn reassign_field(&self, kind_id: u16) -> Option<&'static str> {
         self.reassigns
