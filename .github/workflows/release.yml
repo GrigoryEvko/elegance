@@ -1,0 +1,69 @@
+# Binaries for a `v*` tag. The gate in ci.yml decides whether the code
+# is good; this only decides whether it is reachable.
+#
+# Two Linux targets on purpose. The gnu build is faster and links the
+# host libc; the musl build is static, which is what a CI container
+# without a matching glibc actually needs — and CI containers are where
+# a code-quality gate spends its life.
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            name: elegance-x86_64-linux-gnu
+          - target: x86_64-unknown-linux-musl
+            name: elegance-x86_64-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install musl toolchain
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --target ${{ matrix.target }}
+      # Measured, not assumed: strip saves about 4% here (18.4M to
+      # 17.7M), because the bulk is ten tree-sitter grammars' parse
+      # tables rather than debug info. Kept anyway — it costs nothing
+      # and changes nothing a user can observe.
+      - name: Package
+        run: |
+          BIN=target/${{ matrix.target }}/release/elegance
+          strip "$BIN"
+          install -Dm755 "$BIN" "dist/${{ matrix.name }}"
+          ( cd dist && sha256sum "${{ matrix.name }}" > "${{ matrix.name }}.sha256" )
+      # A release binary that measures its own repository is a release
+      # binary that runs. Cheap, and it has to pass its own gate.
+      - name: Smoke test
+        if: endsWith(matrix.target, '-gnu')
+        run: ./dist/${{ matrix.name }} --baseline check .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

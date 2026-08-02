@@ -8,6 +8,20 @@ nothing you have to squint at.
 Parses code with [tree-sitter](https://tree-sitter.github.io/) and reports
 per-function metrics. Written in Rust for speed on large codebases.
 
+## Install
+
+```sh
+# From source — the grammars are C, so a C toolchain is required.
+cargo install --git https://github.com/GrigoryEvko/elegance
+
+# Or a released binary. The musl build is static, which is what a CI
+# container without a matching glibc needs.
+curl -fsSLO https://github.com/GrigoryEvko/elegance/releases/latest/download/elegance-x86_64-linux-musl
+chmod +x elegance-x86_64-linux-musl && sudo mv elegance-x86_64-linux-musl /usr/local/bin/elegance
+```
+
+Each release carries a `.sha256` beside its binary.
+
 ## Usage
 
 ```sh

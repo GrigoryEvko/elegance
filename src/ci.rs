@@ -73,7 +73,7 @@ pub fn shell_of_workflow(source: &str) -> Option<String> {
         }
         if let Some(_key) = block {
             kept |= !body.is_empty();
-            out.push_str(line);
+            out.push_str(&without_expressions(line));
             out.push('\n');
             continue;
         }
@@ -85,7 +85,7 @@ pub fn shell_of_workflow(source: &str) -> Option<String> {
             }
             Some(inline) => {
                 kept = true;
-                out.push_str(inline);
+                out.push_str(&without_expressions(inline));
                 out.push('\n');
             }
             None => out.push('\n'),
@@ -111,6 +111,37 @@ fn run_command(body: &str) -> Option<&str> {
 
 fn indent_of(line: &str) -> usize {
     line.len() - line.trim_start().len()
+}
+
+/// GitHub's `${{ matrix.target }}` is interpolated BEFORE a shell ever
+/// sees the script, and it is not shell — bash reads `${` then `{`
+/// and gives up. Left in, this repository's own release workflow came
+/// back unparseable, and so would every workflow that uses a matrix,
+/// a secret or an env expression, which is most of them.
+///
+/// Each expression becomes an underscore run of the SAME LENGTH: a
+/// valid shell word, so the surrounding script parses, and no column
+/// moves.
+fn without_expressions(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(open) = rest.find("${{") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open..];
+        match after.find("}}") {
+            Some(close) => {
+                out.extend(std::iter::repeat_n('_', close + 2));
+                rest = &after[close + 2..];
+            }
+            // An unterminated expression is not an expression.
+            None => {
+                out.push_str(after);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A Dockerfile's shell: `RUN` bodies in shell form, plus `ENV`/`ARG`
@@ -190,6 +221,28 @@ mod tests {
             f.units[0].repurposed == 0 && f.lines > 0,
             "the module scope is measured"
         );
+    }
+
+    #[test]
+    fn a_github_expression_is_not_shell_and_must_not_break_the_parse() {
+        // `${{ }}` is interpolated before a shell exists. Left in, it
+        // makes the script unparseable — this repository's own release
+        // workflow was low-confidence until this landed, and so would
+        // be every workflow using a matrix, a secret or an env.
+        let wf = "jobs:\n  b:\n    steps:\n      - run: |\n          BIN=target/${{ matrix.target }}/release/elegance\n          strip \"$BIN\"\n";
+        let shell = shell_of_workflow(wf).expect("has a run block");
+        assert!(!shell.contains("${{"), "the expression is gone");
+        // Same length, so no column moves.
+        assert_eq!(shell.lines().count(), wf.lines().count());
+        assert_eq!(
+            shell.lines().nth(4).unwrap().len(),
+            wf.lines().nth(4).unwrap().len()
+        );
+        // And what is left is shell the pack can read.
+        let pack = crate::lang::Lang::Shell.pack();
+        let mut parser = pack.make_parser();
+        let f = crate::facts::extract(pack, &mut parser, Path::new("ci.yml"), &shell);
+        assert!(!f.low_confidence(), "the script parses now");
     }
 
     #[test]
