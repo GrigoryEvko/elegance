@@ -554,6 +554,14 @@ impl Extractor<'_> {
         if ctx.branched || ctx.sheltered {
             return;
         }
+        // A class body declares ATTRIBUTES OF A TYPE, and a type body
+        // opens no unit of its own, so every class in a file shares the
+        // module's live map. Without this, click's `name = "integer"`
+        // and `name = "boolean"` — attributes of two different classes —
+        // read as one rewriting the other, ten times over in one file.
+        if self.enclosing_scope_is_class(node) {
+            return;
+        }
         let Some(target) = single_reassign_target(self.pack, node, field) else {
             return;
         };

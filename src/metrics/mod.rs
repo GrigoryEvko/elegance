@@ -683,6 +683,15 @@ fn unit_metrics(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32,
     if !u.is_test && !facts.is_test_file {
         f(MAGIC_NUMBERS, u.magic_numbers as f32, u.line, &u.qualname);
     }
+    // A file's top level is code too, and in shell it is the WHOLE
+    // program: a provisioning script that sets REGION at line 40 and
+    // resets it at line 300 deploys to the wrong place, and that was
+    // invisible while this metric only spoke inside functions. Module
+    // scope has no parameters and closes no handlers, so it reaches
+    // none of the other unit_shape metrics — this one it does.
+    if u.is_module && !u.is_test && !facts.is_test_file {
+        f(REPURPOSED, u.repurposed as f32, u.line, &u.qualname);
+    }
     if !u.is_module {
         unit_shape(u, facts, f);
         names_and_contracts(u, cog, f);
@@ -1793,6 +1802,34 @@ mod tests {
     }
 
     #[test]
+    fn a_types_own_attributes_are_not_rewrites_of_each_other() {
+        // A class body declares attributes OF A TYPE, and a type body
+        // opens no unit, so every class in a file shares the module's
+        // live map. click's `name = "integer"` and `name = "boolean"`
+        // are two classes' own attributes, not one rewriting the other
+        // — ten such pairs in one file before this landed.
+        assert_eq!(
+            repurposed(
+                Lang::Python,
+                "a.py",
+                "class IntType:\n    name = \"integer\"\n\nclass BoolType:\n    name = \"boolean\"\n"
+            ),
+            0,
+            "same attribute name, different types"
+        );
+        // A method body is a scope of its own, so the rule stops there
+        // and an ordinary rewrite inside one still fires.
+        assert_eq!(
+            repurposed(
+                Lang::Python,
+                "a.py",
+                "class T:\n    def run(self):\n        v = first()\n        emit(v)\n        v = second()\n        return v\n"
+            ),
+            1
+        );
+    }
+
+    #[test]
     fn a_declaration_is_not_a_rewrite_however_the_grammar_spells_it() {
         // Zig spells a declaration and a write with the SAME node kind,
         // so POSITION decides: a fresh binding states `var` or `const`
@@ -1857,6 +1894,17 @@ mod tests {
                 "deploy() {\n  local region=\"eu\"\n  push \"$region\"\n  region=\"us\"\n  push \"$region\"\n}\n"
             ),
             1
+        );
+        // And at a script's TOP LEVEL, which is the whole program in
+        // shell and where a reset region deploys to the wrong place.
+        assert_eq!(
+            repurposed(
+                Lang::Shell,
+                "deploy.sh",
+                "REGION=\"us-east-1\"\napply \"$REGION\"\nREGION=\"eu-north-1\"\napply \"$REGION\"\n"
+            ),
+            1,
+            "a script IS its module scope"
         );
     }
 
