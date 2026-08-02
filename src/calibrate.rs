@@ -80,15 +80,21 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
     );
 
     let declared = declares_languages(roots);
+    // `of`, not `from_path`: a C++ header is a `.h`, and pooling it into
+    // the `[c]` section would calibrate one language on another's code.
+    // Partitioned ONCE, because `of` reads a C-family file to decide its
+    // dialect, and deciding inside a per-language filter read each of
+    // them twelve times over — 27,000 reads of musl alone.
+    let mut by_lang: Vec<Vec<PathBuf>> = vec![Vec::new(); LANGS.len()];
+    for path in &files {
+        if let Some(lang) = Lang::of(path) {
+            by_lang[lang as usize].push(path.clone());
+        }
+    }
     for lang in LANGS {
-        // `of`, not `from_path`: a C++ header is a `.h`, and pooling it
-        // into the `[c]` section would calibrate one language on
-        // another's code.
-        let subset: Vec<PathBuf> = files
-            .iter()
-            .filter(|p| Lang::of(p) == Some(lang))
+        let subset: Vec<PathBuf> = std::mem::take(&mut by_lang[lang as usize])
+            .into_iter()
             .filter(|p| scoped(roots, p, lang, declared))
-            .cloned()
             .collect();
         if subset.is_empty() {
             continue;

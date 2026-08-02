@@ -237,13 +237,13 @@
 
 [cu]
 "cognitive" = { hi = 55.0 }
-"cyclomatic" = { hi = 31.0 }
+"cyclomatic" = { hi = 30.0 }
 "depth" = { hi = 5.0 }
-"length" = { hi = 247.0 }
+"length" = { hi = 249.0 }
 "params" = { hi = 15.0 }
 "expr depth" = { hi = 16.0 }
 "demeter" = { hi = 2.0 }
-"live span" = { hi = 196.0 }
+"live span" = { hi = 197.0 }
 "magic numbers" = { hi = 30.0 }
 "comment ratio" = { lo = 0.08, hi = 0.58 }
 "loose types" = { hi = 2.0 }

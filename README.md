@@ -476,7 +476,7 @@ what the hourglass was built to buy.
 
 CUDA is not C++ statistically, however much it is syntactically: its
 gold reads params p99 = 15 against C++'s 5, magic numbers 30 against 10,
-and length 247 against 115. A kernel really does take fifteen arguments
+and length 249 against 115. A kernel really does take fifteen arguments
 and really is full of tile sizes, and borrowing C++'s budgets would have
 flagged nearly every one.
 

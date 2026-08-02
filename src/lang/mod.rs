@@ -591,9 +591,20 @@ fn expectish(name: &str) -> bool {
 
 /// The execution-space qualifiers, which are CUDA and are nothing else.
 /// Judged at token boundaries rather than as substrings, so a name like
-/// `my__device__id` cannot vote. Validated the same way the C++ rule
-/// was: 0 of 4,588 headers across the C and C++ gold corpora match, and
-/// 15 of flash-attention's and 76 of cutlass's do.
+/// `my__device__id` cannot vote — and never on a comment line, because
+/// "never call `__device__` functions from this translation unit" is a
+/// sentence a HOST file writes about the boundary it sits on. The first
+/// version skipped that guard and a comment mention flipped a plain
+/// C++ file into the `[cu]` budget section; the C++ rule below was
+/// line-anchored against exactly this and the asymmetry was the bug.
+/// A qualifier inside a string literal still votes (a jitify-style
+/// host file embedding kernel SOURCE reads as CUDA), which is accepted:
+/// the grammar is a superset, so only the budget section moves.
+///
+/// Validated the same way the C++ rule was: 0 of 4,588 headers across
+/// the C and C++ gold corpora match, and 15 of flash-attention's and
+/// 76 of cutlass's do — figures unchanged by the comment guard,
+/// because a real qualifier is a declaration, not a remark.
 fn looks_like_cuda(source: &str) -> bool {
     const MARKERS: [&str; 5] = [
         "__global__",
@@ -603,8 +614,17 @@ fn looks_like_cuda(source: &str) -> bool {
         "__host__",
     ];
     source
-        .split(|c: char| !identifierish(c))
+        .lines()
+        .filter(|line| !commentish(line))
+        .flat_map(|line| line.split(|c: char| !identifierish(c)))
         .any(|token| MARKERS.contains(&token))
+}
+
+/// A line that reads as commentary: `//`, a block opener, or the `*`
+/// continuation of one.
+fn commentish(line: &str) -> bool {
+    let head = line.trim_start();
+    head.starts_with("//") || head.starts_with('*') || head.starts_with("/*")
 }
 
 /// A character an identifier may contain, so its absence ends a token.
@@ -1708,6 +1728,26 @@ let classify items limit =
             assert_eq!(Lang::of_source(path, "namespace x {}\n"), Some(want));
             assert_eq!(Lang::from_path(path), Some(want));
         }
+        // CUDA goes through the same reader, and a comment mention must
+        // not vote: "never call __device__ code from here" is a sentence
+        // a HOST file writes about the boundary it sits on. The first
+        // version of the sniff read it as a kernel.
+        assert_eq!(
+            Lang::of_source(
+                std::path::Path::new("disp.cpp"),
+                "// never call __device__ functions from this file\nnamespace d { void route(); }\n",
+            ),
+            Some(Lang::Cpp),
+            "a comment about CUDA is not CUDA"
+        );
+        assert_eq!(
+            Lang::of_source(
+                std::path::Path::new("step.h"),
+                "__global__ void step(float* xs, int n);\n",
+            ),
+            Some(Lang::Cuda),
+            "a kernel declaration in a header is — flash-attention's launch templates live in .h"
+        );
     }
 
     #[test]

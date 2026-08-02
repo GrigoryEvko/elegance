@@ -184,6 +184,9 @@ pub fn pack(dialect: Dialect) -> Pack {
                 || p.contains("/tests/")
                 || p.ends_with("_test.cc")
                 || p.ends_with("_test.cpp")
+                // The pack serves both dialects, and a CUDA test file
+                // spells the same convention with its own extension.
+                || p.ends_with("_test.cu")
                 || p.ends_with("_unittest.cc")
         },
         asserty: |call, src| callee_name(call, src).is_some_and(is_an_assertion),

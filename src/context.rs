@@ -43,16 +43,21 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
     // Percentiles must be per language or the table lies: a repository's
     // Python p90 says nothing about how to write its Rust. One scan per
     // language present — this mode runs once, not per commit.
+    // One dialect decision per file — `of` reads C-family files to
+    // decide, so deciding inside a per-language filter re-read them
+    // once per language present.
+    let mut by_lang: Vec<Vec<PathBuf>> = vec![Vec::new(); LANGS.len()];
+    for path in &files {
+        if let Some(lang) = Lang::of(path) {
+            by_lang[lang as usize].push(path.clone());
+        }
+    }
     let per_lang: Vec<(Lang, Agg)> = LANGS
         .iter()
         .copied()
         .filter(|l| whole.files_of(*l) > 0)
         .map(|lang| {
-            let subset: Vec<PathBuf> = files
-                .iter()
-                .filter(|p| Lang::of(p) == Some(lang))
-                .cloned()
-                .collect();
+            let subset = std::mem::take(&mut by_lang[lang as usize]);
             (
                 lang,
                 crate::scan(&subset, crate::config::Layers::flat(budgets), false),

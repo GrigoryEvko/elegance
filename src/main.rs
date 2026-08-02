@@ -486,10 +486,16 @@ fn hook(root: &std::path::Path, install: bool, fail_on: u8) -> Result<(), Box<dy
 
 /// Print every parse ERROR/MISSING location with source context: the pack
 /// developer's view of what a grammar cannot digest.
+///
+/// Reads the file the way the SCAN reads it — `measurable`, not the
+/// extension — or the tool debugs a parse the scan never ran: a C++
+/// header went through the C grammar here while the report counted its
+/// errors under C++, and a container was "unsupported" outright.
 fn debug_errors(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
     use std::io::Write;
-    let lang = Lang::from_path(path).ok_or("unsupported file type")?;
-    let source = std::fs::read_to_string(path)?;
+    let raw = std::fs::read_to_string(path)?;
+    let (lang, text) = measurable(path, &raw).ok_or("unsupported file type")?;
+    let source = text.into_owned();
     let lines: Vec<&str> = source.lines().collect();
     // Pack drift first: names the grammar no longer knows silently zero
     // whatever metric depended on them.

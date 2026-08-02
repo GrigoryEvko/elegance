@@ -1259,6 +1259,28 @@ mod tests {
     }
 
     #[test]
+    fn the_readme_cuda_numbers_cannot_drift_either() {
+        // This paragraph went stale within a DAY of being written: a
+        // two-point [cu] length move left the prose quoting 247 against
+        // a calibration saying 249. Unpinned quoted numbers are exactly
+        // the failure the drift tests exist for, so it gets its own.
+        use crate::lang::Lang;
+        let readme = include_str!("../../README.md").replace('\n', " ");
+        let cal = LangBudgets::calibrated();
+        let hi = |lang: Lang, m: usize| cal.for_lang(lang).0[m].1.expect("calibrated");
+        let cu = format!(
+            "params p99 = {:.0} against C++'s {:.0}, magic numbers {:.0} against {:.0}, and length {:.0} against {:.0}",
+            hi(Lang::Cuda, PARAMS),
+            hi(Lang::Cpp, PARAMS),
+            hi(Lang::Cuda, MAGIC_NUMBERS),
+            hi(Lang::Cpp, MAGIC_NUMBERS),
+            hi(Lang::Cuda, LENGTH),
+            hi(Lang::Cpp, LENGTH),
+        );
+        assert!(readme.contains(&cu), "README drifted: {cu:?} missing");
+    }
+
+    #[test]
     fn baked_calibration_actually_loads() {
         // calibrated() silently falls back to defaults on a parse failure;
         // this pins that the compiled-in snapshot really was applied.
