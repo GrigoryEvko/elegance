@@ -289,13 +289,134 @@ name = "containers"
 url = "https://github.com/c-cube/ocaml-containers"
 sha = "4948d74e45994304e3dda764f6616c7f6988c493"
 
-# --- cpp: fetched for a pack that does not exist yet, so the corpus is not
-# chosen after the fact to suit it.
+# --- cpp: fmt was fetched for a pack that did not exist yet, so the corpus
+# was not chosen after the fact to suit it. The other four were chosen on one
+# stated axis — small, hand-made, and MODERN — because a C++ budget derived
+# from 1990s C-with-classes describes a language nobody is choosing to write
+# today. Every candidate was measured before it was accepted or rejected.
+#
+# REJECTED, each with the measurement:
+#   mp-units  -- 124 of 228 files unreadable (54%). C++20 modules and
+#     concept-heavy declarations defeat the grammar. The best-designed
+#     candidate on the list and the least measurable one; that is the
+#     tool's limit, not the library's fault, and it is recorded here
+#     rather than hidden by quietly dropping the repo.
+#   glaze     -- excellent parse health (6.6%) but 261k lines, more than
+#     the four kept repos put together. C++23 and admired; rejected only
+#     for the esbuild reason, and the first candidate to reconsider when
+#     the section can carry the weight.
+#   abseil, nlohmann/json, spdlog, boost-ext/sml -- big, amalgamated, or
+#     vendoring another entry (spdlog bundles fmt).
+#   leveldb, re2 -- pristine and Google-clean, and the reason they are
+#     absent is the brief: C++11 with raw loops is not what this section
+#     is meant to describe.
+#
+# The five libraries above are all header-only and generic, which would
+# have made these budgets a description of ONE dialect. kakoune and mold
+# are here to answer that: both are real applications written by one
+# hand in modern C++, and both parse at 99%, the best figures in this
+# whole corpus. They cost cognitive p99 19 -> 30 and length 105 -> 113,
+# which is the honest news that an application branches harder than a
+# generic library. For scale, the esbuild entry was rejected at 5x.
+#
+# The compiled [cpp] budgets read 32 and 117 rather than 30 and 113,
+# and the gap is 49 incidental C++ files living in checkouts fetched for
+# other languages: vscode 23, ghostty 12, dune 11, curl 2, git 1. Test
+# fixtures and interop shims, nobody's chosen style, and they loosen the
+# section by 7% and 3.5%. Recorded rather than removed -- calibration
+# partitions the whole corpus by language and has no per-repo language
+# filter, and inventing one to move two points would be the wrong trade.
+#
+# REJECTED among applications, again on measurement:
+#   btop      -- cognitive p99 230 and length p99 303, against 38 and 91
+#     for kakoune. The esbuild shape exactly: one repo would have set
+#     the language's budget by itself.
+#   Hyprland  -- 6,370 units, which is 40% of the section, and 152k
+#     lines. Rejected for grpc-go's reason, not for its code.
+#   Stockfish -- 3% unreadable and famously tight, but a chess engine is
+#     bit-twiddling tuned past the point of being a model for anything
+#     else. Kept in mind, not kept in.
+#
+# WHAT ADDING THIS SECTION DID TO EVERY OTHER LANGUAGE, since a C++ entry
+# has no business moving a Python budget and two of them tried to. After
+# the two prunes above, nine budgets outside [cpp] moved and every one
+# of them TIGHTENED or shifted by a single point:
+#   py  magic numbers 11->9, magic strings 3->2, comment ratio hi
+#       .50->.51, public docs .34->.33   (17 incidental files: conf.py,
+#       setup.py, gdb pretty-printers -- 2.5% of a 676-file corpus)
+#   sh  cognitive 44->42, cyclomatic 36->35, live span 96->92, comment
+#       ratio hi .57->.55, public docs .26->.25   (4 build scripts)
+# Nothing loosened, JavaScript came back to exactly where it was, and
+# [c] did not move at all -- which is also the evidence that the `.h`
+# dialect rule has no false positives on the C corpus, since a single
+# musl header misread as C++ would have shown up right here.
 [[repo]]
 lang = "cpp"
 name = "fmt"
 url = "https://github.com/fmtlib/fmt"
 sha = "e2243a6a7f4a8c09e9233a253f3d1f71e45d8cef"
+
+[[repo]]
+lang = "cpp"
+name = "immer"
+url = "https://github.com/arximboldi/immer"
+sha = "bd4fc749b97dfa2b66a8f3de00bbf234db4856ef"
+# lodash, mori, immutable.min and platform.js, vendored whole so the
+# JS benchmark has something to race against. Nobody's style, one of
+# them minified, and they moved JavaScript's params budget from 4 to 6
+# and its depth from 3 to 4 — a C++ entry loosening a JS budget, which
+# is the trap the head of this file describes, sprung from the one
+# direction it did not anticipate.
+prune = "extra/js/lib"
+
+[[repo]]
+lang = "cpp"
+name = "flux"
+url = "https://github.com/tcbrindle/flux"
+sha = "f924d892ca3d7b812a5c04ddd858b4f6ea3545dc"
+# A generated amalgamation of include/, so keeping it measures the
+# library twice. It parses to zero units anyway, which is its own small
+# finding: 15k lines in one file is past what the grammar will carry.
+prune = "single_include"
+
+[[repo]]
+lang = "cpp"
+name = "ctre"
+url = "https://github.com/hanickadot/compile-time-regular-expressions"
+sha = "0bb96c12f89033461ae2d2b8e16bab7592515c31"
+# Same amalgamation, and here it is not harmless: single-header/ parses
+# to 1,418 units against include/'s 694, so leaving it in would weight
+# the same code twice and give ctre double the say it earned.
+prune = "single-header"
+
+[[repo]]
+lang = "cpp"
+name = "magic_enum"
+url = "https://github.com/Neargye/magic_enum"
+sha = "61173726dbdfb0ea2ce87f0c474e89dea2690a5a"
+
+[[repo]]
+lang = "cpp"
+name = "kakoune"
+url = "https://github.com/mawww/kakoune"
+sha = "324741f747d0d729499fe217d200d8a91f43ca09"
+
+[[repo]]
+lang = "cpp"
+name = "mold"
+url = "https://github.com/rui314/mold"
+sha = "8aa942972859644a7e3f74ba288fa5c660b68637"
+# third-party/: mimalloc, xxhash, zlib and blake3 vendored whole. Not
+# mold's style, and blake3 would put hand-written assembly in a C++
+# budget.
+#
+# test/: 518 SHELL files and no C++ at all — mold tests a linker by
+# running it, so every case is the same 20-line harness sourcing
+# common.inc with one assertion changed. They parse to zero units, and
+# keeping them would hand one C++ repo 60% of the SHELL corpus. That is
+# grpc-go's rejection and date-fns's rejection at once, arriving through
+# a language section nobody was editing.
+prune = "third-party test"
 
 
 # --- shell: the language that provisions production, and the thinnest

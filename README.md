@@ -364,8 +364,7 @@ written in every supported language must produce identical metrics.
 
 ## Languages
 
-Python, Rust, TypeScript, TSX, Go, JavaScript, Zig, C, OCaml, shell.
-Next: C++.
+Python, Rust, TypeScript, TSX, Go, JavaScript, Zig, C, OCaml, shell, C++.
 
 `.vue` and `.svelte` single-file components are read as what they
 contain. A component is a container, not a language: its `<script>`
@@ -412,6 +411,50 @@ confidence bar and are excluded from metrics, visibly counted in the
 report header. C numbers are floors, not truths, for `.h` tricks.
 `#if`/`#elif`/`#else` count as real branches: conditional compilation is
 control flow the reader must follow.
+
+C++'s gold reads cognitive p99 = 32 and length p99 = 117, against C's 77
+and 201 — less than half the branching and well under two thirds the
+length, for a language that is very nearly a superset of the other.
+Conditional compilation is much of it: `#if` counts as real control
+flow, and the C corpus is musl, lua, redis and curl, where portability
+is spelled in preprocessor branches. RAII is most of the rest, since a
+destructor removes the error-path branch that a C function has to write
+by hand. Within C++ the corpus is honest about itself too: the five
+hand-made modern libraries (fmt, immer, flux, ctre, magic_enum) read 19
+on their own, and adding two applications by one hand each — kakoune and
+mold, which parse at 99%, the best figures anywhere in this corpus —
+takes it to 30. An application branches harder than a header-only
+library, and a C++ budget derived only from libraries would have been a
+budget nobody could meet.
+
+C++ inherits every one of those caveats and adds three decisions. RAII
+kills `unmanaged` here for the reason it is dead in Rust — a destructor
+runs on scope exit, so there is no missing guard to find. A class whose
+methods are ALL pure virtual is what `interface width` counts, because
+that is an interface in everything but keyword. And gtest's
+`TEST(args_test, basic)` is read as the declaration it is: the grammar
+can only see a function called TEST, so the pack composes the name gtest
+itself prints, `args_test.basic`. Judging the case alone read 61% of the
+C++ gold corpus as lazily named — worse than a corpus of notorious code,
+which is how the bug announced itself. Catch2 is the stated limit:
+`TEST_CASE("a pool takes a slot")` puts a string where a parameter
+belongs and does not parse, so Catch2 files declare no tests at all.
+
+**`.h` is decided by its text, and it is the only extension that is.**
+Reading every `.h` as C dropped a third of every C++ repository as
+unparseable — leveldb lost 47 of 56 headers, re2 20 of 23, fmt 23 of 25
+— because headers are where C++ keeps its classes. Reading every `.h` as
+C++ parses at least as well on C too (musl 14% against 15%, redis 3%
+against 2%, curl 9% against 7%) and would then file musl's 655 headers
+under `cpp`, calibrating one language on another's code. So the label
+needs deciding as well as the grammar, and only the text can decide it:
+four line-anchored spellings that are not C (`namespace`, `template<`,
+an access specifier, `class` + a name). Validated before it was written
+— 0 of 1,027 headers from lua, musl, redis and curl match, and 98 of 104
+from fmt, leveldb and re2 do. The six that do not are `c.h` (leveldb's C
+API), `export.h`, `port.h` and `thread_annotations.h`: headers holding
+no C++ at all, where reading them as C is the right answer rather than a
+missed one.
 
 ## Performance
 

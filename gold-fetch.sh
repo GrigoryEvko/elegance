@@ -8,10 +8,13 @@ target="${1:-/tmp/gold}"
 manifest="$(dirname "$0")/gold.toml"
 
 # Parse [[repo]] tables in file order. `prune` is optional and holds one
-# directory to delete after checkout: a subtree that is in the repo but
-# is not the repo's own measurable style — vendored third-party code, or
-# a test suite whose bodies live inside quoted strings the parser cannot
-# enter. Each one is justified where it is declared, in gold.toml.
+# or more space-separated directories to delete after checkout: subtrees
+# that are in the repo but are not the repo's own measurable style —
+# vendored third-party code, a generated amalgamation of the library
+# beside the library, or a test suite whose bodies live inside quoted
+# strings the parser cannot enter. Each one is justified where it is
+# declared, in gold.toml. It stays LAST in the row so that `read` hands
+# it the whole remainder of the line however many entries it holds.
 mapfile -t rows < <(awk -F'"' '
     /^\[\[repo\]\]/ { if (sha != "") print lang, name, url, sha, prune;
                       lang=""; name=""; url=""; sha=""; prune="" }
@@ -33,7 +36,7 @@ for row in "${rows[@]}"; do
     git -C "$dir" remote add origin "$url"
     git -C "$dir" fetch -q --depth 1 origin "$sha"
     git -C "$dir" checkout -q FETCH_HEAD
-    [ -n "$prune" ] && rm -rf "${dir:?}/${prune:?}"
+    for sub in $prune; do rm -rf "${dir:?}/${sub:?}"; done
 done
 
 echo "gold corpus ready in $target"

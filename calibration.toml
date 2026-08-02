@@ -10,9 +10,9 @@
 "params" = { hi = 9.0 }
 "expr depth" = { hi = 11.0 }
 "live span" = { hi = 56.0 }
-"magic numbers" = { hi = 11.0 }
+"magic numbers" = { hi = 9.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.50 }
+"comment ratio" = { lo = 0.00, hi = 0.51 }
 "untyped params" = { hi = 4.0 }
 "loose types" = { hi = 1.0 }
 "casts" = { hi = 1.0 }
@@ -21,10 +21,10 @@
 "abbreviated" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "returns" = { hi = 2.0 }
-"magic strings" = { hi = 3.0 }
+"magic strings" = { hi = 2.0 }
 "cohesion" = { hi = 3.0 }
 "asserts" = { rate = 0.16 }
-"public docs" = { rate = 0.34 }
+"public docs" = { rate = 0.33 }
 
 [rs]
 "cognitive" = { hi = 17.0 }
@@ -206,19 +206,41 @@
 "public docs" = { rate = 0.00 }
 
 [sh]
-"cognitive" = { hi = 44.0 }
-"cyclomatic" = { hi = 36.0 }
+"cognitive" = { hi = 42.0 }
+"cyclomatic" = { hi = 35.0 }
 "depth" = { hi = 4.0 }
 "length" = { hi = 114.0 }
 "expr depth" = { hi = 12.0 }
-"live span" = { hi = 96.0 }
+"live span" = { hi = 92.0 }
 "magic numbers" = { hi = 4.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.57 }
+"comment ratio" = { lo = 0.00, hi = 0.55 }
 "abbreviated" = { hi = 1.0 }
 "wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "repurposed" = { hi = 1.0 }
 "magic strings" = { hi = 2.0 }
 "commented code" = { hi = 1.0 }
-"public docs" = { rate = 0.26 }
+"public docs" = { rate = 0.25 }
+
+[cpp]
+"cognitive" = { hi = 32.0 }
+"cyclomatic" = { hi = 22.0 }
+"depth" = { hi = 4.0 }
+"length" = { hi = 117.0 }
+"params" = { hi = 5.0 }
+"expr depth" = { hi = 14.0 }
+"demeter" = { hi = 1.0 }
+"live span" = { hi = 90.0 }
+"magic numbers" = { hi = 10.0 }
+# gold p05 is zero: the low flank is vacuous by the corpus's verdict
+"comment ratio" = { lo = 0.00, hi = 0.62 }
+"casts" = { hi = 4.0 }
+"confusable" = { hi = 2.0 }
+"terse name" = { hi = 16.0 }
+"abbreviated" = { hi = 1.0 }
+"wildcard match" = { hi = 1.0 }
+"loop depth" = { hi = 2.0 }
+"magic strings" = { hi = 1.0 }
+"asserts" = { rate = 0.16 }
+"public docs" = { rate = 0.07 }
