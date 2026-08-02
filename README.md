@@ -167,6 +167,16 @@ type-hygiene family: `untyped params`, `loose types`, `casts`,
 confesses two responsibilities), `feature envy` (a method living in
 another object's data belongs there).
 
+**Budgets say what they rest on.** A budget printed as `<=33` is
+pinned to a percentile of the gold corpus; one printed as `<=12.`,
+with the trailing dot, rests on the compiled-in default — because the
+corpus held fewer than the 200 samples a percentile needs (Go declares
+29 interfaces in all of gold), because the metric is a *policy* no
+percentile may legitimize, or because its gold p99 was zero. Machine
+output says the same thing in a `budget_source` field. Printing a
+measured budget and a guessed one identically would imply evidence the
+tool does not have.
+
 **Rung 5 — dependency graph and rates.** Reported, never gated: cycle
 mass at file and directory granularity, dependency depth, deletability,
 blast radius, orphans, interface depth (Parnas: hide a lot behind a

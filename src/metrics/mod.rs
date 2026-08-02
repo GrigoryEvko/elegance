@@ -130,6 +130,39 @@ struct CalibEntry {
 /// where a wall of findings would only teach readers to scroll past.
 pub const RATE_METRICS: [usize; 2] = [ASSERTS, PUBLIC_DOCS];
 
+/// Does this budget rest on the gold corpus, or on nothing but the
+/// compiled-in default? Three things put a metric in the second
+/// group, and a reader deserves to tell them apart: the corpus held
+/// fewer than the 200 samples a percentile needs (Go declares 29
+/// interfaces in all of gold), the metric is a POLICY that no
+/// percentile may legitimize, or its gold p99 was zero and pinning it
+/// would gate everything the day extraction improves.
+pub fn is_pinned(lang: crate::lang::Lang, m: usize) -> bool {
+    use std::sync::OnceLock;
+    type Pinned = [[bool; N]; crate::lang::LANGS.len()];
+    static PINNED: OnceLock<Pinned> = OnceLock::new();
+    PINNED.get_or_init(|| {
+        let mut out = [[false; N]; crate::lang::LANGS.len()];
+        let text = include_str!("../../calibration.toml");
+        let Ok(parsed) = toml::from_str::<CalibrationFile>(text) else {
+            return out;
+        };
+        for lang in crate::lang::LANGS {
+            let Some(table) = parsed.0.get(lang.name()) else {
+                continue;
+            };
+            for (name, entry) in table {
+                let slot = METRICS.iter().position(|d| d.name == name);
+                // A `rate` entry records coverage, not a budget.
+                if let Some(m) = slot.filter(|_| entry.lo.is_some() || entry.hi.is_some()) {
+                    out[lang as usize][m] = true;
+                }
+            }
+        }
+        out
+    })[lang as usize][m]
+}
+
 /// Gold's own coverage rate for a rate metric, baked from calibration.
 pub fn gold_rate(lang: crate::lang::Lang, m: usize) -> Option<f32> {
     use std::sync::OnceLock;
@@ -1066,6 +1099,26 @@ mod tests {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
         assert_eq!(N, 54);
+    }
+
+    #[test]
+    fn a_budget_says_whether_the_corpus_or_the_default_set_it() {
+        use crate::lang::Lang;
+        // Pinned: 190k TypeScript units decide this one.
+        assert!(is_pinned(Lang::TypeScript, COGNITIVE));
+        // Default, and the distinction is the whole point: Go declares
+        // 29 interfaces in all of gold, two orders below the sample
+        // floor a percentile needs, so the number comes from this file
+        // rather than from admired code.
+        assert!(!is_pinned(Lang::Go, INTERFACE_WIDTH));
+        assert!(is_pinned(Lang::TypeScript, INTERFACE_WIDTH));
+        // A policy is never pinned — no percentile may legitimize it.
+        for lang in crate::lang::LANGS {
+            assert!(!is_pinned(lang, SECRETS), "{lang:?} pinned a policy");
+        }
+        // A `rate` entry records coverage, not a budget, and must not
+        // read as one.
+        assert!(!is_pinned(Lang::Rust, PUBLIC_DOCS));
     }
 
     #[test]

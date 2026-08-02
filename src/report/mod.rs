@@ -541,9 +541,36 @@ impl Agg {
     }
 
     fn budget_label(&self, m: usize) -> String {
-        match self.uniform_budget(m) {
-            Some(band) => metrics::band_label(m, band),
-            None => "varies".to_string(),
+        let Some(band) = self.uniform_budget(m) else {
+            return "varies".to_string();
+        };
+        // A trailing dot marks a budget resting on nothing but the
+        // compiled default: the corpus was too thin to pin it, or it
+        // is a policy no percentile may legitimize. Printing a pinned
+        // budget and a guessed one identically implies evidence the
+        // tool does not have.
+        let label = metrics::band_label(m, band);
+        match self.budget_is_pinned(m) {
+            true => label,
+            false => format!("{label}."),
+        }
+    }
+
+    /// Does every language present in this run pin this budget to the
+    /// gold corpus? One default among them makes the shown budget a
+    /// default, because that is the weaker claim.
+    fn budget_is_pinned(&self, m: usize) -> bool {
+        LANGS
+            .iter()
+            .filter(|l| self.files_by_lang[**l as usize] > 0)
+            .all(|l| metrics::is_pinned(*l, m))
+    }
+
+    /// What a budget rests on, for machine consumers.
+    pub fn budget_source(&self, m: usize) -> &'static str {
+        match self.budget_is_pinned(m) {
+            true => "pinned",
+            false => "default",
         }
     }
 }
@@ -894,6 +921,11 @@ fn render_distributions(agg: &mut Agg, out: &mut String) {
     let _ = writeln!(
         out,
         "{:<15} r = ladder rung: 0-2 violation (gate), 3-4 suspicion, 5-6 report, 7 tension",
+        ""
+    );
+    let _ = writeln!(
+        out,
+        "{:<15} a budget ending in `.` rests on the compiled default, not on the gold corpus",
         ""
     );
 }

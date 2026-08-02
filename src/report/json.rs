@@ -182,6 +182,11 @@ struct Metric {
     lo: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     hi: Option<f32>,
+    /// `"pinned"` when this budget rests on a percentile of the gold
+    /// corpus, `"default"` when it rests on the compiled-in constant
+    /// because the corpus was too thin, the metric is a policy, or its
+    /// gold p99 was zero.
+    budget_source: &'static str,
     n: usize,
     p50: f32,
     p90: f32,
@@ -320,6 +325,7 @@ fn metric_rows(agg: &mut Agg) -> Vec<Metric> {
             rung: def.rung,
             lo,
             hi,
+            budget_source: agg.budget_source(m),
             n: dist.len(),
             p50: quantile(dist, super::P50),
             p90: quantile(dist, super::P90),
