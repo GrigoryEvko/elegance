@@ -977,6 +977,7 @@ let classify items limit =
         "skipped tests",
         "bool traps",
         "built query",
+        "shelled out",
     ];
 
     /// Pairs that can NEVER fire, each with its reason. Deliberate
@@ -1283,6 +1284,31 @@ let classify items limit =
             Lang::Shell,
             "built query",
             "a heredoc to psql is the idiom, and its body is text this pack never enters",
+        ),
+        (
+            Lang::Rust,
+            "shelled out",
+            "Command is a BUILDER: the -c and the assembled argument are separate calls, and joining them needs data flow",
+        ),
+        (
+            Lang::C,
+            "shelled out",
+            "sprintf fills a buffer and system() reads it two statements later — the same data flow",
+        ),
+        (
+            Lang::Zig,
+            "shelled out",
+            "ChildProcess takes an argv slice; there is no shell-string form to assemble",
+        ),
+        (
+            Lang::OCaml,
+            "shelled out",
+            "the corpus is Base and Dune: no process spawning to judge",
+        ),
+        (
+            Lang::Shell,
+            "shelled out",
+            "the whole language IS the shell; `eval` is already spooky's",
         ),
         (Lang::Shell, "loose types", "no type syntax to be loose in"),
         (

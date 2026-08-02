@@ -50,3 +50,7 @@ func Relocate(node *Node) {
 func Lookup(db *DB, table string) *Rows {
 	return db.Query(fmt.Sprintf("SELECT * FROM %s", table))
 }
+
+func Archive(p string) error {
+	return exec.Command("sh", "-c", fmt.Sprintf("tar czf out.tgz %s", p)).Run()
+}

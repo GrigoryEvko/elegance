@@ -63,6 +63,12 @@ pub struct FileFacts {
     /// vulnerability there is, and the remedy (a parameter marker) is
     /// the shape this deliberately stays silent on.
     pub sql_built: Vec<u32>,
+    /// Lines handing an ASSEMBLED command to a shell. `shell=True`
+    /// with a literal is a style choice; with a value spliced in it is
+    /// the same hole as a built query, at a bigger sink. The remedy —
+    /// an argument LIST, which needs no shell — carries no
+    /// interpolation and is invisible here, as it should be.
+    pub shelled_out: Vec<u32>,
     /// Lines where the text stops predicting the run: eval/exec, computed
     /// attribute access, metaclasses, transmute, mutable defaults.
     pub spooky_lines: Vec<u32>,

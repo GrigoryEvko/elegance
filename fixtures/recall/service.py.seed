@@ -117,3 +117,7 @@ def rebuild(cfg):
 
 def lookup(db, table, ident):
     return db.execute(f"SELECT * FROM {table} WHERE id = 1")
+
+
+def archive(path):
+    subprocess.run(f"tar czf out.tgz {path}", shell=True)

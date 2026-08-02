@@ -66,6 +66,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         spooky_lines: Vec::new(),
         secrets: Vec::new(),
         sql_built: Vec::new(),
+        shelled_out: Vec::new(),
         commented_code: Vec::new(),
         skipped_tests: Vec::new(),
         magic_strings: Vec::new(),
@@ -707,6 +708,7 @@ impl Extractor<'_> {
             self.callees[unit_idx].push(name);
         }
         self.record_call_kind(node, unit_idx);
+        self.check_shelled_command(node, unit_idx);
         self.record_lifetime(node, unit_idx);
         self.record_placement(node, ctx);
         // `t.Skip()` and `it.skip(...)` are calls; `#[ignore]` and a
@@ -1278,6 +1280,69 @@ impl Extractor<'_> {
             .entry(text.into())
             .or_default()
             .push((row, unit_idx));
+    }
+
+    /// A command handed to a SHELL with a value spliced into it. The
+    /// remedy is an argument list, which needs no shell at all and
+    /// carries no interpolation — so, like the built-query check, the
+    /// fix makes this finding disappear rather than suppressing it.
+    ///
+    /// `shell=True` with a LITERAL command is a style choice and stays
+    /// silent: nothing untrusted reaches the parser.
+    fn check_shelled_command(&mut self, call: Node, unit_idx: usize) {
+        if self.facts.is_test_file || self.facts.units[unit_idx].is_test {
+            return;
+        }
+        if !self.reaches_a_shell(call) {
+            return;
+        }
+        // The assembled string may be the argument itself (a template),
+        // or one level down inside a formatting call — Go writes
+        // `exec.Command("sh", "-c", fmt.Sprintf(...))`, where the
+        // interpolation lives in Sprintf's argument, not Command's.
+        // Descend into a CALL only. Go writes `exec.Command("sh", "-c",
+        // fmt.Sprintf(...))`, where the interpolation lives one level
+        // down. Descending into an ARRAY instead would flag the
+        // remedy: vscode's `exec(['stash', 'list', `--format=${F}`])`
+        // passes a list, which reaches no shell at all.
+        let assembled = call_arguments(call).iter().any(|arg| {
+            self.is_assembled_string(*arg)
+                || (self.pack.table_sem(*arg) == Sem::Call
+                    && call_arguments(*arg)
+                        .iter()
+                        .any(|inner| self.is_assembled_string(*inner)))
+        });
+        if assembled {
+            self.facts
+                .shelled_out
+                .push(call.start_position().row as u32 + 1);
+        }
+    }
+
+    /// Is this node a string built from values rather than written?
+    fn is_assembled_string(&self, node: Node) -> bool {
+        self.pack.table_sem(node) == Sem::StrLit
+            && (interpolates(node) || self.inside_a_format_call(node))
+    }
+
+    /// Does this call hand its argument to a shell parser? Either the
+    /// callee is one that always does, or an argument says so —
+    /// `shell=True`, or the `-c` that turns any shell into an
+    /// interpreter of whatever follows.
+    fn reaches_a_shell(&self, call: Node) -> bool {
+        let always = matches!(
+            self.callee_trailing_name(call),
+            Some("system" | "popen" | "exec" | "execSync" | "spawnSync")
+        );
+        if always {
+            return true;
+        }
+        let args = call_arguments(call);
+        let text = |n: Node| n.utf8_text(self.src).unwrap_or("");
+        args.iter().any(|a| {
+            let t = text(*a);
+            t.contains("shell=True") || t.trim_matches(['"', '\'']) == "-c"
+        })
     }
 
     /// An SQL statement being ASSEMBLED rather than written. A literal

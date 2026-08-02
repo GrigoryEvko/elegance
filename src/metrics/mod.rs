@@ -245,6 +245,7 @@ pub const BOOL_TRAPS: usize = 52;
 pub const COMMENTED_CODE: usize = 53;
 pub const COHESION: usize = 54;
 pub const SQL_BUILT: usize = 55;
+pub const SHELLED_OUT: usize = 56;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -618,6 +619,13 @@ pub const METRICS: &[MetricDef] = &[
     // "select" is prose, and only a string that begins as a statement
     // is one.
     MetricDef { name: "built query",   rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
+    // The same hole at a bigger sink: a command ASSEMBLED and handed
+    // to a shell, where the shell will re-parse whatever was spliced
+    // in. `shell=True` with a literal command is a style choice and
+    // stays silent — nothing untrusted reaches the parser — and the
+    // remedy, an argument LIST, needs no shell and carries no
+    // interpolation, so the fix makes the finding disappear.
+    MetricDef { name: "shelled out",   rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -893,6 +901,8 @@ fn file_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
         );
         let first_sql = facts.sql_built.first().copied().unwrap_or(1);
         f(SQL_BUILT, facts.sql_built.len() as f32, first_sql, "");
+        let first_shell = facts.shelled_out.first().copied().unwrap_or(1);
+        f(SHELLED_OUT, facts.shelled_out.len() as f32, first_shell, "");
         let first_dead = facts.commented_code.first().copied().unwrap_or(1);
         f(
             COMMENTED_CODE,
@@ -1139,10 +1149,11 @@ mod tests {
             (COMMENTED_CODE, "commented code"),
             (COHESION, "cohesion"),
             (SQL_BUILT, "built query"),
+            (SHELLED_OUT, "shelled out"),
         ] {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
-        assert_eq!(N, 56);
+        assert_eq!(N, 57);
     }
 
     #[test]
@@ -2222,6 +2233,84 @@ mod tests {
         );
     }
 
+    fn shelled(lang: Lang, path: &str, src: &str) -> usize {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        extract(pack, &mut parser, Path::new(path), src)
+            .shelled_out
+            .len()
+    }
+
+    #[test]
+    fn an_argument_list_needs_no_shell_and_stays_silent() {
+        // A value spliced into a command the shell will re-parse.
+        assert_eq!(
+            shelled(
+                Lang::Python,
+                "a.py",
+                "def backup(path):\n    subprocess.run(f\"tar czf out.tgz {path}\", shell=True)\n"
+            ),
+            1
+        );
+        assert_eq!(
+            shelled(
+                Lang::Python,
+                "a.py",
+                "def backup(path):\n    os.system(f\"rm -rf {path}\")\n"
+            ),
+            1
+        );
+        assert_eq!(
+            shelled(
+                Lang::TypeScript,
+                "a.ts",
+                "export function backup(p: string) {\n  exec(`tar czf out.tgz ${p}`);\n}\n"
+            ),
+            1
+        );
+        // THE REMEDY: an argument list needs no shell, so nothing is
+        // re-parsed and there is no interpolation to see.
+        assert_eq!(
+            shelled(
+                Lang::Python,
+                "a.py",
+                "def backup(path):\n    subprocess.run([\"tar\", \"czf\", \"out.tgz\", path])\n"
+            ),
+            0
+        );
+        // shell=True with a LITERAL command is a style choice:
+        // nothing untrusted reaches the parser.
+        assert_eq!(
+            shelled(
+                Lang::Python,
+                "a.py",
+                "def sync():\n    subprocess.run(\"git fetch --all\", shell=True)\n"
+            ),
+            0
+        );
+        // execFile takes a program and a list; it never reaches one.
+        assert_eq!(
+            shelled(
+                Lang::TypeScript,
+                "a.ts",
+                "export function backup(p: string) {\n  execFile('tar', ['czf', 'out.tgz', p]);\n}\n"
+            ),
+            0
+        );
+        // A LIST is the remedy even when one element is built, and
+        // even when the method is called exec: vscode's git wrapper
+        // spells it exec(['stash', 'list', `--format=${F}`, '-z']).
+        assert_eq!(
+            shelled(
+                Lang::TypeScript,
+                "a.ts",
+                "export function stashes(g: Git, f: string) {\n  return g.exec(['stash', 'list', `--format=${f}`, '-z']);\n}\n"
+            ),
+            0,
+            "an argument list reaches no shell, whatever the method is called"
+        );
+    }
+
     fn built(lang: Lang, path: &str, src: &str) -> usize {
         let pack = lang.pack();
         let mut parser = pack.make_parser();
@@ -3282,6 +3371,10 @@ mod tests {
         (
             "built query",
             "a_parameterized_query_is_the_remedy_and_stays_silent",
+        ),
+        (
+            "shelled out",
+            "an_argument_list_needs_no_shell_and_stays_silent",
         ),
     ];
 

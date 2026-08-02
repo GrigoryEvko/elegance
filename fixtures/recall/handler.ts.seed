@@ -82,3 +82,7 @@ export function relocate(node: Node): void {
 export function lookup(db: DB, ident: string) {
   return db.query(`SELECT * FROM users WHERE id = ${ident}`);
 }
+
+export function archive(p: string): void {
+  exec(`tar czf out.tgz ${p}`);
+}
