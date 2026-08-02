@@ -31,6 +31,8 @@ pub enum Container {
     Workflow,
     /// A Dockerfile: shell inside `RUN`, assignments inside `ENV`.
     Dockerfile,
+    /// A Jupyter notebook: code cells inside JSON.
+    Notebook,
 }
 
 impl Container {
@@ -41,6 +43,9 @@ impl Container {
             .is_some_and(|e| e == "vue" || e == "svelte")
         {
             return Some(Container::Component);
+        }
+        if path.extension().is_some_and(|e| e == "ipynb") {
+            return Some(Container::Notebook);
         }
         let name = path.file_name()?.to_str()?;
         if name == "Dockerfile" || name.starts_with("Dockerfile.") {

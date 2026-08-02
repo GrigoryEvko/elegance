@@ -376,6 +376,31 @@ that are already true — `--explain`, `--diff` and the baseline need no
 offset bookkeeping and no new grammar. Template expressions
 (`:prop="expr"`) are out of scope in this tier.
 
+**Jupyter notebooks are containers too, at true file lines.** A `.ipynb`
+is JSON, which looks like it rules the padding trick out — and does not,
+because nbformat stores a cell's `source` as an array of lines and every
+writer pretty-prints it one element per line. Each Python line already
+occupies one line of the file, so the code is emitted where it already
+lives and everything downstream keeps working: `--diff` decides what a
+commit touched by intersecting unit line ranges with git's changed
+lines, and a synthesized cell-concatenated buffer would have made every
+notebook finding either always or never in range. Placement is verified
+rather than assumed — cells come from a JSON parse, positions from a
+scan of the raw text, and a disagreement on any line refuses the file
+and counts it as skipped rather than measuring it at invented lines.
+Markdown cells and output blocks stay blank; IPython magics (`%%time`,
+`!pip install`) are blanked because they are not Python and were the
+sole cause of every parse failure across 38 real notebooks.
+
+**Notebooks are not softened, and the measurement is why.** Against
+ordinary Python budgets those 38 read cognitive 4%, cyclomatic 5% and
+depth 3% — the complexity budgets already fit. What is elevated is
+exactly the exploratory-hygiene family: echo comments 57%, untyped
+params 16%, commented-out code 13%, repurposed variables 12%. Those are
+true of the code and are the things worth knowing when a notebook is
+promoted into a pipeline, so nothing is exempted for having a `.ipynb`
+extension. A team that disagrees excludes them in config, visibly.
+
 **GitHub Actions and Dockerfiles are containers too.** A `run:` block
 and a `RUN` line are shell scripts that deploy, build and hold
 credentials, reviewed less than any source file because the file they

@@ -17,6 +17,7 @@ mod lang;
 mod layers;
 mod metrics;
 mod near;
+mod notebook;
 mod ratchet;
 #[cfg(test)]
 mod recall;
@@ -288,6 +289,7 @@ fn measurable<'a>(
         ci::Container::Dockerfile => {
             ci::shell_of_dockerfile(source).map(|text| owned(Lang::Shell, text))
         }
+        ci::Container::Notebook => notebook::code_of(source).map(|(lang, text)| owned(lang, text)),
     }
 }
 
