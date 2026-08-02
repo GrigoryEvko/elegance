@@ -55,3 +55,9 @@ fn relabel() -> u32 {
     label = full();
     label
 }
+
+
+async fn snapshot(path: &str) -> String {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    text
+}

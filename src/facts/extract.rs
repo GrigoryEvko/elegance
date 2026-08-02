@@ -1059,13 +1059,25 @@ impl Extractor<'_> {
         if last.len() > 4 && last.ends_with("Sync") {
             return true;
         }
+        // tokio's own naming: blocking_recv/blocking_send/blocking_lock
+        // exist FOR synchronous contexts and panic inside a runtime.
+        if last.len() > 9 && last.starts_with("blocking_") {
+            return true;
+        }
         match segs.as_slice() {
             // The standard thread module, however deeply qualified.
             [.., "thread", "sleep"] => true,
             // Python's `time.sleep` exactly: `tokio::time::sleep` is
             // three segments and stays exempt.
             ["time", "sleep"] => true,
-            _ => false,
+            // The synchronous filesystem, spelled by its qualifier:
+            // `tokio::fs` names its runtime and stays exempt — the
+            // asyncio.sleep lesson, applied to files. (Bare `fs::read`
+            // after `use std::fs` is undecidable against `use
+            // tokio::fs` without import resolution, and a miss is
+            // cheaper than a guess.)
+            ["std", "fs", ..] => true,
+            _ => self.pack.lang == crate::lang::Lang::Python && python_parks(&segs),
         }
     }
 
@@ -1740,6 +1752,25 @@ fn longest_run(value: &str) -> usize {
         .map(str::len)
         .max()
         .unwrap_or(0)
+}
+
+/// Python's synchronous I/O, judged by QUALIFIED spelling only. The
+/// module-level verbs of `requests` and `httpx` are sync by their own
+/// documentation (the async client is a method on a VARIABLE receiver,
+/// which no name can decide, so it is never judged); `urlopen` names
+/// nothing else in the ecosystem; and a bare `open()` inside an async
+/// unit blocks where `aiofiles.open` (two segments, exempt by shape)
+/// was the remedy.
+fn python_parks(segs: &[&str]) -> bool {
+    const SYNC_VERBS: &[&str] = &[
+        "get", "post", "put", "delete", "head", "patch", "options", "request", "stream",
+    ];
+    match segs {
+        ["requests" | "httpx", verb] => SYNC_VERBS.contains(verb),
+        [.., "urlopen"] => true,
+        ["open"] => true,
+        _ => false,
+    }
 }
 
 /// The single bare identifier a reassignment writes, if that is what

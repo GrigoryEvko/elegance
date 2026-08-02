@@ -1471,14 +1471,15 @@ mod tests {
         );
     }
 
+    fn blocking(lang: Lang, path: &str, src: &str) -> u16 {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        let facts = extract(pack, &mut parser, Path::new(path), src);
+        facts.units.iter().map(|u| u.blocking_calls).sum()
+    }
+
     #[test]
     fn a_blocking_call_only_counts_inside_an_async_unit() {
-        let blocking = |lang: Lang, path: &str, src: &str| {
-            let pack = lang.pack();
-            let mut parser = pack.make_parser();
-            let facts = extract(pack, &mut parser, Path::new(path), src);
-            facts.units.iter().map(|u| u.blocking_calls).sum::<u16>()
-        };
         assert_eq!(
             blocking(
                 Lang::Python,
@@ -1516,16 +1517,82 @@ mod tests {
     }
 
     #[test]
+    fn sync_io_is_judged_by_its_qualifier_never_its_receiver() {
+        // The sync-HTTP ecosystems, by qualified spelling. A client
+        // held in a VARIABLE is never judged: no name decides whether
+        // `client.get` is httpx.Client or httpx.AsyncClient.
+        assert_eq!(
+            blocking(
+                Lang::Python,
+                "a.py",
+                "async def fetch(url):\n    return requests.get(url)\n",
+            ),
+            1
+        );
+        assert_eq!(
+            blocking(
+                Lang::Python,
+                "a.py",
+                "async def fetch(url):\n    resp = await client.get(url)\n    return resp\n",
+            ),
+            0,
+            "a variable receiver is undecidable and stays unjudged"
+        );
+        assert_eq!(
+            blocking(
+                Lang::Python,
+                "a.py",
+                "def fetch(url):\n    return requests.get(url)\n",
+            ),
+            0,
+            "sync code is entitled to sync HTTP"
+        );
+        // Bare open() blocks inside async; aiofiles.open (two
+        // segments) and path.open() (variable receiver) stay silent.
+        assert_eq!(
+            blocking(
+                Lang::Python,
+                "a.py",
+                "async def load(p):\n    f = open(p)\n    g = aiofiles.open(p)\n    h = p.open()\n    return f, g, h\n",
+            ),
+            1
+        );
+        assert_eq!(
+            blocking(
+                Lang::Python,
+                "a.py",
+                "async def load(url):\n    return urllib.request.urlopen(url)\n",
+            ),
+            1,
+            "urlopen names nothing else in the ecosystem"
+        );
+        // Rust: std::fs spells its qualifier; tokio::fs spells ITS
+        // qualifier and is the remedy — the asyncio.sleep lesson.
+        assert_eq!(
+            blocking(
+                Lang::Rust,
+                "a.rs",
+                "async fn load() {\n    let a = std::fs::read_to_string(p);\n    let b = tokio::fs::read_to_string(p).await;\n}\n",
+            ),
+            1
+        );
+        // tokio's blocking_* family exists FOR sync contexts and
+        // panics inside a runtime.
+        assert_eq!(
+            blocking(
+                Lang::Rust,
+                "a.rs",
+                "async fn drain(rx: &mut Receiver<u8>) {\n    let v = rx.blocking_recv();\n    drop(v);\n}\n",
+            ),
+            1
+        );
+    }
+
+    #[test]
     fn the_runtimes_own_sleep_is_the_fix_not_the_bug() {
         // Judging the trailing name alone flagged every `sleep` — which
         // condemned exactly the correct pattern: 26/26 findings on a
         // production FastAPI backend were `await asyncio.sleep(...)`.
-        let blocking = |lang: Lang, path: &str, src: &str| {
-            let pack = lang.pack();
-            let mut parser = pack.make_parser();
-            let facts = extract(pack, &mut parser, Path::new(path), src);
-            facts.units.iter().map(|u| u.blocking_calls).sum::<u16>()
-        };
         assert_eq!(
             blocking(
                 Lang::Python,

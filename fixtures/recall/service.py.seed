@@ -77,3 +77,8 @@ def relabel(row):
     emit(label)
     label = full_name(row)
     return label
+
+
+async def mirror(url):
+    body = requests.get(url)
+    return body.text

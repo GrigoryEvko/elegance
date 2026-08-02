@@ -90,7 +90,7 @@ pub(crate) const FIXTURES: &[(&str, Lang, &str)] = &[
 /// as liveness evidence: a (metric, language) pair seeded here is
 /// PROVEN alive on every test run.
 pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
-    ("service.py", "blocking async", 1.0),
+    ("service.py", "blocking async", 2.0),
     ("service.py", "spooky", 2.0),
     ("service.py", "swallowed", 2.0),
     ("service.py", "broad catch", 1.0),
@@ -110,7 +110,7 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     ("service.py", "lost context", 1.0),
     ("tests/test_service.py", "vacuous asserts", 1.0),
     ("tests/test_service.py", "test asserts", 2.0),
-    ("worker.rs", "blocking async", 1.0),
+    ("worker.rs", "blocking async", 2.0),
     ("worker.rs", "unwraps", 2.0),
     ("worker.rs", "casts", 2.0),
     ("worker.rs", "secrets", 1.0),
