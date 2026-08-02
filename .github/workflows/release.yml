@@ -1,8 +1,15 @@
 # Binaries for a `v*` tag. The gate in ci.yml decides whether the code
 # is good; this only decides whether it is reachable.
 #
-# Two Linux targets on purpose. The gnu build is faster and links the
-# host libc; the musl build is static, which is what a CI container
+# EVERY TARGET BUILDS NATIVELY, on a runner of its own architecture,
+# because half of this binary is C: twelve tree-sitter grammars compiled
+# by `cc`. Cross-compiling those means carrying a cross toolchain per
+# target and discovering its gaps at tag time, when a release is already
+# half-announced. GitHub hands out arm64 Linux, both macOS
+# architectures and arm64 Windows, so the honest build is the plain one.
+#
+# Two Linux libc flavours on purpose. The gnu build is faster and links
+# the host libc; the musl build is static, which is what a CI container
 # without a matching glibc actually needs — and CI containers are where
 # a code-quality gate spends its life.
 name: release
@@ -16,39 +23,89 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
     strategy:
+      # One target's toolchain breaking must not hide the others.
+      fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            name: elegance-x86_64-linux-gnu
-          - target: x86_64-unknown-linux-musl
-            name: elegance-x86_64-linux-musl
+          - name: elegance-x86_64-linux-gnu
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: elegance-x86_64-linux-musl
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - name: elegance-aarch64-linux-gnu
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - name: elegance-aarch64-linux-musl
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - name: elegance-x86_64-macos
+            os: macos-13
+            target: x86_64-apple-darwin
+          - name: elegance-aarch64-macos
+            os: macos-14
+            target: aarch64-apple-darwin
+          - name: elegance-x86_64-windows.exe
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: elegance-aarch64-windows.exe
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
       - name: Install musl toolchain
         if: endsWith(matrix.target, '-musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --target ${{ matrix.target }}
+
       # Measured, not assumed: strip saves about 4% here (18.4M to
-      # 17.7M), because the bulk is ten tree-sitter grammars' parse
-      # tables rather than debug info. Kept anyway — it costs nothing
-      # and changes nothing a user can observe.
+      # 17.7M), because the bulk is the grammars' parse tables rather
+      # than debug info. Kept anyway — it costs nothing and changes
+      # nothing a user can observe, and it is allowed to fail: macOS
+      # strip takes different flags and no release should die over 4%.
       - name: Package
+        shell: bash
         run: |
-          BIN=target/${{ matrix.target }}/release/elegance
-          strip "$BIN"
-          install -Dm755 "$BIN" "dist/${{ matrix.name }}"
-          ( cd dist && sha256sum "${{ matrix.name }}" > "${{ matrix.name }}.sha256" )
+          EXT=""
+          [ "${{ runner.os }}" = "Windows" ] && EXT=".exe"
+          BIN="target/${{ matrix.target }}/release/elegance$EXT"
+          strip "$BIN" || true
+          mkdir -p dist
+          cp "$BIN" "dist/${{ matrix.name }}"
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${{ matrix.name }}" > "${{ matrix.name }}.sha256"
+          else
+            shasum -a 256 "${{ matrix.name }}" > "${{ matrix.name }}.sha256"
+          fi
+
       # A release binary that measures its own repository is a release
-      # binary that runs. Cheap, and it has to pass its own gate.
+      # binary that runs, and every target here is native to its runner,
+      # so every one of them can prove it.
+      #
+      # The ratchet is that proof on unix and a plain scan on Windows:
+      # the baseline records POSIX-shaped paths, and a separator
+      # mismatch would fail a release for a reason that has nothing to
+      # do with whether the binary works.
       - name: Smoke test
-        if: endsWith(matrix.target, '-gnu')
-        run: ./dist/${{ matrix.name }} --baseline check .
+        shell: bash
+        run: |
+          chmod +x "dist/${{ matrix.name }}" || true
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            "./dist/${{ matrix.name }}" --json . > /dev/null
+          else
+            "./dist/${{ matrix.name }}" --baseline check .
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}

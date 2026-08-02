@@ -20,7 +20,29 @@ curl -fsSLO https://github.com/GrigoryEvko/elegance/releases/latest/download/ele
 chmod +x elegance-x86_64-linux-musl && sudo mv elegance-x86_64-linux-musl /usr/local/bin/elegance
 ```
 
-Each release carries a `.sha256` beside its binary.
+Every release carries eight binaries, each built natively on a runner of
+its own architecture rather than cross-compiled, because most of this
+binary is C and a cross toolchain's gaps show up at tag time:
+
+| | Linux (gnu / musl) | macOS | Windows |
+| :--- | :--- | :--- | :--- |
+| **x86_64** | `x86_64-linux-gnu` · `x86_64-linux-musl` | `x86_64-macos` | `x86_64-windows.exe` |
+| **arm64** | `aarch64-linux-gnu` · `aarch64-linux-musl` | `aarch64-macos` | `aarch64-windows.exe` |
+
+Each carries a `.sha256` beside it, and each is smoke-tested by
+measuring this repository before it is published.
+
+## Use it as a Claude Code plugin
+
+`elegance-nudge` reports what an edit introduced, in one line, as it
+happens — advisory, deduplicated per session, silent on clean files.
+
+```
+/plugin marketplace add GrigoryEvko/elegance
+/plugin install elegance-nudge@elegance
+```
+
+See [plugins/elegance-nudge](plugins/elegance-nudge/README.md).
 
 ## Usage
 
