@@ -3,3 +3,5 @@ let classify items limit =
   | [] -> limit
   | [ x ] -> x
   | _ -> failwith "impossible bucket"
+
+let relocate node = move_entry node true false

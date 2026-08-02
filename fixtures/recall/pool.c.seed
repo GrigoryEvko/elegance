@@ -36,3 +36,7 @@ unsigned relabel(struct cfg *cfg) {
     label = full_name(cfg);
     return label;
 }
+
+void relocate(struct node *n) {
+    move_entry(n, true, false);
+}

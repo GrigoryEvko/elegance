@@ -103,3 +103,7 @@ def audit_close(evt):
 
 def audit_retry(evt):
     record(evt, "cache eviction pending")
+
+
+def relocate(node):
+    move_entry(node, True, False)

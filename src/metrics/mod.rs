@@ -208,6 +208,7 @@ pub const UNAWAITED: usize = 48;
 pub const MAGIC_STRINGS: usize = 49;
 pub const SLEEPY_TEST: usize = 50;
 pub const SKIPPED_TESTS: usize = 51;
+pub const BOOL_TRAPS: usize = 52;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -536,6 +537,14 @@ pub const METRICS: &[MetricDef] = &[
     // guarded `t.Skip()` are stated judgment, and the test still runs
     // where it applies.
     MetricDef { name: "skipped tests", rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
+    // `move(x, true, false)` — the CALL-SITE complement of `flag
+    // params`, and the only version that can see a third party's
+    // signature, since the declaration lives in someone else's
+    // repository. Two is the threshold, not one: a lone `force` flag
+    // reads fine, and two is where nothing says which is which and
+    // swapping them still type-checks. A keyword argument is exempt —
+    // naming it at the call site IS the remedy.
+    MetricDef { name: "bool traps",    rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -768,6 +777,12 @@ fn unit_shape(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32, u
                 // violator unguarded was a test body (test_deque 14,
                 // TestFlagCompletion 11, listpackTest 82).
                 f(REPURPOSED, u.repurposed as f32, u.line, &u.qualname);
+                // A table test enumerates the truth table on purpose —
+                // vscode's pickRunningLocation calls its subject 64
+                // times across every boolean combination, which is the
+                // CORRECT way to test two booleans. Same exemption as
+                // magic numbers and unwraps, for the same reason.
+                f(BOOL_TRAPS, u.bool_traps as f32, u.line, &u.qualname);
                 // A test named `test_do_not_block_on_background_tasks`
                 // sleeps inside async on purpose: the blocking IS the
                 // subject. Same exemption as unwraps and magic numbers.
@@ -1030,10 +1045,11 @@ mod tests {
             (MAGIC_STRINGS, "magic strings"),
             (SLEEPY_TEST, "sleepy test"),
             (SKIPPED_TESTS, "skipped tests"),
+            (BOOL_TRAPS, "bool traps"),
         ] {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
-        assert_eq!(N, 52);
+        assert_eq!(N, 53);
     }
 
     #[test]
@@ -2093,6 +2109,59 @@ mod tests {
         );
     }
 
+    fn traps(lang: Lang, path: &str, src: &str) -> u16 {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        let f = extract(pack, &mut parser, Path::new(path), src);
+        f.units.iter().map(|u| u.bool_traps).sum()
+    }
+
+    #[test]
+    fn a_named_argument_is_not_a_trap_however_many_booleans_follow() {
+        // Nothing at the call site says which is which, and swapping
+        // them still type-checks.
+        assert_eq!(
+            traps(
+                Lang::Python,
+                "a.py",
+                "def f():\n    move(node, True, False)\n"
+            ),
+            1
+        );
+        assert_eq!(
+            traps(
+                Lang::TypeScript,
+                "a.ts",
+                "function f() {\n  move(node, true, false);\n}\n"
+            ),
+            1
+        );
+        // One is often a legitimate `force` flag and reads fine.
+        assert_eq!(
+            traps(Lang::Python, "a.py", "def f():\n    move(node, True)\n"),
+            0
+        );
+        // Naming it at the call site IS the remedy this metric asks
+        // for, so the remedy must not read as the disease.
+        assert_eq!(
+            traps(
+                Lang::Python,
+                "a.py",
+                "def f():\n    move(node, strict=True, dry_run=False)\n"
+            ),
+            0
+        );
+        // A variable carries its meaning in its name.
+        assert_eq!(
+            traps(
+                Lang::Python,
+                "a.py",
+                "def f(strict, dry_run):\n    move(node, strict, dry_run)\n"
+            ),
+            0
+        );
+    }
+
     fn skips(lang: Lang, path: &str, src: &str) -> usize {
         let pack = lang.pack();
         let mut parser = pack.make_parser();
@@ -2867,6 +2936,10 @@ mod tests {
         (
             "skipped tests",
             "only_an_unconditional_skip_is_a_suppression",
+        ),
+        (
+            "bool traps",
+            "a_named_argument_is_not_a_trap_however_many_booleans_follow",
         ),
     ];
 

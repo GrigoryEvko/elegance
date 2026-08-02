@@ -189,6 +189,13 @@ pub struct UnitFacts {
     pub is_async: bool,
     /// Calls that park the thread inside an async unit.
     pub blocking_calls: u16,
+    /// Calls carrying two or more BARE boolean literals — `move(x,
+    /// true, false)` — where the reader cannot bind a meaning to
+    /// either. The declaration-side complement of `flag params`, and
+    /// the only version that can see a third party's signature. A
+    /// keyword argument (`strict=True`) is exempt: naming it at the
+    /// call site IS the remedy.
+    pub bool_traps: u16,
     /// Sleeps of ANY flavour. Inside a test the async exemption
     /// reverses: `await asyncio.sleep(...)` is the correct way to
     /// yield an executor and the wrong way to wait for a result, so a

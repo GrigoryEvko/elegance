@@ -42,3 +42,7 @@ func Relabel(cfg *Cfg) string {
 	label = fullName(cfg)
 	return label
 }
+
+func Relocate(node *Node) {
+	moveEntry(node, true, false)
+}

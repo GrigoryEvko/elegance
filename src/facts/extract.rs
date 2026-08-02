@@ -325,6 +325,7 @@ impl UnitFacts {
             is_async: false,
             blocking_calls: 0,
             sleep_calls: 0,
+            bool_traps: 0,
             fingerprints: Vec::new(),
             max_loop_depth: 0,
             allocs_in_loop: 0,
@@ -709,6 +710,7 @@ impl Extractor<'_> {
         let vacuous = asserts && self.asserts_a_literal(node);
         let sleeps = self.is_a_sleep(node);
         let panics = (self.pack.panicky)(node, self.src);
+        let trap = self.bare_boolean_arguments(node) >= MIN_BOOL_TRAP;
         let unit = &self.facts.units[unit_idx];
         let parks = unit.is_async && self.parks_the_thread(node);
         let recursive =
@@ -719,7 +721,19 @@ impl Extractor<'_> {
         unit.vacuous_asserts += vacuous as u16;
         unit.blocking_calls += parks as u16;
         unit.sleep_calls += sleeps as u16;
+        unit.bool_traps += trap as u16;
         unit.self_recursive |= recursive;
+    }
+
+    /// Boolean literals passed POSITIONALLY. A keyword argument names
+    /// its meaning at the call site, which is the remedy this metric
+    /// asks for, so `f(x, strict=True)` is not a trap however many
+    /// booleans follow.
+    fn bare_boolean_arguments(&self, call: Node) -> usize {
+        call_arguments(call)
+            .into_iter()
+            .filter(|a| self.pack.table_sem(*a) == Sem::BoolLit)
+            .count()
     }
 
     /// What a call's SURROUNDINGS make of it: a copy rebuilt on every
@@ -797,32 +811,9 @@ impl Extractor<'_> {
     /// test is green by construction. A literal in SECOND position is
     /// the expected value of a real comparison and is fine.
     fn asserts_a_literal(&self, call: Node) -> bool {
-        let args = call
-            .child_by_field_name("arguments")
-            .or_else(|| call.child_by_field_name("argument"))
-            // Rust macros carry their arguments in a token tree, not a
-            // field: `assert!(true)` is a macro_invocation(token_tree).
-            .or_else(|| {
-                let mut cursor = call.walk();
-                call.named_children(&mut cursor)
-                    .find(|c| matches!(c.kind(), "token_tree" | "arguments"))
-            });
-        let subjects: Vec<Node> = match args {
-            Some(args) => {
-                let mut cursor = args.walk();
-                args.named_children(&mut cursor).collect()
-            }
-            // Zig nests arguments DIRECTLY under the call node; the
-            // function field is the only non-argument child.
-            None => {
-                let func = call.child_by_field_name("function");
-                let mut cursor = call.walk();
-                call.named_children(&mut cursor)
-                    .filter(|n| func.is_none_or(|f| f.id() != n.id()))
-                    .collect()
-            }
+        let [only] = call_arguments(call)[..] else {
+            return false;
         };
-        let [only] = subjects[..] else { return false };
         self.is_literal(only)
     }
 
@@ -1866,6 +1857,53 @@ fn vendor_key(value: &str) -> bool {
     }
     false
 }
+
+/// A call's arguments, however this grammar keeps them. Three shapes:
+/// a fielded list, a Rust macro's token tree, and Zig's — which nests
+/// arguments DIRECTLY under the call, where the function field is the
+/// only child that is not one.
+fn call_arguments<'t>(call: Node<'t>) -> Vec<Node<'t>> {
+    // A fielded list, plus Rust macros' token tree.
+    let list = call.child_by_field_name("arguments").or_else(|| {
+        let mut cursor = call.walk();
+        call.named_children(&mut cursor)
+            .find(|c| matches!(c.kind(), "token_tree" | "arguments"))
+    });
+    if let Some(list) = list {
+        let mut cursor = list.walk();
+        return list.named_children(&mut cursor).collect();
+    }
+    // REPEATED `argument` fields: OCaml spells `f a b c` with one field
+    // per argument, so child_by_field_name would return only the first
+    // and every argument after it would go unseen.
+    let mut cursor = call.walk();
+    let mut fielded = Vec::new();
+    if cursor.goto_first_child() {
+        loop {
+            if cursor.field_name() == Some("argument") {
+                fielded.push(cursor.node());
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    if !fielded.is_empty() {
+        return fielded;
+    }
+    // Zig nests arguments DIRECTLY under the call; the function field
+    // is the only child that is not one.
+    let func = call.child_by_field_name("function");
+    let mut cursor = call.walk();
+    call.named_children(&mut cursor)
+        .filter(|n| func.is_none_or(|f| f.id() != n.id()))
+        .collect()
+}
+
+/// One bare boolean is often a legitimate `force`/`recursive` flag.
+/// Two is where a call site goes dark: nothing at `f(x, true, false)`
+/// says which is which, and swapping them type-checks.
+const MIN_BOOL_TRAP: usize = 2;
 
 /// Shorter literals than this are punctuation, flags and format
 /// fragments — `", "`, `"-v"`, `"%s"` — where repetition is not a

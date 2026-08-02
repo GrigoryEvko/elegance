@@ -975,6 +975,7 @@ let classify items limit =
         "unawaited coroutine",
         "sleepy test",
         "skipped tests",
+        "bool traps",
     ];
 
     /// Pairs that can NEVER fire, each with its reason. Deliberate
@@ -1262,6 +1263,11 @@ let classify items limit =
             "a function takes $@; no keyword surface exists to obscure",
         ),
         (Lang::Shell, "flag params", "no declared parameters at all"),
+        (
+            Lang::Shell,
+            "bool traps",
+            "no boolean literal: every argument is a string",
+        ),
         (Lang::Shell, "loose types", "no type syntax to be loose in"),
         (
             Lang::Shell,

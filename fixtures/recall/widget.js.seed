@@ -59,3 +59,7 @@ test('retry settles', async () => {
 test.skip('backfills the queue', () => {
   assert(backfilled());
 });
+
+export function relocate(node) {
+  moveEntry(node, true, false);
+}

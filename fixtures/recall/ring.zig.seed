@@ -44,3 +44,7 @@ test "retry settles" {
     std.time.sleep(250);
     try expect(settled());
 }
+
+fn relocate(n: *Node) void {
+    moveEntry(n, true, false);
+}
