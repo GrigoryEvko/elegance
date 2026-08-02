@@ -138,6 +138,13 @@ pub struct UnitFacts {
     /// McConnell: keep variables live for as short a time as possible.
     pub max_live_span: u16,
     pub max_live_var: Box<str>,
+    /// Straight-line reassignments whose new value never mentions the
+    /// old — the same name now means something else, and every earlier
+    /// read the reader remembers is silently wrong (Fowler's Split
+    /// Variable). Collecting updates (`x = x + 1`, `s = s.trim()`),
+    /// conditional overrides, and try-sheltered fills are all exempt:
+    /// each of those keeps or guards the meaning.
+    pub repurposed: u16,
     /// Law of Demeter violations: attribute chains reaching >=3 data links
     /// deep (fluent call chains are exempt).
     pub demeter: u16,

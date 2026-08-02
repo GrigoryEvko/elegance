@@ -47,3 +47,11 @@ fn gate(cfg: &Cfg, strict: bool, checked: bool, verbose: bool) -> u32 {
 fn placeholder() {
     assert!(true);
 }
+
+
+fn relabel() -> u32 {
+    let mut label = short();
+    emit(label);
+    label = full();
+    label
+}

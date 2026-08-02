@@ -41,6 +41,9 @@ const DEF_SITES: &[(&str, &str)] = &[
     ("named_expression", "name"),
     ("as_pattern", "alias"),
 ];
+/// `x = ...` again; `x += ...` is its own kind and stays exempt as a
+/// collecting update.
+const REASSIGNS: &[(&str, &str)] = &[("assignment", "left")];
 const ATTR: (&str, &str) = ("attribute", "object");
 
 /// `Any` says "I gave up"; bare `object` says it more politely.
@@ -51,15 +54,18 @@ pub fn pack() -> Pack {
     let kinds: &[&[(&str, Sem)]] = &[KINDS];
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
+    let reassigns = super::def_table(&ts, REASSIGNS);
     let attr = super::attr_site(&ts, ATTR.0, ATTR.1);
     Pack {
         lang: Lang::Python,
         ts,
         kind_names: kinds,
         def_site_names: DEF_SITES,
+        reassign_names: REASSIGNS,
         attr_name: Some(ATTR),
         sems,
         def_sites,
+        reassigns,
         attr,
         scope_sep: ".",
         return_type_field: "return_type",

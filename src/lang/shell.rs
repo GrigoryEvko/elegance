@@ -55,6 +55,9 @@ const DEF_SITES: &[(&str, &str)] = &[
     ("variable_assignment", "name"),
     ("for_statement", "variable"),
 ];
+/// One kind covers `=` and `+=` alike; the check filters by the
+/// spelled operator.
+const REASSIGNS: &[(&str, &str)] = &[("variable_assignment", "name")];
 
 /// How a script pulls in another one. `.` is POSIX; `source` is its
 /// readable spelling.
@@ -65,15 +68,18 @@ pub fn pack() -> Pack {
     let kinds: &[&[(&str, Sem)]] = &[KINDS];
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
+    let reassigns = super::def_table(&ts, REASSIGNS);
     Pack {
         lang: Lang::Shell,
         ts,
         kind_names: kinds,
         def_site_names: DEF_SITES,
+        reassign_names: REASSIGNS,
         // No member access: a shell value is a string, not an object.
         attr_name: None,
         sems,
         def_sites,
+        reassigns,
         attr: None,
         scope_sep: ".",
         // No declared return types, and no operator field on `list`.

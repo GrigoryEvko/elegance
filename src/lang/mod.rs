@@ -164,11 +164,17 @@ pub struct Pack {
     /// TSX grammar has no `type_assertion` node to map.
     kind_names: &'static [&'static [(&'static str, Sem)]],
     def_site_names: &'static [(&'static str, &'static str)],
+    reassign_names: &'static [(&'static str, &'static str)],
     attr_name: Option<(&'static str, &'static str)>,
     sems: Box<[Sem]>,
     /// Local-binding sites resolved to kind ids: (kind, field holding the
     /// bound pattern). Fuels live-span tracking.
     def_sites: Box<[(u16, &'static str)]>,
+    /// Plain-reassignment sites: (kind, field holding the target).
+    /// Reassignment only, never fresh bindings — a Rust `let` shadow or
+    /// a Go `:=` is a NEW binding, and judging those without scopes
+    /// would flag sibling blocks. Fuels the repurposing check.
+    reassigns: Box<[(u16, &'static str)]>,
     /// Member-access node: (kind id, receiver field). Fuels Demeter chains.
     attr: Option<(u16, &'static str)>,
     /// Separator for scope-qualified unit names (`.` or `::`).
@@ -293,6 +299,14 @@ impl Pack {
             .map(|(_, f)| *f)
     }
 
+    /// Field holding a plain reassignment's target, if this kind is one.
+    pub fn reassign_field(&self, kind_id: u16) -> Option<&'static str> {
+        self.reassigns
+            .iter()
+            .find(|(k, _)| *k == kind_id)
+            .map(|(_, f)| *f)
+    }
+
     /// Table classification only; most callers want [`Pack::sem_of`].
     pub fn table_sem(&self, node: Node) -> Sem {
         self.sems
@@ -331,6 +345,10 @@ impl Pack {
             kind(&mut bad, name);
         }
         for (k, f) in self.def_site_names {
+            kind(&mut bad, k);
+            field(&mut bad, f);
+        }
+        for (k, f) in self.reassign_names {
             kind(&mut bad, k);
             field(&mut bad, f);
         }
@@ -935,6 +953,7 @@ let classify items limit =
         "vacuous asserts",
         "test asserts",
         "conditional hook",
+        "repurposed",
     ];
 
     /// Pairs that can NEVER fire, each with its reason. Deliberate
@@ -1260,6 +1279,16 @@ let classify items limit =
         (Lang::C, "conditional hook", "no call-order identity"),
         (Lang::OCaml, "conditional hook", "no call-order identity"),
         (Lang::Shell, "conditional hook", "no call-order identity"),
+        (
+            Lang::Zig,
+            "repurposed",
+            "no def sites record a first binding — the gap that keeps live spans untracked",
+        ),
+        (
+            Lang::OCaml,
+            "repurposed",
+            "a let is a fresh binding and `:=` writes through a ref, never rebinding the name",
+        ),
     ];
 
     #[test]

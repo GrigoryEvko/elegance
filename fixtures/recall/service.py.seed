@@ -70,3 +70,10 @@ def kind_label(v):
             return "b"
         case _:
             return "c"
+
+
+def relabel(row):
+    label = short_name(row)
+    emit(label)
+    label = full_name(row)
+    return label

@@ -28,3 +28,11 @@ static unsigned gate(struct cfg *cfg, bool strict, bool checked) {
         return cfg->fallback.limits.hard;
     }
 }
+
+
+unsigned relabel(struct cfg *cfg) {
+    unsigned label = short_name(cfg);
+    emit(label);
+    label = full_name(cfg);
+    return label;
+}

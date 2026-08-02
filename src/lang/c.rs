@@ -59,6 +59,9 @@ const DEF_SITES: &[(&str, &str)] = &[
     ("init_declarator", "declarator"),
     ("assignment_expression", "left"),
 ];
+/// One kind covers `=` and `+=` alike; the check filters by the
+/// spelled operator.
+const REASSIGNS: &[(&str, &str)] = &[("assignment_expression", "left")];
 const ATTR: (&str, &str) = ("field_expression", "argument");
 
 /// `void *` is C's only escape hatch, and its most load-bearing one.
@@ -69,15 +72,18 @@ pub fn pack() -> Pack {
     let kinds: &[&[(&str, Sem)]] = &[KINDS];
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
+    let reassigns = super::def_table(&ts, REASSIGNS);
     let attr = super::attr_site(&ts, ATTR.0, ATTR.1);
     Pack {
         lang: Lang::C,
         ts,
         kind_names: kinds,
         def_site_names: DEF_SITES,
+        reassign_names: REASSIGNS,
         attr_name: Some(ATTR),
         sems,
         def_sites,
+        reassigns,
         attr,
         scope_sep: ".",
         return_type_field: "type",

@@ -203,6 +203,7 @@ pub const ALLOC_IN_LOOP: usize = 43;
 pub const CONDITIONAL_HOOK: usize = 44;
 pub const RETURN_ARITY: usize = 45;
 pub const INTERFACE_WIDTH: usize = 46;
+pub const REPURPOSED: usize = 47;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -473,6 +474,16 @@ pub const METRICS: &[MetricDef] = &[
     // record, and an embedded interface is composition — the cure for
     // width, never billed as the disease.
     MetricDef { name: "interface width", rung: 3, lo: None, hi: Some(12.0), fmt: Fmt::Int, calib: Calib::P99 },
+    // A straight-line `x = ...` whose new value never mentions the old
+    // gives the same name a SECOND meaning — Fowler's Split Variable —
+    // and every earlier read the reader remembers is silently wrong.
+    // This is the one def-use insight worth having at syntax cost:
+    // what a data-flow graph would call a killed definition, judged
+    // only where no types or aliasing are needed to see it. Exempt by
+    // construction: collecting updates (the value mentions the name),
+    // compound operators, conditional overrides, loop refills, and
+    // try-sheltered fills.
+    MetricDef { name: "repurposed",    rung: 3, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::P99 },
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -689,6 +700,12 @@ fn unit_shape(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32, u
             if !u.is_test {
                 f(UNWRAPS, u.unwraps as f32, u.line, &u.qualname);
                 f(CASTS, u.casts as f32, u.line, &u.qualname);
+                // A test runs scenarios in sequence, refilling one
+                // variable per scenario — the idiom of the genre, not
+                // a second meaning. Gold said so loudly: every top
+                // violator unguarded was a test body (test_deque 14,
+                // TestFlagCompletion 11, listpackTest 82).
+                f(REPURPOSED, u.repurposed as f32, u.line, &u.qualname);
                 // A test named `test_do_not_block_on_background_tasks`
                 // sleeps inside async on purpose: the blocking IS the
                 // subject. Same exemption as unwraps and magic numbers.
@@ -931,10 +948,11 @@ mod tests {
             (CONDITIONAL_HOOK, "conditional hook"),
             (RETURN_ARITY, "returns"),
             (INTERFACE_WIDTH, "interface width"),
+            (REPURPOSED, "repurposed"),
         ] {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
-        assert_eq!(N, 47);
+        assert_eq!(N, 48);
     }
 
     #[test]
@@ -1668,6 +1686,132 @@ mod tests {
         f.units.iter().map(|u| u.return_arity).max().unwrap_or(0)
     }
 
+    fn repurposed(lang: Lang, path: &str, src: &str) -> u16 {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        let f = extract(pack, &mut parser, Path::new(path), src);
+        f.units.iter().map(|u| u.repurposed).sum()
+    }
+
+    #[test]
+    fn repurposing_fires_on_a_straight_line_second_meaning() {
+        // The finding: the same name, a second meaning, in a straight
+        // line — every earlier read the reader remembers is now wrong.
+        assert_eq!(
+            repurposed(
+                Lang::Python,
+                "a.py",
+                "def f(row):\n    total = subtotal(row)\n    report(total)\n    total = grand(row)\n    return total\n"
+            ),
+            1
+        );
+        assert_eq!(
+            repurposed(
+                Lang::Go,
+                "a.go",
+                "func f() int {\n\tx := load()\n\tuse(x)\n\tx = fallback()\n\treturn x\n}\n"
+            ),
+            1
+        );
+        assert_eq!(
+            repurposed(
+                Lang::Rust,
+                "a.rs",
+                "fn f() -> u32 {\n    let mut acc = seed();\n    use_it(acc);\n    acc = other();\n    acc\n}\n"
+            ),
+            1
+        );
+        // Shell: a plain refill fires the same way.
+        assert_eq!(
+            repurposed(
+                Lang::Shell,
+                "a.sh",
+                "deploy() {\n  local region=\"eu\"\n  push \"$region\"\n  region=\"us\"\n  push \"$region\"\n}\n"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn repurposing_spares_collectors_overrides_and_sheltered_fills() {
+        // A collecting update mentions the old value: one meaning,
+        // transformed. Compound operators are the same statement.
+        assert_eq!(
+            repurposed(
+                Lang::Python,
+                "a.py",
+                "def f(items):\n    s = start()\n    s = s.strip()\n    s += tail()\n    return s\n"
+            ),
+            0
+        );
+        // A conditional override CHOOSES a value; the meaning holds.
+        assert_eq!(
+            repurposed(
+                Lang::Python,
+                "a.py",
+                "def f(fast):\n    timeout = DEFAULT\n    if fast:\n        timeout = 1\n    return timeout\n"
+            ),
+            0
+        );
+        // A try-sheltered fill: the old value survives the handler
+        // path, so it is a guard, not a second meaning.
+        assert_eq!(
+            repurposed(
+                Lang::Python,
+                "a.py",
+                "def f(p):\n    data = None\n    try:\n        data = fetch(p)\n    except OSError:\n        log(p)\n    return data\n"
+            ),
+            0
+        );
+        // A loop body refills its variable per iteration by design.
+        assert_eq!(
+            repurposed(
+                Lang::Python,
+                "a.py",
+                "def f(rows):\n    out = None\n    for r in rows:\n        out = judge(r)\n    return out\n"
+            ),
+            0
+        );
+        // A swap writes two targets; state mutation through a member
+        // is not a rebinding; a first assignment has no old meaning.
+        assert_eq!(
+            repurposed(
+                Lang::Go,
+                "a.go",
+                "func f() {\n\ta, b := 1, 2\n\ta, b = b, a\n\tuse(a, b)\n}\n"
+            ),
+            0
+        );
+        assert_eq!(
+            repurposed(
+                Lang::Python,
+                "a.py",
+                "def f(self, v):\n    self.mode = 1\n    self.mode = v\n"
+            ),
+            0
+        );
+        // A shadowing `let` is a NEW binding — Rust's own remedy for
+        // repurposing — and judging it without scopes would flag
+        // sibling blocks.
+        assert_eq!(
+            repurposed(
+                Lang::Rust,
+                "a.rs",
+                "fn f() {\n    let x = 1;\n    use_it(x);\n    let x = other();\n    use_it(x);\n}\n"
+            ),
+            0
+        );
+        // Shell `+=` appends: a collecting update in one token.
+        assert_eq!(
+            repurposed(
+                Lang::Shell,
+                "a.sh",
+                "deploy() {\n  local opts=\"-v\"\n  opts+=\" --force\"\n  push \"$opts\"\n}\n"
+            ),
+            0
+        );
+    }
+
     fn widths(lang: Lang, path: &str, src: &str) -> Vec<(String, u16)> {
         let pack = lang.pack();
         let mut parser = pack.make_parser();
@@ -2035,6 +2179,10 @@ mod tests {
         (
             "interface width",
             "interface_width_counts_methods_not_data_fields_or_embeds",
+        ),
+        (
+            "repurposed",
+            "repurposing_spares_collectors_overrides_and_sheltered_fills",
         ),
     ];
 

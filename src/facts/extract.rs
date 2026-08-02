@@ -101,6 +101,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
             vis: 0,
             loops: 0,
             branched: false,
+            sheltered: false,
             depth: 0,
         },
     );
@@ -283,6 +284,7 @@ impl UnitFacts {
             vacuous_asserts: 0,
             returns: "".into(),
             return_arity: 0,
+            repurposed: 0,
             mut_receiver: false,
             self_recursive: false,
             ctrl: Vec::new(),
@@ -300,6 +302,11 @@ struct Ctx {
     /// Is this node reached only when some condition holds? A hook
     /// call here is a React rules-of-hooks violation.
     branched: bool,
+    /// Inside a `try` body. Not a fork — the body runs unconditionally
+    /// — but an exception may abandon it halfway, so a reassignment
+    /// here leaves the OLD value live on the handler path and cannot
+    /// be judged a repurposing.
+    sheltered: bool,
     /// Nodes between here and the root. `walk` and `scan` are mutually
     /// recursive, so this is also the stack depth they are using.
     depth: u16,
@@ -393,6 +400,7 @@ impl Extractor<'_> {
                         vis: 0,
                         loops: 0,
                         branched: false,
+                        sheltered: false,
                         depth: ctx.depth,
                     },
                     sem,
@@ -407,6 +415,7 @@ impl Extractor<'_> {
                 // a loop of variable length shifts it exactly as a
                 // branch does.
                 inner.branched = ctx.branched || sem.forks_control();
+                inner.sheltered = ctx.sheltered || sem == Sem::Try;
                 if sem == Sem::Loop {
                     inner.loops = ctx.loops.saturating_add(1);
                     let unit = &mut self.facts.units[ctx.unit];
@@ -455,11 +464,86 @@ impl Extractor<'_> {
                 .spooky_lines
                 .push(node.start_position().row as u32 + 1);
         }
+        self.record_bindings(node, ctx);
+        self.check_demeter(node, ctx.unit);
+        self.check_negation(node, ctx.unit);
+    }
+
+    /// Both faces of a binding site. Repurposing first: the live map
+    /// must still describe the world BEFORE this assignment, or a
+    /// first binding reads as its own repurposing.
+    fn record_bindings(&mut self, node: Node, ctx: Ctx) {
+        if let Some(field) = self.pack.reassign_field(node.kind_id()) {
+            self.check_repurposing(node, field, ctx);
+        }
         if let Some(field) = self.pack.def_field(node.kind_id()) {
             self.record_defs(node, field, ctx.unit);
         }
-        self.check_demeter(node, ctx.unit);
-        self.check_negation(node, ctx.unit);
+    }
+
+    /// Fowler's Split Variable, judged where it is decidable: a
+    /// straight-line `x = ...` whose new value never mentions the old
+    /// gives the SAME name a SECOND meaning, and every earlier read
+    /// the reader remembers is now silently wrong. Everything that
+    /// keeps or guards the meaning is exempt — collecting updates
+    /// (`x = x + 1`, `s = s.trim()`), compound operators, conditional
+    /// overrides (a branch chooses a value, not a meaning), loop-body
+    /// refills, and try-sheltered fills whose old value survives on
+    /// the handler path.
+    fn check_repurposing(&mut self, node: Node, field: &str, ctx: Ctx) {
+        if ctx.branched || ctx.sheltered {
+            return;
+        }
+        let Some(target) = single_reassign_target(self.pack, node, field) else {
+            return;
+        };
+        let Ok(name) = target.utf8_text(self.src) else {
+            return;
+        };
+        if name.starts_with('_') || !self.plainly_assigns(node, target) {
+            return;
+        }
+        let row = node.start_position().row as u32 + 1;
+        let prior = self.live[ctx.unit].get(name).and_then(|entry| entry.0);
+        if prior.is_none_or(|def| def >= row) {
+            return;
+        }
+        if self.value_mentions(node, target, name) {
+            return;
+        }
+        self.facts.units[ctx.unit].repurposed += 1;
+    }
+
+    /// Is the operator a bare `=`? Go, C and shell spell `+=` inside
+    /// the same node kind, so the byte after the target decides —
+    /// anything else (`+`, `<`, a type annotation's `:`) keeps the old
+    /// value in the story and is not a repurposing.
+    fn plainly_assigns(&self, node: Node, target: Node) -> bool {
+        let after = self.src[target.end_byte()..node.end_byte()]
+            .iter()
+            .find(|b| !b.is_ascii_whitespace());
+        matches!(after, Some(b'='))
+    }
+
+    /// Does anything OUTSIDE the target subtree mention the name? A
+    /// value built from the old value is a transformation of one
+    /// meaning, not a second meaning.
+    fn value_mentions(&self, node: Node, target: Node, name: &str) -> bool {
+        let mut cursor = node.walk();
+        let mut stack: Vec<Node> = node
+            .named_children(&mut cursor)
+            .filter(|c| c.start_byte() > target.end_byte() || c.end_byte() <= target.start_byte())
+            .collect();
+        while let Some(n) = stack.pop() {
+            if self.pack.table_sem(n) == Sem::Ident && n.utf8_text(self.src) == Ok(name) {
+                return true;
+            }
+            let mut c = n.walk();
+            for child in n.named_children(&mut c) {
+                stack.push(child);
+            }
+        }
+        false
     }
 
     /// The key set of an anonymous record, when it has enough keys to be
@@ -1656,6 +1740,19 @@ fn longest_run(value: &str) -> usize {
         .map(str::len)
         .max()
         .unwrap_or(0)
+}
+
+/// The single bare identifier a reassignment writes, if that is what
+/// it writes. Go wraps the target in an `expression_list`, so one
+/// layer of single-child wrapper is unwrapped; two targets (a swap, a
+/// multi-assign) or a member/index target (`self.x`, `a[i]`) answer
+/// None — those mutate state THROUGH a name rather than rebinding it.
+fn single_reassign_target<'t>(pack: &Pack, node: Node<'t>, field: &str) -> Option<Node<'t>> {
+    let mut target = node.child_by_field_name(field)?;
+    while pack.table_sem(target) != Sem::Ident && target.named_child_count() == 1 {
+        target = target.named_child(0)?;
+    }
+    (pack.table_sem(target) == Sem::Ident).then_some(target)
 }
 
 /// Is this a unit React's hook rules govern — a component (capitalized)

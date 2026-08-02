@@ -41,3 +41,11 @@ export function Panel({ ready }) {
   }
   return null;
 }
+
+
+export function relabel(row) {
+  let label = shortName(row);
+  emit(label);
+  label = fullName(row);
+  return label;
+}

@@ -47,6 +47,8 @@ const DEF_SITES: &[(&str, &str)] = &[
     ("variable_declarator", "name"),
     ("for_in_statement", "left"),
 ];
+/// Same shape as TypeScript: plain `=` only.
+const REASSIGNS: &[(&str, &str)] = &[("assignment_expression", "left")];
 const ATTR: (&str, &str) = ("member_expression", "object");
 
 pub fn pack() -> Pack {
@@ -54,15 +56,18 @@ pub fn pack() -> Pack {
     let kinds: &[&[(&str, Sem)]] = &[KINDS];
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
+    let reassigns = super::def_table(&ts, REASSIGNS);
     let attr = super::attr_site(&ts, ATTR.0, ATTR.1);
     Pack {
         lang: Lang::JavaScript,
         ts,
         kind_names: kinds,
         def_site_names: DEF_SITES,
+        reassign_names: REASSIGNS,
         attr_name: Some(ATTR),
         sems,
         def_sites,
+        reassigns,
         attr,
         scope_sep: ".",
         // JavaScript has no return-type syntax: the name-contract check

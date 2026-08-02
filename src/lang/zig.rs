@@ -67,9 +67,13 @@ pub fn pack() -> Pack {
         ts,
         kind_names: kinds,
         def_site_names: DEF_SITES,
+        // No def sites record a first binding — the same gap that keeps
+        // live spans untracked — so repurposing has nothing to compare.
+        reassign_names: &[],
         attr_name: Some(ATTR),
         sems,
         def_sites,
+        reassigns: Box::new([]),
         attr,
         scope_sep: ".",
         return_type_field: "type",

@@ -53,9 +53,13 @@ pub fn pack() -> Pack {
         ts,
         kind_names: kinds,
         def_site_names: DEF_SITES,
+        // A let is a fresh binding and `:=` writes through a ref cell
+        // without rebinding the name — reassignment does not exist.
+        reassign_names: &[],
         attr_name: None,
         sems,
         def_sites,
+        reassigns: Box::new([]),
         attr: None,
         scope_sep: ".",
         return_type_field: "",

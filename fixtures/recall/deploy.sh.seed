@@ -23,3 +23,11 @@ deploy_region() {
         *) echo "$budget" ;;
     esac
 }
+
+
+relabel() {
+    local label="draft"
+    push "$label"
+    label="final"
+    push "$label"
+}

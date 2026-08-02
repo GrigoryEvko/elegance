@@ -46,6 +46,9 @@ const DEF_SITES: &[(&str, &str)] = &[
     ("var_spec", "name"),
     ("range_clause", "left"),
 ];
+/// `x = ...`; `:=` declares and stays a def site, and the compound
+/// operators are filtered at the check by their spelled operator.
+const REASSIGNS: &[(&str, &str)] = &[("assignment_statement", "left")];
 const ATTR: (&str, &str) = ("selector_expression", "operand");
 
 /// `interface` covers `interface{}` and `[]interface{}` alike once
@@ -57,15 +60,18 @@ pub fn pack() -> Pack {
     let kinds: &[&[(&str, Sem)]] = &[KINDS];
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
+    let reassigns = super::def_table(&ts, REASSIGNS);
     let attr = super::attr_site(&ts, ATTR.0, ATTR.1);
     Pack {
         lang: Lang::Go,
         ts,
         kind_names: kinds,
         def_site_names: DEF_SITES,
+        reassign_names: REASSIGNS,
         attr_name: Some(ATTR),
         sems,
         def_sites,
+        reassigns,
         attr,
         scope_sep: ".",
         return_type_field: "result",

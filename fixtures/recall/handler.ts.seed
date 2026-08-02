@@ -56,3 +56,11 @@ export function fireAndForget() {
 test('placeholder stays green', () => {
   assert(true);
 });
+
+
+export function relabel(row: Row): string {
+  let label = shortName(row);
+  emit(label);
+  label = fullName(row);
+  return label;
+}

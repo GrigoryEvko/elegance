@@ -34,3 +34,11 @@ func Gate(cfg *Cfg, strict bool, checked bool) string {
 	}
 	panic("unreachable state")
 }
+
+
+func Relabel(cfg *Cfg) string {
+	label := shortName(cfg)
+	emit(label)
+	label = fullName(cfg)
+	return label
+}

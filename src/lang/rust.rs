@@ -43,6 +43,10 @@ const DEF_SITES: &[(&str, &str)] = &[
     ("let_declaration", "pattern"),
     ("for_expression", "pattern"),
 ];
+/// `x = ...` on a `mut` binding. A shadowing `let x` is a NEW binding —
+/// the idiomatic remedy, and scope-blind judging would flag sibling
+/// blocks — and `compound_assignment_expr` is a collecting update.
+const REASSIGNS: &[(&str, &str)] = &[("assignment_expression", "left")];
 const ATTR: (&str, &str) = ("field_expression", "value");
 
 pub fn pack() -> Pack {
@@ -50,15 +54,18 @@ pub fn pack() -> Pack {
     let kinds: &[&[(&str, Sem)]] = &[KINDS];
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
+    let reassigns = super::def_table(&ts, REASSIGNS);
     let attr = super::attr_site(&ts, ATTR.0, ATTR.1);
     Pack {
         lang: Lang::Rust,
         ts,
         kind_names: kinds,
         def_site_names: DEF_SITES,
+        reassign_names: REASSIGNS,
         attr_name: Some(ATTR),
         sems,
         def_sites,
+        reassigns,
         attr,
         scope_sep: "::",
         return_type_field: "return_type",
