@@ -279,6 +279,17 @@ that are already true — `--explain`, `--diff` and the baseline need no
 offset bookkeeping and no new grammar. Template expressions
 (`:prop="expr"`) are out of scope in this tier.
 
+**GitHub Actions and Dockerfiles are containers too.** A `run:` block
+and a `RUN` line are shell scripts that deploy, build and hold
+credentials, reviewed less than any source file because the file they
+live in is "configuration". They are blanked the same way and read by
+the shell pack at true line numbers. Only `.github/workflows/` — a
+Helm chart is also YAML and belongs to `--helm`. Dockerfile `RUN` in
+shell form only, since the exec form is a JSON array that never
+reaches a shell; `ENV` and `ARG` keep their `NAME=value` bodies, which
+are already shell assignments, so a Dockerfile's baked-in secrets are
+read by the same detector that reads source.
+
 Shell is the language that provisions production and the one nothing
 was measuring: a single Kubernetes deployment repository here holds
 22.6k lines of it, including a 3,287-line registry provisioner. A shell

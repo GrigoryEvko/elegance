@@ -1,6 +1,7 @@
 mod api;
 mod cache;
 mod calibrate;
+mod ci;
 mod config;
 mod context;
 mod coupling;
@@ -268,21 +269,25 @@ fn measurable<'a>(
     path: &std::path::Path,
     source: &'a str,
 ) -> Option<(Lang, std::borrow::Cow<'a, str>)> {
-    if is_container(path) {
-        return sfc::script_of(source).map(|(lang, text)| (lang, std::borrow::Cow::Owned(text)));
+    let Some(container) = ci::Container::of(path) else {
+        return Lang::from_path(path).map(|lang| (lang, std::borrow::Cow::Borrowed(source)));
+    };
+    let owned = |lang: Lang, text: String| (lang, std::borrow::Cow::Owned(text));
+    match container {
+        ci::Container::Vue => sfc::script_of(source).map(|(lang, text)| owned(lang, text)),
+        ci::Container::Workflow => {
+            ci::shell_of_workflow(source).map(|text| owned(Lang::Shell, text))
+        }
+        ci::Container::Dockerfile => {
+            ci::shell_of_dockerfile(source).map(|text| owned(Lang::Shell, text))
+        }
     }
-    Lang::from_path(path).map(|lang| (lang, std::borrow::Cow::Borrowed(source)))
-}
-
-/// A file whose code lives inside markup rather than being the file.
-fn is_container(path: &std::path::Path) -> bool {
-    path.extension().is_some_and(|e| e == "vue")
 }
 
 /// Is this file worth reading at all? True for every language's own
 /// extension and for the containers that hold one.
 fn analyzable(path: &std::path::Path) -> bool {
-    Lang::from_path(path).is_some() || is_container(path)
+    Lang::from_path(path).is_some() || ci::Container::of(path).is_some()
 }
 
 /// One lazily-created parser per language per rayon task.

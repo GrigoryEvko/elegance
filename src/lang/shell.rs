@@ -164,8 +164,23 @@ fn command_name<'a>(command: Node, src: &'a [u8]) -> Option<&'a str> {
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
         Sem::Call if command_name(node, src).is_some_and(|n| SOURCING.contains(&n)) => Sem::Import,
+        // A bare word being ASSIGNED is a value, not a name. Shell has
+        // no scalar but the string, and quoting is optional, so
+        // `API_KEY=abc123` is the same literal as `API_KEY="abc123"` —
+        // it just parses as a `word`. Without this the credential
+        // detector could only see the quoted half of the language.
+        Sem::Ident if node.kind() == "word" && is_assigned_value(node) => Sem::StrLit,
         _ => sem,
     }
+}
+
+/// Is this node the value of a `NAME=value` assignment?
+fn is_assigned_value(node: Node) -> bool {
+    node.parent().is_some_and(|p| {
+        p.kind() == "variable_assignment"
+            && p.child_by_field_name("value")
+                .is_some_and(|v| v.id() == node.id())
+    })
 }
 
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
