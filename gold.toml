@@ -31,6 +31,34 @@
 # Known and accepted: Go's length p99 is inflated by table-driven tests
 # (go-cmp's TestOptions is 1099 lines), which is idiomatic Go rather than
 # a long function in the bad sense.
+#
+# NOT GROWN FOR interface width, and the measurement is the reason.
+# Go and Rust budget it from the compiled default because the corpus
+# holds 29 interfaces and 66 traits -- far under the 200-sample floor a
+# percentile needs -- and the obvious fix makes things worse. Measured
+# densities: TypeScript declares an interface every 12 units (8.26%),
+# Go one every 68 (1.47%), Rust one every 161 (0.62%). Clearing the
+# floor therefore needs about 13,600 units of Go or 32,400 of Rust,
+# against the 1,974 and 10,680 that are here.
+#
+# Candidates were fetched and measured rather than argued about:
+#   grpc-go     -- 180 interfaces, which WOULD clear the floor, and
+#                  9,443 units, five times the entire existing Go
+#                  corpus. One repo at 84% of a language stops being a
+#                  sample and becomes the definition; rejected for the
+#                  same reason esbuild was.
+#   afero       -- 17 interfaces, go-plugin 16, tower 24 traits. Each
+#                  is small, admired and interface-dense, and all three
+#                  together still leave both languages under the floor
+#                  while moving every OTHER budget in those languages.
+#                  Cost without a categorical gain; rejected.
+#
+# So the default stands, and `--diff`-style honesty covers it: a
+# defaulted budget now prints with a trailing dot and reports
+# budget_source "default", so a reader can see which numbers rest on
+# the corpus and which rest on this file. The scarcity is itself the
+# finding -- Go's median interface declares ONE method, which is the
+# small-interface culture the proverb describes, measured.
 
 # --- rust: the canonical community answer to 'what should I read'.
 [[repo]]
