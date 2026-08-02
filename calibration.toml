@@ -218,4 +218,5 @@
 "loop depth" = { hi = 2.0 }
 "repurposed" = { hi = 1.0 }
 "magic strings" = { hi = 2.0 }
+"commented code" = { hi = 1.0 }
 "public docs" = { rate = 0.26 }

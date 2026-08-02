@@ -209,6 +209,7 @@ pub const MAGIC_STRINGS: usize = 49;
 pub const SLEEPY_TEST: usize = 50;
 pub const SKIPPED_TESTS: usize = 51;
 pub const BOOL_TRAPS: usize = 52;
+pub const COMMENTED_CODE: usize = 53;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -545,6 +546,13 @@ pub const METRICS: &[MetricDef] = &[
     // swapping them still type-checks. A keyword argument is exempt —
     // naming it at the call site IS the remedy.
     MetricDef { name: "bool traps",    rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
+    // Code someone commented out instead of deleting — which the
+    // version control system was already remembering for them. Judged
+    // by PARSING it: a block of two or more non-doc comment lines that
+    // reads as valid source with two or more statements. Doc comments
+    // are exempt whatever they contain, since an example in a
+    // docstring is the point of the docstring.
+    MetricDef { name: "commented code", rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -818,6 +826,13 @@ fn file_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
             first_suppression,
             "",
         );
+        let first_dead = facts.commented_code.first().copied().unwrap_or(1);
+        f(
+            COMMENTED_CODE,
+            facts.commented_code.len() as f32,
+            first_dead,
+            "",
+        );
         let first_skip = facts.skipped_tests.iter().min().copied().unwrap_or(1);
         f(
             SKIPPED_TESTS,
@@ -1046,10 +1061,11 @@ mod tests {
             (SLEEPY_TEST, "sleepy test"),
             (SKIPPED_TESTS, "skipped tests"),
             (BOOL_TRAPS, "bool traps"),
+            (COMMENTED_CODE, "commented code"),
         ] {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
-        assert_eq!(N, 53);
+        assert_eq!(N, 54);
     }
 
     #[test]
@@ -2109,6 +2125,65 @@ mod tests {
         );
     }
 
+    fn commented(lang: Lang, path: &str, src: &str) -> usize {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        extract(pack, &mut parser, Path::new(path), src)
+            .commented_code
+            .len()
+    }
+
+    #[test]
+    fn prose_that_happens_to_parse_is_still_prose() {
+        // The smell: statements someone commented out instead of
+        // deleting, which version control was already remembering.
+        assert_eq!(
+            commented(
+                Lang::Rust,
+                "a.rs",
+                "fn f(&mut self) {\n    // let lower = self.ranges[i - 1].upper();\n    // let upper = self.ranges[i].lower();\n    // self.ranges.push(I::create(lower, upper));\n    self.ranges.push(other());\n}\n"
+            ),
+            1
+        );
+        // One line is a note, and a single statement is as often an
+        // example as an abandonment.
+        assert_eq!(
+            commented(
+                Lang::Rust,
+                "a.rs",
+                "fn f(&mut self) {\n    // self.ranges.push(other());\n    self.ranges.push(other());\n}\n"
+            ),
+            0
+        );
+        // Prose is the common case and must never parse as code.
+        assert_eq!(
+            commented(
+                Lang::Rust,
+                "a.rs",
+                "fn f() {\n    // The target may be within a namespace, so the\n    // symbol has to be resolved before it can be used.\n    g();\n}\n"
+            ),
+            0
+        );
+        // A doc comment is DOCUMENTATION whatever it holds: an example
+        // in a docstring is the point of the docstring.
+        assert_eq!(
+            commented(
+                Lang::Rust,
+                "a.rs",
+                "/// Usage:\n/// let x = build();\n/// let y = x.run();\nfn build() {}\n"
+            ),
+            0
+        );
+        assert_eq!(
+            commented(
+                Lang::Python,
+                "a.py",
+                "def f(runner, cmd):\n    # result = runner.invoke(cmd, \"-a c\")\n    # assert result.output == \"ok\"\n    result = runner.invoke(cmd)\n    return result\n"
+            ),
+            1
+        );
+    }
+
     fn traps(lang: Lang, path: &str, src: &str) -> u16 {
         let pack = lang.pack();
         let mut parser = pack.make_parser();
@@ -2940,6 +3015,10 @@ mod tests {
         (
             "bool traps",
             "a_named_argument_is_not_a_trap_however_many_booleans_follow",
+        ),
+        (
+            "commented code",
+            "prose_that_happens_to_parse_is_still_prose",
         ),
     ];
 

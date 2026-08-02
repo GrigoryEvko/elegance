@@ -65,6 +65,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         suppressions: Vec::new(),
         spooky_lines: Vec::new(),
         secrets: Vec::new(),
+        commented_code: Vec::new(),
         skipped_tests: Vec::new(),
         magic_strings: Vec::new(),
         test_refs: Vec::new(),
@@ -93,6 +94,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         tokens: vec![Vec::new()],
         import_roots: std::collections::HashSet::new(),
         mentions: std::collections::HashSet::new(),
+        comment_lines: Vec::new(),
         stray_calls: Vec::new(),
         string_rows: std::collections::HashMap::new(),
         facts: &mut facts,
@@ -128,11 +130,14 @@ fn finish(ex: Extractor, blank: &Rows, mass: u32) {
         mentions,
         tokens,
         stray_calls,
+        comment_lines,
         string_rows,
         facts,
+        pack,
         ..
     } = ex;
     facts.magic_strings = repeated_strings(string_rows);
+    facts.commented_code = commented_out_code(pack, &comment_lines);
     fingerprint_units(facts, &tokens);
     resolve_unawaited(facts, &stray_calls);
     facts.mentioned = mentions.into_iter().collect();
@@ -425,6 +430,10 @@ struct Extractor<'a> {
     /// discarded: (calling unit, callee name). Resolved after the walk,
     /// when every unit's asyncness is known.
     stray_calls: Vec<(usize, Box<str>)>,
+    /// Every non-doc comment line, stripped of its marker, with the row
+    /// it sat on. Adjacency — and therefore blocks — is only visible
+    /// once the file is read, so the grouping happens after the walk.
+    comment_lines: Vec<(u32, String)>,
     /// Repeatable string literals, each with the rows and the UNITS it
     /// appeared in. A repeat is only visible once the whole file is
     /// read, so the counting happens after the walk.
@@ -453,6 +462,7 @@ impl Extractor<'_> {
                 self.mark_commentary(node);
                 self.check_echo(node);
                 self.check_suppression(node);
+                self.keep_comment_text(node);
                 None
             }
             Sem::None if (self.pack.is_doc)(node) => {
@@ -1605,6 +1615,29 @@ impl Extractor<'_> {
         }
     }
 
+    /// Keep every non-doc comment line for the block analysis. A doc
+    /// comment is DOCUMENTATION whatever it contains — an example in
+    /// a docstring is the point of the docstring, not abandoned code.
+    fn keep_comment_text(&mut self, node: Node) {
+        let Ok(text) = node.utf8_text(self.src) else {
+            return;
+        };
+        let leading = text.trim_start();
+        let documents = leading.starts_with("///")
+            || leading.starts_with("//!")
+            || leading.starts_with("/**")
+            || leading.starts_with("(**")
+            || self.pack.doc_markers.iter().any(|m| leading.starts_with(m));
+        if documents {
+            return;
+        }
+        let first = node.start_position().row as u32 + 1;
+        for (offset, line) in text.lines().enumerate() {
+            self.comment_lines
+                .push((first + offset as u32, strip_comment_marker(line)));
+        }
+    }
+
     /// A comment that tells the type checker to stop looking. Whatever it
     /// would have said is now undocumented and unenforced — the one
     /// suppression that silences a whole class of error at once.
@@ -1898,6 +1931,81 @@ fn call_arguments<'t>(call: Node<'t>) -> Vec<Node<'t>> {
     call.named_children(&mut cursor)
         .filter(|n| func.is_none_or(|f| f.id() != n.id()))
         .collect()
+}
+
+/// A comment line without its marker. Block comments carry a leading
+/// `*` on continuation lines, which is decoration, not content.
+fn strip_comment_marker(line: &str) -> String {
+    line.trim()
+        .trim_start_matches("//")
+        .trim_start_matches("/*")
+        .trim_end_matches("*/")
+        .trim_start_matches('#')
+        .trim_start_matches('*')
+        .trim()
+        .to_string()
+}
+
+/// A comment block must be at least this tall before it can be code:
+/// one line is a note, and a single statement is as often an example
+/// as an abandonment.
+const MIN_COMMENTED_BLOCK: usize = 2;
+
+/// Comment blocks that PARSE as this language. The cheap filter runs
+/// first: prose does not end its lines in `;` or braces, and parsing
+/// every license header in a corpus would cost more than the finding
+/// is worth.
+fn commented_out_code(pack: &Pack, lines: &[(u32, String)]) -> Vec<u32> {
+    let mut found = Vec::new();
+    let mut parser: Option<Parser> = None;
+    for block in adjacent_blocks(lines) {
+        let [(first, _), ..] = block else { continue };
+        if block.len() < MIN_COMMENTED_BLOCK || !looks_like_code(block) {
+            continue;
+        }
+        let source: String = block
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parser = parser.get_or_insert_with(|| pack.make_parser());
+        let Some(tree) = parser.parse(&source, None) else {
+            continue;
+        };
+        let root = tree.root_node();
+        if !root.has_error() && root.named_child_count() >= MIN_COMMENTED_BLOCK {
+            found.push(*first);
+        }
+    }
+    // Ascending, so the reported line is the FIRST one in the file
+    // rather than whichever block the walk happened to reach first.
+    found.sort_unstable();
+    found
+}
+
+/// Runs of comment lines with no code between them.
+fn adjacent_blocks(lines: &[(u32, String)]) -> Vec<&[(u32, String)]> {
+    let mut blocks = Vec::new();
+    let mut start = 0;
+    for i in 1..=lines.len() {
+        let broken = i == lines.len() || lines[i].0 != lines[i - 1].0 + 1;
+        if broken {
+            blocks.push(&lines[start..i]);
+            start = i;
+        }
+    }
+    blocks
+}
+
+/// Does this block carry code's punctuation? Prose does not end lines
+/// with a semicolon or a brace, and the whole point of the filter is
+/// that a parse is expensive and a license header is not code.
+fn looks_like_code(block: &[(u32, String)]) -> bool {
+    let coded = block
+        .iter()
+        .filter(|(_, t)| t.ends_with([';', '{', '}', ',']) || t.contains(" = "))
+        .count();
+    coded * 2 >= block.len() && coded > 0
 }
 
 /// One bare boolean is often a legitimate `force`/`recursive` flag.

@@ -107,3 +107,9 @@ def audit_retry(evt):
 
 def relocate(node):
     move_entry(node, True, False)
+
+
+def rebuild(cfg):
+    # cache = load_cache(cfg)
+    # cache.warm(cfg.entries)
+    return build(cfg)

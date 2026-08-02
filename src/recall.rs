@@ -211,6 +211,7 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     ("service.py", "unawaited coroutine", 1.0),
     ("service.py", "magic strings", 1.0),
     ("service.py", "bool traps", 1.0),
+    ("service.py", "commented code", 1.0),
     ("worker.rs", "bool traps", 1.0),
     ("handler.ts", "bool traps", 1.0),
     ("widget.js", "bool traps", 1.0),
