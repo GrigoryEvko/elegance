@@ -14,6 +14,7 @@ mod helm;
 mod history;
 mod hotspots;
 mod lang;
+mod layers;
 mod metrics;
 mod near;
 mod ratchet;
@@ -115,6 +116,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         n => println!("{n} packages set their own budgets\n"),
     }
     let mut agg = scan(&files, layers, complete);
+    // A contract is a question about the whole graph, so it is asked
+    // once the scan is done rather than per file.
+    agg.graph.sort_by(|a, b| a.path.cmp(&b.path));
+    agg.declared_layers = cfg.layers.len();
+    agg.breaches = layers::breaches(&cfg.layers, &agg.graph);
 
     present(&args, &mut agg)
 }

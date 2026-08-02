@@ -96,6 +96,11 @@ struct CloneLoc {
 }
 
 pub struct Agg {
+    /// Imports the declared layer contract forbids, and how many
+    /// layers were declared. Filled after the scan, since a contract
+    /// is a question about the whole graph rather than about a file.
+    pub breaches: Vec<crate::layers::Breach>,
+    pub declared_layers: usize,
     pub files: u32,
     pub skipped: u32,
     pub error_files: u32,
@@ -206,6 +211,8 @@ impl Agg {
             narrative: [[0; 4]; LANGS.len()],
             synonyms: HashMap::new(),
             test_refs: std::collections::HashSet::new(),
+            breaches: Vec::new(),
+            declared_layers: 0,
             mentions: HashMap::new(),
             untested_candidates: Vec::new(),
             rates: [[(0, 0); metrics::RATE_METRICS.len()]; LANGS.len()],
@@ -812,6 +819,7 @@ fn render_rates(agg: &Agg, out: &mut String) {
 
 /// Rung-5 view: describes the dependency structure, gates nothing.
 fn render_architecture(agg: &mut Agg, out: &mut String) {
+    crate::layers::render(&agg.breaches, agg.declared_layers, out);
     if agg.graph.iter().all(|g| g.imports.is_empty()) {
         return;
     }

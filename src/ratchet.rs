@@ -148,6 +148,17 @@ fn check_ledger(agg: &Agg, path: &Path, max_rung: u8) -> Result<i32, Box<dyn Err
         )
         .into());
     }
+    // A declared contract is not ratcheted. Every other gate tolerates
+    // recorded sludge because the threshold is calibrated and the
+    // history is real; a layer contract is a rule the repository wrote
+    // down, so breaking it is wrong on the first day and on the
+    // thousandth.
+    if !agg.breaches.is_empty() {
+        let mut out = String::new();
+        crate::layers::render(&agg.breaches, agg.declared_layers, &mut out);
+        print!("{out}");
+        return Ok(1);
+    }
     let (known, moved) = split_ledger(file.violations, &agg.scanned_paths());
     let fresh: Vec<Entry> = gated(agg, max_rung)
         .filter(|e| is_fresh(e, &known, &moved))

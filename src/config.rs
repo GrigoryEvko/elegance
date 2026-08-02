@@ -21,6 +21,10 @@ pub struct Config {
     /// Budget overrides by metric name: `length = { hi = 100 }`.
     #[serde(default)]
     budgets: HashMap<String, Override>,
+    /// Declared layer contracts by name. The only architecture claim
+    /// that gates, because it is stated rather than calibrated.
+    #[serde(default)]
+    pub layers: HashMap<String, crate::layers::Layer>,
 }
 
 #[derive(Deserialize)]

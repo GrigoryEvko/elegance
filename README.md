@@ -178,6 +178,36 @@ which wanted fixing, which is what a suspicion is for), `and name` (a
 conjunction confesses two responsibilities), `feature envy` (a method
 living in another object's data belongs there).
 
+**Layer contracts — the one architecture claim that gates.** Every
+other architecture measurement is a description, and a number about a
+graph is not a verdict about a design. A declared contract is
+different: when a repository states that its products never import
+each other, an import between them is not a heuristic finding at a
+calibrated threshold, it is the stated rule broken. Declare layers in
+`.elegance.toml` and `--baseline check` fails on any breach:
+
+```toml
+[layers.gallery]
+paths = ["src/gallery"]
+may_import = ["shared"]
+
+[layers.playground]
+paths = ["src/playground"]
+may_import = ["shared"]
+
+[layers.shared]
+paths = ["src/shared"]        # may_import absent: reaches nothing
+```
+
+This replaces the hand-rolled boundary script a monorepo usually grows
+— the one that re-implements import parsing badly. Elegance has
+already resolved the graph, so the check costs a set lookup per edge.
+It is deliberately NOT ratcheted: every other gate tolerates recorded
+sludge because the threshold is calibrated and the history is real,
+but a rule the repository wrote down is wrong on the first day and on
+the thousandth. Unresolved imports are never judged, and a file in no
+declared layer is unjudged rather than guessed at.
+
 **Budgets say what they rest on.** A budget printed as `<=33` is
 pinned to a percentile of the gold corpus; one printed as `<=12.`,
 with the trailing dot, rests on the compiled-in default — because the
