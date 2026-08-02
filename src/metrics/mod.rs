@@ -243,6 +243,7 @@ pub const SLEEPY_TEST: usize = 50;
 pub const SKIPPED_TESTS: usize = 51;
 pub const BOOL_TRAPS: usize = 52;
 pub const COMMENTED_CODE: usize = 53;
+pub const COHESION: usize = 54;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -586,6 +587,25 @@ pub const METRICS: &[MetricDef] = &[
     // are exempt whatever they contain, since an example in a
     // docstring is the point of the docstring.
     MetricDef { name: "commented code", rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
+    // Hitz & Montazeri's LCOM4: how many disconnected groups a class's
+    // methods fall into, where two are connected when they touch a
+    // member in common or one calls the other. One group is cohesive;
+    // more means the class is several objects sharing a name, and the
+    // remedy is Extract Class. Rung 4 is what this rung is FOR — it
+    // held only `and name` and `feature envy` before.
+    //
+    // Methods touching NO member are excluded: a helper that reads no
+    // state is a free function living in a class, and counting it as
+    // its own island would call every class with a helper incoherent.
+    //
+    // The known blind spot, stated rather than hidden: a data holder
+    // with one accessor per field reads as many groups and is a
+    // legitimate design. regex's RegexTest — twelve independent
+    // fields, an accessor each — sits in the tail beside vscode's
+    // CommandCenter, which registers 192 commands in one class. Both
+    // are TRUE readings of the same number; only a person can say
+    // which one wanted fixing, which is exactly what a suspicion is.
+    MetricDef { name: "cohesion",      rung: 4, lo: None, hi: Some(1.0), fmt: Fmt::Int, calib: Calib::P99 },
 ];
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -897,6 +917,14 @@ fn file_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
     for i in &facts.interfaces {
         f(INTERFACE_WIDTH, i.methods as f32, i.line, &i.name);
     }
+    // Tests group by fixture, not by state: a test class's methods
+    // share a subject rather than a field, and judging that as
+    // incoherence would flag every well-organized suite.
+    if !facts.is_test_file {
+        for c in &facts.classes {
+            f(COHESION, c.groups as f32, c.line, &c.name);
+        }
+    }
 }
 
 /// What a unit's NAME promises and whether the unit keeps it: honest
@@ -1095,10 +1123,11 @@ mod tests {
             (SKIPPED_TESTS, "skipped tests"),
             (BOOL_TRAPS, "bool traps"),
             (COMMENTED_CODE, "commented code"),
+            (COHESION, "cohesion"),
         ] {
             assert_eq!(METRICS[idx].name, name, "index {idx}");
         }
-        assert_eq!(N, 54);
+        assert_eq!(N, 55);
     }
 
     #[test]
@@ -2178,6 +2207,80 @@ mod tests {
         );
     }
 
+    fn groups(lang: Lang, path: &str, src: &str) -> Vec<(String, u16)> {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        extract(pack, &mut parser, Path::new(path), src)
+            .classes
+            .iter()
+            .map(|c| (c.name.to_string(), c.groups))
+            .collect()
+    }
+
+    #[test]
+    fn methods_that_share_a_field_or_call_each_other_are_one_object() {
+        // Two methods over one field: one object.
+        assert_eq!(
+            groups(
+                Lang::Python,
+                "a.py",
+                "class Store:\n    def get(self, k):\n        return self.items[k]\n    def put(self, k, v):\n        self.items[k] = v\n"
+            ),
+            [("Store".to_string(), 1)]
+        );
+        // Two methods over two fields, never speaking: two objects
+        // sharing a name, and Extract Class is the remedy.
+        assert_eq!(
+            groups(
+                Lang::Python,
+                "a.py",
+                "class Both:\n    def read(self):\n        return self.cache\n    def log(self, m):\n        self.sink.write(m)\n"
+            ),
+            [("Both".to_string(), 2)]
+        );
+        // A call through the receiver connects them: that is what a
+        // self-call looks like to a syntax tree, and regex's LookSet
+        // read as eleven groups until this counted.
+        assert_eq!(
+            groups(
+                Lang::Rust,
+                "a.rs",
+                "impl LookSet {\n    fn len(self) -> usize {\n        self.bits.count_ones() as usize\n    }\n    fn is_empty(self) -> bool {\n        self.len() == 0\n    }\n}\n"
+            ),
+            [("LookSet".to_string(), 1)]
+        );
+        // Rust spells `self` with its own node kind, so every
+        // self.field in the language was invisible before this.
+        assert_eq!(
+            groups(
+                Lang::Rust,
+                "a.rs",
+                "impl Store {\n    fn get(&self) -> u8 {\n        self.items[0]\n    }\n    fn put(&mut self, v: u8) {\n        self.items.push(v);\n    }\n}\n"
+            ),
+            [("Store".to_string(), 1)]
+        );
+        // A helper touching no state is a free function living in a
+        // class, not an island of its own.
+        assert_eq!(
+            groups(
+                Lang::Python,
+                "a.py",
+                "class Store:\n    def get(self, k):\n        return self.items[k]\n    def put(self, k, v):\n        self.items[k] = v\n    def slug(self, s):\n        return s.lower()\n"
+            ),
+            [("Store".to_string(), 1)]
+        );
+        // One stateful method is trivially cohesive — no question to
+        // ask, so no finding to make.
+        assert_eq!(
+            groups(
+                Lang::Python,
+                "a.py",
+                "class One:\n    def get(self, k):\n        return self.items[k]\n"
+            ),
+            []
+        );
+    }
+
     fn commented(lang: Lang, path: &str, src: &str) -> usize {
         let pack = lang.pack();
         let mut parser = pack.make_parser();
@@ -3072,6 +3175,10 @@ mod tests {
         (
             "commented code",
             "prose_that_happens_to_parse_is_still_prose",
+        ),
+        (
+            "cohesion",
+            "methods_that_share_a_field_or_call_each_other_are_one_object",
         ),
     ];
 

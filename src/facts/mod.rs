@@ -95,11 +95,24 @@ pub struct FileFacts {
     /// Public-before-private ordering: (public-first pairs, total
     /// public/private pairs) — entry points first, details after.
     pub pub_order: (u32, u32),
+    /// Declared classes with two or more methods, and how many
+    /// disconnected groups those methods fall into.
+    pub classes: Vec<ClassFact>,
     /// Declared method bundles (Go `interface`, Rust `trait`, TS
     /// `interface`) and how many methods each one demands. The bigger
     /// the interface, the weaker the abstraction — an implementer owes
     /// every method whether or not a caller ever wanted them together.
     pub interfaces: Vec<InterfaceFact>,
+}
+
+/// One class's cohesion: how many disconnected groups its methods
+/// fall into, where two methods are connected when they touch a member
+/// in common or one calls the other. One group is a cohesive class;
+/// more means the class is several objects sharing a name.
+pub struct ClassFact {
+    pub name: Box<str>,
+    pub line: u32,
+    pub groups: u16,
 }
 
 /// One declared interface: what it is called, where, and how many
@@ -171,6 +184,10 @@ pub struct UnitFacts {
     pub is_passthrough: bool,
     /// Member accesses rooted at the receiver (methods only).
     pub self_accesses: u16,
+    /// WHICH own members this method touches, deduplicated. Two
+    /// methods that share none of them, and never call each other, are
+    /// two objects wearing one class's name (Hitz & Montazeri's LCOM4).
+    pub own_members: Vec<Box<str>>,
     /// The most-touched foreign receiver and its access count — a method
     /// that spends its time in another object's data belongs there
     /// (Fowler's Feature Envy).

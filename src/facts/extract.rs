@@ -76,6 +76,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         mentioned: Vec::new(),
         step_refs: (0, 0),
         pub_order: (0, 0),
+        classes: Vec::new(),
         interfaces: Vec::new(),
     };
     let Some(tree) = parser.parse(source, None) else {
@@ -138,6 +139,7 @@ fn finish(ex: Extractor, blank: &Rows, mass: u32) {
     } = ex;
     facts.magic_strings = repeated_strings(string_rows);
     facts.commented_code = commented_out_code(pack, &comment_lines);
+    facts.classes = class_cohesion(&facts.units, &callees, pack.scope_sep);
     fingerprint_units(facts, &tokens);
     resolve_unawaited(facts, &stray_calls);
     facts.mentioned = mentions.into_iter().collect();
@@ -320,6 +322,7 @@ impl UnitFacts {
             negations: 0,
             is_passthrough: false,
             self_accesses: 0,
+            own_members: Vec::new(),
             envy_count: 0,
             envy_object: "".into(),
             swallowed: 0,
@@ -1452,14 +1455,21 @@ impl Extractor<'_> {
         }
         // The same chain root feeds Feature Envy: one chain = one access
         // to its base receiver (methods only).
-        let base_name = (self.pack.table_sem(base) == Sem::Ident)
-            .then(|| base.utf8_text(self.src).ok())
-            .flatten();
-        let selfish_base = base_name
+        let base_text = base.utf8_text(self.src).ok();
+        // Selfishness is judged by TEXT, envy by identifier-ness. Rust
+        // spells `self` with its own node kind rather than an
+        // identifier, so requiring Sem::Ident here made every
+        // `self.field` in the language invisible — no self access, no
+        // own member, and a cohesive impl block reading as scattered.
+        let selfish_base = base_text
             .is_some_and(|n| matches!(n, "self" | "cls" | "this") || n == &*self.self_names[unit]);
+        let base_name = (self.pack.table_sem(base) == Sem::Ident)
+            .then_some(base_text)
+            .flatten();
         if self.facts.units[unit].is_method {
             if selfish_base {
                 self.facts.units[unit].self_accesses += 1;
+                self.note_own_member(node, object_field, unit);
             } else if let Some(name) = base_name
                 && !name.starts_with(|c: char| c.is_uppercase())
             {
@@ -1472,6 +1482,35 @@ impl Extractor<'_> {
         }
         if links >= 3 {
             self.facts.units[unit].demeter += 1;
+        }
+    }
+
+    /// WHICH member this chain reaches first off the receiver:
+    /// `self.cache.get()` touches `cache`. The property field is named
+    /// differently in every grammar, so it is found by elimination —
+    /// the identifier child that is not the object.
+    fn note_own_member(&mut self, chain: Node, object_field: &str, unit: usize) {
+        // Innermost link: descend while the object is ANOTHER link of
+        // the same kind, so the one left is the access to the receiver.
+        let mut link = chain;
+        while let Some(inner) = link
+            .child_by_field_name(object_field)
+            .filter(|inner| inner.kind_id() == link.kind_id())
+        {
+            link = inner;
+        }
+        let object = link.child_by_field_name(object_field);
+        let mut cursor = link.walk();
+        let member = link
+            .named_children(&mut cursor)
+            .filter(|c| object.is_none_or(|o| o.id() != c.id()))
+            .find(|c| self.pack.table_sem(*c) == Sem::Ident)
+            .and_then(|c| c.utf8_text(self.src).ok());
+        if let Some(name) = member {
+            let members = &mut self.facts.units[unit].own_members;
+            if !members.iter().any(|m| &**m == name) {
+                members.push(name.into());
+            }
         }
     }
 
@@ -1931,6 +1970,104 @@ fn call_arguments<'t>(call: Node<'t>) -> Vec<Node<'t>> {
     call.named_children(&mut cursor)
         .filter(|n| func.is_none_or(|f| f.id() != n.id()))
         .collect()
+}
+
+/// A class needs at least this many methods before "do they hang
+/// together" is a question. One method is trivially cohesive.
+const MIN_COHESION_METHODS: usize = 2;
+
+/// Per class, how many disconnected groups its methods fall into
+/// (Hitz & Montazeri's LCOM4). Two methods are connected when they
+/// touch a member in common, or when one calls the other — both are
+/// evidence they belong to the same object. One group means cohesive;
+/// more means the class is several objects sharing a name.
+fn class_cohesion(
+    units: &[UnitFacts],
+    callees: &[Vec<Box<str>>],
+    sep: &str,
+) -> Vec<super::ClassFact> {
+    let mut by_class: std::collections::HashMap<&str, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (i, u) in units.iter().enumerate() {
+        // A method touching NO member is not part of the object's
+        // state — it is a free function that happens to live in a
+        // class, and counting it as its own island would say every
+        // class with a helper is incoherent. Cohesion is a question
+        // about the methods that DO share state.
+        if !u.is_method || u.own_members.is_empty() {
+            continue;
+        }
+        // `Store.get` belongs to `Store`; a free function has no owner.
+        if let Some(owner) = u.qualname.rsplit_once(sep).map(|(owner, _)| owner) {
+            by_class.entry(owner).or_default().push(i);
+        }
+    }
+    let mut out: Vec<super::ClassFact> = by_class
+        .into_iter()
+        .filter(|(_, methods)| methods.len() >= MIN_COHESION_METHODS)
+        .map(|(owner, methods)| class_fact(units, callees, owner, &methods))
+        .collect();
+    out.sort_by_key(|c| c.line);
+    out
+}
+
+fn class_fact(
+    units: &[UnitFacts],
+    callees: &[Vec<Box<str>>],
+    owner: &str,
+    methods: &[usize],
+) -> super::ClassFact {
+    let first = methods.iter().map(|i| units[*i].line);
+    let line = first.min().unwrap_or(1);
+    super::ClassFact {
+        name: owner.into(),
+        line,
+        groups: cohesion_groups(units, callees, methods),
+    }
+}
+
+/// Connected components of the method graph, by union-find over a
+/// small index set — a class with hundreds of methods is rare enough
+/// that the quadratic pairing is cheaper than building an index.
+fn cohesion_groups(units: &[UnitFacts], callees: &[Vec<Box<str>>], methods: &[usize]) -> u16 {
+    let mut group: Vec<usize> = (0..methods.len()).collect();
+    let root = |group: &Vec<usize>, mut i: usize| {
+        while group[i] != i {
+            i = group[i];
+        }
+        i
+    };
+    for a in 0..methods.len() {
+        for b in (a + 1)..methods.len() {
+            if !share_state(units, callees, methods[a], methods[b]) {
+                continue;
+            }
+            let (ra, rb) = (root(&group, a), root(&group, b));
+            group[rb] = ra;
+        }
+    }
+    let distinct: std::collections::HashSet<usize> =
+        (0..methods.len()).map(|i| root(&group, i)).collect();
+    distinct.len() as u16
+}
+
+/// Do these two methods belong to the same object? Either they read
+/// the same member, or one calls the other.
+fn share_state(units: &[UnitFacts], callees: &[Vec<Box<str>>], a: usize, b: usize) -> bool {
+    let shares_member = units[a]
+        .own_members
+        .iter()
+        .any(|m| units[b].own_members.contains(m));
+    // A call THROUGH the receiver — `self.len()` — is recorded as a
+    // touched member named `len`, because that is what it looks like
+    // to a syntax tree. Without this, regex's LookSet read as eleven
+    // groups: `is_empty` calls `self.len()` and shares no field with
+    // it, though they are plainly one object.
+    let calls = |from: usize, to: usize| {
+        let name = &units[to].name;
+        units[from].own_members.contains(name) || callees[from].iter().any(|c| c == name)
+    };
+    shares_member || calls(a, b) || calls(b, a)
 }
 
 /// A comment line without its marker. Block comments carry a leading

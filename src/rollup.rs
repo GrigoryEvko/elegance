@@ -80,11 +80,13 @@ fn render(dirs: HashMap<String, Dir>, show: usize) -> String {
     if ranked.is_empty() {
         return "rollup — no directory carries a gated violation\n".to_string();
     }
-    ranked.sort_by(|a, b| {
-        b.1.density()
-            .total_cmp(&a.1.density())
-            .then_with(|| b.1.gates.cmp(&a.1.gates))
-            .then_with(|| a.0.cmp(&b.0))
+    // Worst first, ties broken by gate count then by name so the
+    // order never depends on the map's.
+    ranked.sort_by(|(a_dir, a), (b_dir, b)| {
+        b.density()
+            .total_cmp(&a.density())
+            .then_with(|| b.gates.cmp(&a.gates))
+            .then_with(|| a_dir.cmp(b_dir))
     });
     let mut out = String::new();
     let _ = writeln!(

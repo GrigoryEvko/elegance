@@ -1208,11 +1208,13 @@ pub(super) fn select_clumps(agg: &Agg) -> Vec<SelectedClump> {
         .filter(|(_, c)| c.count >= CLUMP_MIN)
         .map(|(key, c)| (key.split('\u{1f}').collect(), c))
         .collect();
-    all.sort_by(|a, b| {
-        b.0.len()
-            .cmp(&a.0.len())
-            .then(b.1.count.cmp(&a.1.count))
-            .then(a.0.cmp(&b.0))
+    // Widest clump first, then most frequent, then by name.
+    all.sort_by(|(a_names, a), (b_names, b)| {
+        b_names
+            .len()
+            .cmp(&a_names.len())
+            .then(b.count.cmp(&a.count))
+            .then(a_names.cmp(b_names))
     });
     let mut kept: Vec<SelectedClump> = Vec::new();
     for (names, c) in all {

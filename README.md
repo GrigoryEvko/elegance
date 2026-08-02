@@ -163,9 +163,20 @@ by the corpus's own verdict), `test asserts`, `lazy test name`, and the
 type-hygiene family: `untyped params`, `loose types`, `casts`,
 `suppressions`.
 
-**Rung 4 — class and module cohesion.** `and name` (a conjunction
-confesses two responsibilities), `feature envy` (a method living in
-another object's data belongs there).
+**Rung 4 — class and module cohesion.** `cohesion` (Hitz &
+Montazeri's LCOM4: how many disconnected groups a class's methods fall
+into, where two are connected when they touch a member in common or
+one calls the other. One group is cohesive; more means the class is
+several objects sharing a name, and Extract Class is the remedy.
+Methods touching no member are excluded — a helper that reads no state
+is a free function living in a class. The blind spot is stated rather
+than hidden: a data holder with one accessor per field reads as many
+groups and is a legitimate design, so regex's twelve-field `RegexTest`
+sits in the tail beside vscode's `CommandCenter`, which registers 192
+commands in one class. Both are true readings; only a person can say
+which wanted fixing, which is what a suspicion is for), `and name` (a
+conjunction confesses two responsibilities), `feature envy` (a method
+living in another object's data belongs there).
 
 **Budgets say what they rest on.** A budget printed as `<=33` is
 pinned to a percentile of the gold corpus; one printed as `<=12.`,

@@ -302,11 +302,11 @@ fn package_of(path: &Path) -> Option<String> {
 fn render(scanned: &Scanned, straddling: &[Straddle], show: usize) -> String {
     let mut out = String::new();
     let mut ranked: Vec<(&String, &Pkg)> = scanned.packages.iter().collect();
-    ranked.sort_by(|a, b| {
-        b.1.findings()
-            .cmp(&a.1.findings())
-            .then_with(|| b.1.lines.cmp(&a.1.lines))
-            .then_with(|| a.0.cmp(b.0))
+    ranked.sort_by(|(a_name, a), (b_name, b)| {
+        b.findings()
+            .cmp(&a.findings())
+            .then_with(|| b.lines.cmp(&a.lines))
+            .then_with(|| a_name.cmp(b_name))
     });
     let totals = ranked.iter().fold(Pkg::default(), |mut acc, (_, p)| {
         acc.absorb(p);
