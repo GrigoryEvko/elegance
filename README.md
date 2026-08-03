@@ -1,30 +1,42 @@
 # elegance
 
-Per-function code metrics for twelve languages. Budgets pinned to
-gold-corpus p99: the tool reports what deviates from what admired code
+**Per-function code metrics for twelve languages.** Budgets pinned to
+gold-corpus p99 — the tool reports what deviates from what admired code
 does. Tree-sitter parse, Rust, 6.39M lines in 34s.
+
+```
+metric             p50     p90     p99     max   budget     violate
+cognitive            0       7      34    1088   <=15          3.7%
+
+worst — cognitive (budget <=15):
+    1088  site-packages/.../fastjsonschema_validations.py:157  validate_...
+```
+
+---
 
 ## Install
 
 ```sh
 cargo install --git https://github.com/GrigoryEvko/elegance
+```
 
-# Or a released binary (static musl, no glibc dependency):
+Or a released binary — the musl build is static, so it needs no matching
+glibc:
+
+```sh
 curl -fsSLO https://github.com/GrigoryEvko/elegance/releases/latest/download/elegance-x86_64-linux-musl
 chmod +x elegance-x86_64-linux-musl && sudo mv elegance-x86_64-linux-musl /usr/local/bin/elegance
 ```
 
-Eight binaries per release, each built natively:
+Eight binaries per release, each built natively, each with a `.sha256`
+sidecar and smoke-tested on this repository before publishing:
 
 | | Linux (gnu / musl) | macOS | Windows |
 | :--- | :--- | :--- | :--- |
 | **x86_64** | `x86_64-linux-gnu` · `x86_64-linux-musl` | `x86_64-macos` | `x86_64-windows.exe` |
 | **arm64** | `aarch64-linux-gnu` · `aarch64-linux-musl` | `aarch64-macos` | `aarch64-windows.exe` |
 
-Each carries a `.sha256` sidecar and is smoke-tested on this repository
-before publishing.
-
-## Claude Code plugin
+### Claude Code plugin
 
 ```
 /plugin marketplace add GrigoryEvko/elegance
@@ -35,39 +47,41 @@ Reports what an edit introduced, one line, as it happens. Advisory,
 deduplicated per session, silent on clean files.
 See [plugins/elegance-nudge](plugins/elegance-nudge/README.md).
 
+---
+
 ## Usage
 
-```sh
-elegance [paths...] [--top N]
-elegance --json [paths...]
-elegance --explain file[:line]
-elegance --baseline write
-elegance --baseline check
-elegance --diff HEAD
-elegance --diff 'origin/main...'
-elegance --fail-on RUNG
-elegance install-hook
-elegance --sarif [paths...]
-elegance --history record|show
-elegance --hotspots
-elegance --by
-elegance --coupling
-elegance --deps
-elegance --helm
-elegance --render
-elegance --context [paths...]
-elegance calibrate <gold-dirs>
-```
+| Command | |
+| :--- | :--- |
+| `elegance [paths...] [--top N]` | scan; files or directories, defaults to `.` |
+| `elegance --json [paths...]` | versioned machine output (schema 1) |
+| `elegance --explain file[:line]` | per-construct score breakdown |
+| `elegance --baseline write` | record today's violations as the ledger |
+| `elegance --baseline check` | exit 1 on new or worsened violations |
+| `elegance --diff HEAD` | judge only what this change touched |
+| `elegance --diff 'origin/main...'` | judge only what a PR added |
+| `elegance --fail-on RUNG` | which rungs may block (default 2) |
+| `elegance --sarif [paths...]` | SARIF 2.1.0 for code scanning |
+| `elegance install-hook` | pre-commit hook running `--diff HEAD` |
+| `elegance --context [paths...]` | the repo's measured style, for a writer |
+| `elegance calibrate <gold-dirs>` | re-derive budgets from a gold corpus |
 
-Identity is (metric, path, qualified unit). Line numbers are deliberately
-not part of the key. `--baseline check` fails on new or worsened
-violations; old sludge is tolerated until touched. Only rungs 0-2 gate
-by default; `--fail-on 0` tightens, `--fail-on 4` loosens.
+| Reports | |
+| :--- | :--- |
+| `--hotspots` | rank complexity by how often it is edited |
+| `--history record\|show` | trend ledger: are we getting better? |
+| `--by` | roll findings up per directory, worst first |
+| `--coupling` | undeclared co-change, sole authorship, debt age |
+| `--deps` | look inside the dependencies you did not write |
+| `--helm` | values-overlay drift and credentials in YAML |
+| `--render` | render each environment, measure what ships |
 
-Three dots matter on a pull request. `--diff origin/main` compares
-against the branch tip, so every merge into main since you branched reads
-as your change. `origin/main...HEAD` compares against the merge base.
-`--diff HEAD` is what a pre-commit hook wants.
+### The ratchet
+
+Identity is **(metric, path, qualified unit)** — line numbers are
+deliberately not part of the key. `--baseline check` fails on new or
+worsened violations; old sludge is tolerated until touched. Only rungs
+0–2 gate by default: `--fail-on 0` tightens, `--fail-on 4` loosens.
 
 ```yaml
 # .github/workflows/quality.yml
@@ -76,95 +90,157 @@ as your change. `origin/main...HEAD` compares against the merge base.
 - run: elegance --sarif . > elegance.sarif
 ```
 
-Output reports tail distributions and lists only budget violations:
+Three dots matter on a pull request. `--diff origin/main` compares
+against the branch tip, so every merge into main since you branched reads
+as your change. `origin/main...HEAD` compares against the merge base.
+`--diff HEAD` is what a pre-commit hook wants.
 
-```
-metric             p50     p90     p99     max   budget     violate
-cognitive            0       7      34    1088   <=15          3.7%
-...
-clones — 37 classes, ~4.1% of code duplicated:
-  3 sites × mass 412:
-      src/a.py:10-52  src/b.py:88-130  ...
-
-worst — cognitive (budget <=15):
-    1088  site-packages/.../fastjsonschema_validations.py:157  validate_...
-```
-
-`--explain` breaks every score into line-by-line components:
+### `--explain`
 
 ```
 gnarly  sample.py:17  cognitive 31  cyclomatic 14  depth 6
   L19    loop       cognitive +1  cyclomatic +1
   L24    if         cognitive +5  cyclomatic +1  (1 + nesting 4)
-  ...
 ```
 
-## Configuration
+### Configuration
 
 `.elegance.toml` at the scan root:
 
 ```toml
 exclude = ["migrations/**", "*_pb2.py"]
 skip_dirs = ["fixtures"]
+
 [budgets]
 length = { hi = 100 }
 "comment ratio" = { lo = 0.05, hi = 0.5 }
 ```
 
 Files with generated-code markers (`@generated`, `DO NOT EDIT`) are
-skipped. `vendor/`, `third_party/`, `node_modules/` and friends always
-skipped.
+skipped, as are `vendor/`, `third_party/`, `node_modules/` and friends.
+
+---
 
 ## Metrics
 
-Rung determines verdict: 0-2 gate CI, 3-4 warn, 5-6 report, 7 paired
-evidence.
+The rung decides what a finding can *do*:
 
-**Rung 0 — token hygiene.** `magic numbers`: unnamed non-trivial
-literals outside constant contexts. Test bodies exempt.
+| Rung | Scope | Verdict |
+| :--- | :--- | :--- |
+| **0–2** | token · expression · function | **gates CI** |
+| **3–4** | interface · class/module | suspicion |
+| **5–6** | dependency graph · evolution | report only |
+| **7** | tensions | paired evidence |
 
-**Rung 1 — expression shape.** `expr depth` (tallest single-line
-expression tree; multi-line formatting rewarded), `demeter` (attribute
-chains >= 3 data links; fluent calls exempt, `self` forgives one),
-`negations` (double negatives, negated negative-polarity names, De
-Morgan candidates).
+### Rung 0 — token hygiene
 
-**Rung 2 — function shape.** `cognitive` (SonarSource: structural
-+1+nesting, elif/else flat 1, boolean sequences 1, recursion 1),
-`cyclomatic` (McCabe), `depth`, `length`, `params`, `live span`
-(McConnell ch. 13), `swallowed` (handler silencing the error).
+| | |
+| :--- | :--- |
+| `magic numbers` | unnamed non-trivial literals outside constant contexts; test bodies exempt |
 
-`built query`: SQL assembled by interpolation. Judged by where the hole
-lands — comparison slot or identifier slot. `IN (${placeholders})` and
-`VALUES ${rows}` stay silent: structure whose values travel separately.
-Two findings in 6.39M lines, both real.
+### Rung 1 — expression shape
 
-`conditional hook`: a React hook reached through a branch. React
-identifies hooks by call order, so a conditional one renumbers every
-hook after it when the condition flips. Fires only inside a component or
-custom hook, in a file importing React. Solid exempt (run-time dependency
-tracking).
+| | |
+| :--- | :--- |
+| `expr depth` | tallest single-line expression tree — multi-line formatting is rewarded |
+| `demeter` | attribute chains ≥ 3 data links; fluent calls exempt, `self` forgives one |
+| `negations` | double negatives, negated negative-polarity names, De Morgan candidates |
 
-**Rung 3 — interface shape.** `returns` (tuple width; unwraps one
-generic level, so `Result<(A,B,C), E>` counts 3 and `Vec<(A,B)>` counts
-1; Python takes the wider of annotation and shipped tuples; a suspicion
-because TS annotations are optional), `interface width` (methods per
-declared interface; Go gold median: 1), `repurposed` (Fowler's Split
-Variable; compound operators, conditional overrides, loop refills, swaps,
-member writes, let-shadowing exempt), `flag params`, `kw opacity`,
-`pass-through` (Ousterhout's shallow wrapper), `generic name`,
-`lying name` (`is_`/`has_` must return bool; `get_` must not mutate),
-`broad catch`, `unwraps`, `spooky` (eval, computed attribute access,
-metaclasses, transmute), `echo comments`, `comment ratio`, `test
-asserts`, `lazy test name`. Type hygiene: `untyped params`, `loose
-types`, `casts`, `suppressions`.
+### Rung 2 — function shape
 
-**Rung 4 — class and module.** `cohesion` (LCOM4: disconnected groups
-among a class's methods; one group is cohesive; methods touching no
-member excluded), `and name` (conjunction confesses two
-responsibilities), `feature envy`.
+| | |
+| :--- | :--- |
+| `cognitive` | SonarSource: structural +1+nesting, `elif`/`else` flat 1, boolean sequences 1, recursion 1 |
+| `cyclomatic` | McCabe — decision points + 1, a minimum test count |
+| `depth` · `length` · `params` | |
+| `live span` | McConnell ch. 13: a live variable is a mental register |
+| `swallowed` | a handler that silences the error entirely |
+| `built query` | SQL assembled by interpolation |
+| `conditional hook` | a React hook reached through a branch |
 
-**Layer contracts.** Declared in `.elegance.toml`, not calibrated:
+**`built query`** is judged by where the hole lands — a comparison slot,
+where a value belongs, or an identifier slot, where a table name does.
+`IN (${placeholders})` and `VALUES ${rows}` stay silent: that is
+structure whose values travel separately, and vscode writes the safe
+form five times for every unsafe one. Two findings in 6.39M lines of
+gold, both real.
+
+**`conditional hook`** — React identifies a hook by the order it is
+called in, so one reached through a branch renumbers every hook after it
+the moment the condition flips, and the component reads another hook's
+state. Fires only inside a component or custom hook, in a file importing
+React. Solid is exempt: it tracks dependencies at run time.
+
+### Rung 3 — interface shape
+
+| | |
+| :--- | :--- |
+| `returns` | tuple width; unwraps one generic level, so `Result<(A,B,C), E>` counts 3 and `Vec<(A,B)>` counts 1 |
+| `interface width` | methods per declared interface — Go gold's median is 1 |
+| `repurposed` | Fowler's Split Variable; compound operators, conditional overrides, loop refills, swaps, member writes and let-shadowing exempt |
+| `flag params` · `kw opacity` | |
+| `pass-through` | Ousterhout's shallow wrapper / Fowler's Middle Man |
+| `generic name` | |
+| `lying name` | `is_`/`has_` must return bool; `get_` must not mutate |
+| `broad catch` · `unwraps` | |
+| `spooky` | eval, computed attribute access, metaclasses, transmute |
+| `echo comments` · `comment ratio` | |
+| `test asserts` · `lazy test name` | |
+| `untyped params` · `loose types` · `casts` · `suppressions` | type hygiene |
+
+`returns` stays a suspicion because a TS tuple annotation is *optional*:
+its budget rides on how often gold annotates at all, and a declared
+`[value, setter]` pair is legitimate style. Python takes the wider of
+its annotation and the tuples its returns ship.
+
+### Rung 4 — class and module
+
+| | |
+| :--- | :--- |
+| `cohesion` | LCOM4: how many disconnected groups a class's methods fall into. One is cohesive; more means several objects sharing a name. Methods touching no member are excluded |
+| `and name` | a conjunction confesses two responsibilities |
+| `feature envy` | a method living in another object's data belongs there |
+
+### Rung 5 — dependency graph and rates
+
+Cycle mass, dependency depth, deletability, blast radius, orphans,
+interface depth, fat surfaces, encapsulation leaks, `dead exports`,
+step-down narrative ordering.
+
+| | |
+| :--- | :--- |
+| `clones` | Type-2 structural duplication via normalized Merkle hashing — only logic, since duplicated data tables are content |
+| `near-clones` | winnowed fingerprints, catching *edited* copies |
+| `param clumps` | Fowler's Data Clumps |
+| `repeated dispatch` · `untested complexity` | |
+| `public docs` · `asserts` | coverage **rates**, rendered beside gold's own share |
+
+Rates never render as per-unit findings — `63% of 103 public units
+documented; admired rs: 84%`. Admired code fails the per-unit claims 81%
+and 90% of the time, and a suspicion the gold corpus fails nine times in
+ten is a distributional fact wearing the wrong rung.
+
+### Rung 6 — evolution
+
+`--hotspots` (churn × complexity, Tornhill), `--history` (are we getting
+better), `--by` (which directory is in trouble).
+
+### Rung 7 — tensions
+
+Facts that are worse together than apart: a unit over budget, that no
+test mentions, in a file half the codebase imports, holding duplicated
+logic. Each is survivable alone and already reported at its own rung.
+
+Three independent facts must align, and correlated metrics count as one
+— cognitive, cyclomatic, length and live span all trip because a
+function is big. Deliberately **no score**: a composite number would
+hide which of the facts is true.
+
+### Layer contracts — the one architecture claim that gates
+
+Every other architecture measurement is a description, and a number
+about a graph is not a verdict about a design. A declared contract is
+different:
 
 ```toml
 [layers.gallery]
@@ -176,54 +252,81 @@ paths = ["src/playground"]
 may_import = ["shared"]
 
 [layers.shared]
-paths = ["src/shared"]
+paths = ["src/shared"]        # may_import absent: reaches nothing
 ```
 
-Not ratcheted. A rule the repository wrote down is wrong on the first
-day and on the thousandth.
+`--baseline check` fails on any breach. Deliberately **not ratcheted**:
+every other gate tolerates recorded sludge because the threshold is
+calibrated, but a rule the repository wrote down is wrong on the first
+day and on the thousandth. Unresolved imports are never judged, and a
+file in no declared layer is unjudged rather than guessed at.
 
-**Rung 7 — tensions.** Co-occurrence: a unit over budget, untested, in
-a heavily-imported file, holding duplicated logic. Three independent
-facts must align. Correlated metrics (cognitive, cyclomatic, length,
-live span) count as one. No composite score.
+### Budget notation
 
-**Rung 5 — graph and rates.** Cycle mass, dependency depth, deletability,
-blast radius, orphans, interface depth, fat surfaces, encapsulation
-leaks, `dead exports`, step-down ordering. `clones` (Type-2 via
-normalized Merkle hashing; only logic, not data tables), `near-clones`
-(winnowed fingerprints), `param clumps`, `repeated dispatch`, `untested
-complexity`. Coverage rates (`public docs`, `asserts`) render as shares
-beside gold: "63% of 103 public units documented; admired rs: 84%".
+| Printed | Rests on |
+| :--- | :--- |
+| `<=33` | a percentile of the gold corpus |
+| `<=12.` | the compiled-in default — fewer than 200 samples, a policy metric, or a gold p99 of zero |
 
-**Rung 6 — evolution.** `--hotspots` (churn x complexity), `--history`,
-`--by`.
+Machine output says the same in a `budget_source` field. Budgets are
+`[lo, hi]` bands, per language: one-sided take gold p99, two-sided take
+p05/p95. Policy metrics encode taste and are never calibrated, but the
+calibrate audit reports any policy the corpus itself violates (1%
+ceiling for gates, 5% for suspicions).
 
-**Budget notation.** `<=33` is pinned to a gold-corpus percentile.
-`<=12.` (trailing dot) rests on a compiled-in default: the corpus held
-fewer than 200 samples, or the metric is policy, or gold p99 was zero.
-Machine output carries a `budget_source` field. Budgets are `[lo, hi]`
-bands, per language. One-sided take p99; two-sided take p05/p95. Policy
-metrics encode taste and are never calibrated; the calibrate audit
-reports any policy the corpus violates (1% ceiling for gates, 5% for
-suspicions). What the gold data says: cognitive p99 lands at py 18, rs 16, ts 32;
+What the gold data says: cognitive p99 lands at py 18, rs 16, ts 32;
 Rust's doc culture pushes its comment ceiling to 78%. A test pins these
-numbers to `calibration.toml`.
+numbers to `calibration.toml` — the README cannot drift from the corpus.
 
-**`--helm`.** A Helm chart looks like an import graph. Treating it as
-one produced 48 findings on a real chart and zero were true: keys reached
-through `range`, through `index .root.Values`, inside comments, or
-guarded by `| default`. Reports only overlay drift (which keys each
-environment sets, by set comparison) and credentials in YAML scalars.
+---
 
-**`--render`.** `helm template` resolves every indirection by running
-it. `--render` measures the manifests: which resources each environment
-ships, and credentials a template injected from its values. On a
-four-region chart with 35 keys of values drift, every environment
-renders the same 19 resources.
+## Outside the ladder
 
-**`--deps`.** Credentials, action at a distance, checker suppressions,
-volume, and shared logic in the dependency tree. No unit-shape metrics.
-One kiosk frontend: 47k own lines against 3.97M across 575 packages.
+<details>
+<summary><b><code>--helm</code></b> — a chart is not an import graph</summary>
+
+A Helm chart *looks* like an import graph: `values.yaml` declares keys,
+templates reference them. Treating it as one produced 48 findings on a
+real chart and **zero were true** — keys reached through
+`range $name, $deploy`, through `index .root.Values .svc`, mentioned
+only inside a comment, or guarded by `| default`.
+
+So this tier reports only what needs no template evaluation: **overlay
+drift** (which keys each environment sets, by set comparison) and
+**credentials in YAML scalars**, using the same tested rules the
+extractor applies to source.
+</details>
+
+<details>
+<summary><b><code>--render</code></b> — measure what actually ships</summary>
+
+The way past a template you cannot evaluate is to stop analysing the
+template. `helm template` resolves every indirection by running it, and
+`--render` measures the manifests that come back: which resources each
+environment actually ships (a values diff cannot tell you this — a
+resource may appear or vanish through a conditional), and credentials a
+template injected from its values, invisible in the template and the
+values file alike.
+
+On a real four-region chart with 35 keys of values drift, every
+environment renders the same 19 resources.
+</details>
+
+<details>
+<summary><b><code>--deps</code></b> — the code you did not write</summary>
+
+The dependency tree is where a supply-chain problem hides, and the
+ordinary scan prunes it by design. This mode looks anyway and reports
+only what matters about code you cannot change: credentials compiled
+into it, action at a distance, checker suppressions, volume per package,
+and logic it shares with your own tree.
+
+Every unit-shape metric is deliberately absent — a dependency's
+cognitive complexity is trivia. One kiosk frontend measures 47k lines of
+its own against **3.97M lines across 575 packages**.
+</details>
+
+---
 
 ## Architecture
 
@@ -238,85 +341,180 @@ src/
 ```
 
 Language packs lower tree-sitter CSTs into language-agnostic facts;
-metrics never see a syntax tree. Adding a language: one kind table, four
-hooks. Adding a metric: one function over facts. One bottom-up pass per
-file.
+metrics never see a syntax tree. Adding a language is one kind table and
+four hooks; adding a metric is one function over facts. One bottom-up
+pass per file computes control events, clone fingerprints and expression
+heights together.
 
-Cross-language conformance suite: the same function in every supported
-language must produce identical metrics.
+A cross-language conformance suite pins the ontology: the same function
+written in every supported language must produce identical metrics.
+
+---
 
 ## Languages
 
-Python, Rust, TypeScript, TSX, Go, JavaScript, Zig, C, OCaml, shell,
-C++, CUDA.
+| Language | Extensions | Notes |
+| :--- | :--- | :--- |
+| Python | `.py` | |
+| Rust | `.rs` | doc culture pushes the comment ceiling to 78% |
+| TypeScript | `.ts` | |
+| TSX | `.tsx` | rides the TypeScript pack |
+| JavaScript | `.js` `.mjs` `.cjs` `.jsx` | |
+| Go | `.go` | median declared interface holds **1** method |
+| Zig | `.zig` | |
+| OCaml | `.ml` `.mli` | control group — tightest budgets in the corpus |
+| C | `.c` `.h`\* | no preprocessing; numbers are floors |
+| C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` `.h`\* | RAII kills `unmanaged`; gtest names composed |
+| CUDA | `.cu` `.cuh` | rides the C++ pack, own budgets |
+| shell | `.sh` `.bash` | no declared parameters, so no interface family |
 
-**Containers.** `.vue` and `.svelte` SFCs: `<script>` blocks are
-TypeScript or JavaScript at true line numbers, everything else blanked.
-Jupyter notebooks: code cells emitted at their true file line; markdown
-cells, output blocks, and IPython magics blanked. GitHub Actions `run:`
-blocks and Dockerfile `RUN` lines: shell at true line numbers.
+\* `.h` is the one extension that underdetermines its language.
+[The text decides it](#the-c-family).
 
-Placement is verified. A cell whose JSON position disagrees with the
-raw-text scan refuses the file rather than measuring it at invented
-lines.
+### Containers
 
-**Notebooks are not softened.** Against Python budgets, 38 notebooks
-read cognitive 4%, cyclomatic 5%, depth 3%. What is elevated: echo
-comments 57%, untyped params 16%, commented-out code 13%, repurposed
-12%.
+Blanking everything but the code preserves **true line numbers**, so
+`--explain`, `--diff` and the baseline need no offset bookkeeping and no
+new grammar.
 
-**C family.** Extensions do not settle the language. `.h` files
-classified by four line-anchored spellings (`namespace`, `template<`,
-access specifier, `class` + name): 0 of 1,027 C headers match, 98 of
-104 C++ headers do. The six that miss are headers holding no C++. CUDA
-classified by `__global__`, `__device__`, `__shared__`, `__constant__`,
-`__host__` outside comments.
+| Container | Read as |
+| :--- | :--- |
+| `.vue` / `.svelte` | `<script>` blocks as TypeScript or JavaScript |
+| `.ipynb` | code cells as Python; markdown, outputs and IPython magics blanked |
+| `.github/workflows/` | `run:` blocks as shell |
+| `Dockerfile` | `RUN` (shell form), `ENV` and `ARG` bodies as shell |
 
-C is parsed without preprocessing. Macro bodies are invisible;
-linkage-macro prefixes produce parse errors. Macro-heavy files fall
-below the confidence bar and are excluded, visibly counted. C numbers
-are floors. `#if`/`#elif`/`#else` count as real branches.
+Placement is verified rather than assumed: cells come from a JSON parse,
+positions from a scan of the raw text, and a disagreement on any line
+refuses the file rather than measuring it at invented lines.
 
-C++ gold: cognitive p99 = 30 and length p99 = 115, against C's 80 and 205.
-Five header-only libraries (fmt, immer, flux, ctre, magic_enum) read 19
-alone; adding kakoune and mold (99% parse rate) takes it to 30. RAII
-kills `unmanaged` (same reason as Rust). Pure-virtual classes count for
-`interface width`. Gtest `TEST(suite, case)` composed as `suite.case`;
-Catch2's string-argument form does not parse.
+**Notebooks are not softened, and the measurement is why.** Against
+ordinary Python budgets, 38 real notebooks read cognitive 4%, cyclomatic
+5% and depth 3% — the complexity budgets already fit. What is elevated
+is exactly the exploratory-hygiene family: echo comments 57%, untyped
+params 16%, commented-out code 13%, repurposed variables 12%. Those are
+the things worth knowing when a notebook is promoted into a pipeline.
 
-CUDA rides the C++ pack. `__global__` and `__device__` are unnamed
-tokens the tree never shows; `__shared__` is a `type_qualifier`;
-`<<<grid, block>>>` is already a `call_expression`. One table entry for
-a dialect. Gold reads params p99 = 15 against C++'s 5, magic numbers 30 against 10, and length 249 against 115.
+### The C family
 
-OCaml is a control group: cognitive p99 = 6 and length p99 = 52, against
-Python's 18/76, Rust's 16/93 and TypeScript's 32/106.
+<details>
+<summary>Extensions do not settle the language, so the text does</summary>
 
-Shell declares no parameters (`$1` read from caller's frame), so the
-interface family is structurally silent. `.sh`/`.bash` only.
+Reading every `.h` as C dropped a third of every C++ repository as
+unparseable — leveldb lost 47 of 56 headers, re2 20 of 23, fmt 23 of 25
+— because headers are where C++ keeps its classes. Reading every `.h` as
+C++ parses at least as well on C, and would then file musl's 655 headers
+under `cpp`, calibrating one language on another's code.
 
-**Calibration scoping.** A repository speaks only for its declared
-language. Cutlass carries 1,115 `.cpp` and 596 `.py` beside its kernels.
-Pooled by extension, adding five CUDA repos moved 46 budgets in
-languages nobody was editing (Python length: 80 to 252).
+So the label needs deciding as well as the grammar, by four
+line-anchored spellings that are not C: `namespace`, `template<`, an
+access specifier, `class` + a name. Validated before it was written —
+**0 of 1,027** headers from lua, musl, redis and curl match, and **98 of
+104** from fmt, leveldb and re2 do. The six that miss are `c.h`
+(leveldb's C API), `export.h`, `port.h` and `thread_annotations.h`:
+headers holding no C++ at all.
+
+CUDA is classified the same way, by `__global__`, `__device__`,
+`__shared__`, `__constant__` and `__host__` appearing outside comments.
+</details>
+
+**C is parsed without preprocessing, so its numbers are floors.**
+Function-like macros read as calls, but macro *bodies* are invisible and
+linkage-macro prefixes (`LUA_API void f(...)`) produce local parse
+errors — macro-heavy files fall below the confidence bar and are
+excluded, visibly counted in the report header. `#if`/`#elif`/`#else`
+count as real branches: conditional compilation is control flow the
+reader must follow.
+
+**C++ gold reads cognitive p99 = 30 and length p99 = 115, against C's 80
+and 205** — for a language very nearly a superset of the other.
+Conditional compilation is much of it, RAII most of the rest, since a
+destructor removes the error path a C function writes by hand.
+
+<details>
+<summary>Three C++ decisions, and what the corpus says about itself</summary>
+
+- **RAII kills `unmanaged`** for the reason it is dead in Rust: a
+  destructor runs on scope exit, so there is no missing guard to find.
+- **A class whose methods are all pure virtual** is what `interface
+  width` counts — that is an interface in everything but keyword.
+- **gtest's `TEST(args_test, basic)`** is read as the declaration it is.
+  The grammar can only see a function called TEST, so the pack composes
+  the name gtest itself prints: `args_test.basic`. Judging the case
+  alone read 61% of the C++ gold corpus as lazily named — worse than a
+  corpus of notorious code, which is how the bug announced itself.
+  Catch2 is the stated limit: `TEST_CASE("a pool takes a slot")` puts a
+  string where a parameter belongs and does not parse.
+
+The corpus is honest about itself too. Five hand-made modern libraries
+(fmt, immer, flux, ctre, magic_enum) read 19 on their own; adding two
+applications by one hand each — kakoune and mold, which parse at 99%,
+the best figures anywhere in this corpus — takes it to 30. An
+application branches harder than a header-only library, and a C++ budget
+derived only from libraries would have been one nobody could meet.
+</details>
+
+**CUDA adds exactly two named kinds to C++** — a whole dialect for one
+table entry, which is what the hourglass was built to buy. `__global__`
+and `__device__` are unnamed tokens the tree never shows, `__shared__`
+arrives as an ordinary `type_qualifier`, and `add<<<grid, block>>>(x)`
+is already a `call_expression` with one extra child.
+
+Statistically it is not C++ at all. Gold reads params p99 = 15 against C++'s 5, magic numbers 30 against 10, and length 249 against 115.
+A kernel really does take fifteen arguments and really is full of tile
+sizes, and borrowing C++'s budgets would have flagged nearly every one.
+
+**OCaml is a control group: cognitive p99 = 6 and length p99 = 52,
+against Python's 18/76, Rust's 16/93 and TypeScript's 32/106** — three
+to five times tighter on complexity. Idiomatic OCaml iterates with
+`List.iter` and a lambda, which the ontology reads as a call rather than
+a loop, so loop-based metrics read low for it by construction.
+
+**Shell provisions production and nothing was measuring it.** A single
+Kubernetes repository here holds 22.6k lines of it, including a
+3,287-line registry provisioner. A shell function declares no parameters
+(`$1` is read from the caller's frame), so the whole interface family is
+structurally silent — a fact about the language, recorded in the parity
+matrix rather than left to look like a gap. `.sh`/`.bash` only:
+`Lang::from_path` is a pure path predicate the walk calls on every file,
+and sniffing would change what a walk costs.
+
+### Calibration scoping
+
+**A repository speaks only for the language it was declared for.** A
+modern CUDA repository is a Python and C++ monorepo with kernels inside
+— cutlass alone carries 1,115 `.cpp` files and 596 `.py` — and pooled by
+extension, adding five of them moved **46 budgets in languages nobody
+was editing**, Python's length from 80 to 252 and C++'s params from 5 to
+115. Shell opts back in, because 207 of its 342 corpus files are
+genuinely build scripts living inside other checkouts.
+
+---
 
 ## Performance
 
-6.39M lines, 24.8k files, 325k units in 34s, 1.4 GB peak RSS (release
-build, 2026-08). Facts are transient per file; what survives is per-unit
-metrics, clone sites, fingerprints, vocabulary and bounded offender
-lists.
+**6.39M lines / 24.8k files / 325k units in 34s, 1.4 GB peak RSS**
+(single machine, release build, 2026-08). Facts are transient per file;
+what survives is per-unit metric values, clone sites, fingerprints, the
+identifier vocabulary and bounded offender lists.
 
-Memory is the scaling limit, roughly linear in lines. Budget 2 GB for
-10M lines.
+Memory, not speed, is the scaling limit, and it is roughly linear in
+lines — budget about 2 GB for a 10M-line tree. Two things were done
+about it and one was undone:
 
-- Clone-site paths shared (`Arc<str>`): 1.11 GB to 0.96 GB.
-- Blast-radius ancestor matrix: 64 components at a time, `ncomp^2/8` to
-  `ncomp*8` — 312 MB to 400 KB at 50k modules.
-- Storing a clone class's first site inline to spare singletons a `Vec`
-  allocation measured 7% worse: widening the struct grows hashbrown's
-  table by more than the allocations it saves. Reverted.
+- clone-site paths are shared (`Arc<str>`), not cloned per site:
+  1.11 GB → 0.96 GB
+- the blast-radius ancestor matrix is computed 64 components at a time,
+  turning `ncomp²/8` bytes into `ncomp·8` — 312 MB → 400 KB at 50k
+  modules
+- storing a clone class's first site inline to spare singletons a `Vec`
+  allocation measured 7% **worse** and was reverted: widening the struct
+  grows hashbrown's table across millions of entries by more than the
+  allocations it saves
+
+---
 
 ## Roadmap
 
-- Aggregate gold-relative summary (the ladder resists a single score)
+- An aggregate gold-relative summary — maybe; the ladder resists a
+  single score
