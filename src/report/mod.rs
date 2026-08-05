@@ -1053,6 +1053,63 @@ pub fn duplicated_pct(agg: &mut Agg) -> f64 {
     select_clones(agg).1.all_pct
 }
 
+/// How many metrics the brief report names. Enough to show what kind of
+/// trouble a codebase is in, few enough to stay quotable.
+const BRIEF_METRICS: usize = 5;
+
+/// The report in a dozen lines. The full render answers "what should I
+/// fix"; this answers "is anything wrong here, and of what kind" — the
+/// question asked by someone who has not decided to look yet. Every
+/// number is one the long form also prints, so the two cannot disagree.
+pub fn render_brief(agg: &mut Agg) -> String {
+    let mut out = headline(agg);
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
+    render_verdict(agg, &mut out);
+
+    // Ranked by how often a metric is outside budget rather than by raw
+    // count, because a codebase with a million lines fails everything a
+    // few times; the rate is what says which failure is characteristic.
+    // The budget is printed because the direction is not always down —
+    // `test asserts >=1` is violated by having too FEW, and a header
+    // saying "over budget" would have been a lie about that row.
+    let mut rows: Vec<(f64, &'static str, u8, String, String, String)> = Vec::new();
+    for (m, def) in METRICS.iter().enumerate() {
+        if def.rung > 4 || agg.dists[m].is_empty() || agg.violations_n[m] == 0 {
+            continue;
+        }
+        let rate = 100.0 * agg.violations_n[m] as f64 / agg.dists[m].len() as f64;
+        let budget = agg.budget_label(m);
+        let dist = agg.sorted_dist(m);
+        let p99 = fmt(def, quantile(dist, P99));
+        let max = fmt(def, *dist.last().expect("non-empty"));
+        rows.push((rate, def.name, def.rung, budget, p99, max));
+    }
+    rows.sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(b.1)));
+    if !rows.is_empty() {
+        let _ = writeln!(out, "\nmost often outside budget");
+        for (rate, name, rung, budget, p99, max) in rows.iter().take(BRIEF_METRICS) {
+            let _ = writeln!(
+                out,
+                "  {name:<16} {rate:>5.1}%   r{rung}  {budget:<9} p99 {p99:<7} max {max}"
+            );
+        }
+    }
+
+    let (classes, dup) = select_clones(agg);
+    if !classes.is_empty() {
+        let _ = writeln!(
+            out,
+            "\nclones                 {:.1}% of code duplicated across {} classes",
+            dup.all_pct,
+            classes.len()
+        );
+    }
+    render_rates(agg, &mut out);
+    out
+}
+
 /// The counts a verdict is made of, per ladder class.
 pub struct Verdict {
     pub gates: u64,

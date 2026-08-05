@@ -78,6 +78,8 @@ struct Args {
     hotspots: bool,
     /// Roll findings up to directories: which part of the tree is in trouble.
     rollup: bool,
+    /// The headline only: what kind of trouble, not which unit.
+    brief: bool,
     /// Undeclared coupling and sole authorship, read from history.
     coupling: bool,
     /// Look inside the dependencies — the code you did not write.
@@ -170,6 +172,8 @@ fn present(args: &Args, agg: &mut Agg) -> Result<(), Box<dyn Error>> {
     }
     let rendered = if args.rollup {
         rollup::run(agg, args.top)
+    } else if args.brief {
+        report::render_brief(agg)
     } else if args.sarif {
         report::render_sarif(agg)
     } else if args.json {
@@ -345,6 +349,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
         history: None,
         hotspots: false,
         rollup: false,
+        brief: false,
         coupling: false,
         deps: false,
         helm: false,
@@ -387,6 +392,7 @@ fn set_switch(args: &mut Args, flag: &str) -> bool {
         "--sarif" => &mut args.sarif,
         "--hotspots" => &mut args.hotspots,
         "--by" => &mut args.rollup,
+        "--brief" => &mut args.brief,
         "--coupling" => &mut args.coupling,
         "--deps" => &mut args.deps,
         "--helm" => &mut args.helm,
@@ -401,6 +407,7 @@ const USAGE: &str = "\
 usage: elegance [paths...]                 report; defaults to .
   --version | -V                           which build this is
   --top N                                  offenders shown per metric
+  --brief                                  the headline only: what kind of trouble, not which unit
   --json | --sarif                         machine output (schema 1 / SARIF 2.1.0)
   --explain file[:line]                    per-construct breakdown of one unit
   --context                                the repo's measured style, to read BEFORE writing

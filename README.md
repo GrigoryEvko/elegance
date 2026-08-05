@@ -54,6 +54,7 @@ See [plugins/elegance-nudge](plugins/elegance-nudge/README.md).
 | Command | |
 | :--- | :--- |
 | `elegance [paths...] [--top N]` | scan; files or directories, defaults to `.` |
+| `elegance --brief [paths...]` | the headline only — what kind of trouble, not which unit |
 | `elegance --json [paths...]` | versioned machine output (schema 1) |
 | `elegance --explain file[:line]` | per-construct score breakdown |
 | `elegance --baseline write` | record today's violations as the ledger |
