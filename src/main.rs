@@ -80,6 +80,8 @@ struct Args {
     rollup: bool,
     /// The headline only: what kind of trouble, not which unit.
     brief: bool,
+    /// Every section and every offender list, the pre-summary report.
+    full: bool,
     /// Undeclared coupling and sole authorship, read from history.
     coupling: bool,
     /// Look inside the dependencies — the code you did not write.
@@ -108,9 +110,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    // Machine output and baselines need every violation; display caps them.
-    let complete =
-        args.json || args.sarif || args.hotspots || args.rollup || args.baseline.is_some();
+    // Every mode that COUNTS across violations needs them all. Retaining
+    // 64 per metric was silently undercounting whatever read them in
+    // aggregate: `flag params` came out in 55 files where the truth was
+    // 789, the worst directory was the wrong one, and tensions reported
+    // 249 against a true 1107. Only `--brief` is exempt, and only because
+    // it reads distributions and totals rather than the offenders.
+    let complete = !args.brief;
     let layers = config::layers(&args.roots[0])?;
     // A reader of one table should know it is not one budget.
     match layers.count() {
@@ -174,12 +180,14 @@ fn present(args: &Args, agg: &mut Agg) -> Result<(), Box<dyn Error>> {
         rollup::run(agg, args.top)
     } else if args.brief {
         report::render_brief(agg)
+    } else if args.full {
+        report::render_full(agg, args.top)
     } else if args.sarif {
         report::render_sarif(agg)
     } else if args.json {
         report::render_json(agg)
     } else {
-        report::render(agg, args.top)
+        report::render(agg, report::ink::Ink::stdout())
     };
     print!("{rendered}");
     Ok(())
@@ -350,6 +358,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
         hotspots: false,
         rollup: false,
         brief: false,
+        full: false,
         coupling: false,
         deps: false,
         helm: false,
@@ -393,6 +402,7 @@ fn set_switch(args: &mut Args, flag: &str) -> bool {
         "--hotspots" => &mut args.hotspots,
         "--by" => &mut args.rollup,
         "--brief" => &mut args.brief,
+        "--full" => &mut args.full,
         "--coupling" => &mut args.coupling,
         "--deps" => &mut args.deps,
         "--helm" => &mut args.helm,
@@ -408,6 +418,7 @@ usage: elegance [paths...]                 report; defaults to .
   --version | -V                           which build this is
   --top N                                  offenders shown per metric
   --brief                                  the headline only: what kind of trouble, not which unit
+  --full                                   every section and every offender list
   --json | --sarif                         machine output (schema 1 / SARIF 2.1.0)
   --explain file[:line]                    per-construct breakdown of one unit
   --context                                the repo's measured style, to read BEFORE writing

@@ -2,6 +2,7 @@
 //! means — a codebase is as bad as the code you're forced to read most often.
 //! Offender lists hold only budget violations, so clean code reports quietly.
 
+pub mod ink;
 mod json;
 mod sarif;
 pub mod suggest;
@@ -40,6 +41,11 @@ struct Offender {
     path: String,
     line: u32,
     name: String,
+    /// The band this value was judged against, kept because the judging
+    /// budget is per language and cannot be recovered afterwards: a mixed
+    /// scan has no single budget for `cognitive` to look up later. Without
+    /// it a finding can only say how big it is, never how far out it is.
+    band: (Option<f32>, Option<f32>),
 }
 
 impl Offender {
@@ -51,6 +57,37 @@ impl Offender {
             format!("{}:{}", self.path, self.line)
         } else {
             self.path.clone()
+        }
+    }
+
+    /// How far outside the band this sits, as a multiple, so findings from
+    /// different metrics can be ranked against each other. `None` where the
+    /// budget is zero: "121 times a budget of none" is a count wearing a
+    /// ratio's clothes, and mixing the two lets a policy count outrank
+    /// every real overage.
+    fn severity(&self) -> Option<f32> {
+        // Which SIDE was crossed, not which side exists. A two-sided band
+        // has both, and testing `hi` first scored a value under the floor
+        // against the ceiling it never reached: `comment ratio` at 0%
+        // against a 2%-60% band came out 0x.
+        match self.band {
+            (Some(lo), _) if self.value < lo && lo > 0.0 => Some((lo - self.value) / lo + 1.0),
+            (_, Some(hi)) if self.value > hi && hi > 0.0 => Some(self.value / hi),
+            _ => None,
+        }
+    }
+
+    /// The values behind the finding: what was measured against what it
+    /// had to beat. Built from the band rather than by editing its label,
+    /// which on a two-sided band produced `0%2%-60%`.
+    fn over(&self, m: usize) -> String {
+        let def = &METRICS[m];
+        let show = |v: f32| fmt(def, v);
+        match self.band {
+            (Some(lo), _) if self.value < lo => format!("{}<{}", show(self.value), show(lo)),
+            (_, Some(hi)) => format!("{}>{}", show(self.value), show(hi)),
+            (Some(lo), None) => format!("{}<{}", show(self.value), show(lo)),
+            _ => show(self.value),
         }
     }
 }
@@ -300,6 +337,7 @@ impl Agg {
                     path: path.clone(),
                     line,
                     name: name.to_string(),
+                    band: budgets.0[m],
                 };
                 push_offender(&mut self.offenders[m], o, self.cap);
             }
@@ -685,7 +723,405 @@ fn push_offender(heap: &mut Vec<Offender>, o: Offender, cap: usize) {
     }
 }
 
-pub fn render(agg: &mut Agg, top: usize) -> String {
+/// Findings shown per ranked section, and rows in the shape table.
+const SHOW_RANKED: usize = 5;
+const SHOW_POLICY: usize = 3;
+const SHOW_SHAPE: usize = 4;
+
+/// The report as a page. It answers "what kind of trouble is this, and
+/// where do I start", which is the question asked before anyone has
+/// decided to look; `--full` answers "what should I fix", which is the
+/// question asked after.
+///
+/// Findings are ranked by how far outside the budget they sit, so units
+/// from unrelated metrics can be compared. The rung still picks the
+/// SECTION — sorting by distance across rungs floats a 3x `abbreviated`
+/// above a 34x `live span` purely because token hygiene is rung 0.
+pub fn render(agg: &mut Agg, ink: ink::Ink) -> String {
+    let trim = shared_prefix(agg);
+    let mut out = headline(agg);
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
+    render_ranked(agg, ink, trim, &mut out);
+    render_policy(agg, ink, trim, &mut out);
+    render_shape(agg, ink, &mut out);
+    render_aligned(agg, ink, &mut out);
+    render_where(agg, ink, &mut out);
+    out
+}
+
+/// Bytes of leading path every finding shares, cut at a separator. Whole
+/// absolute paths repeated down a report cost more width than the part
+/// that differs, and the part that differs is the only part read.
+fn shared_prefix(agg: &Agg) -> usize {
+    let mut paths = agg.offenders.iter().flatten().map(|o| o.path.as_str());
+    let Some(first) = paths.next() else {
+        return 0;
+    };
+    let mut common = first.len();
+    for path in paths {
+        common = common.min(
+            first
+                .bytes()
+                .zip(path.bytes())
+                .take_while(|(a, b)| a == b)
+                .count(),
+        );
+    }
+    first[..common].rfind(['/', '\\']).map_or(0, |cut| cut + 1)
+}
+
+/// Widest metric name, so the column never runs into the next one.
+/// `wildcard match` is fourteen characters and a hardcoded 14 printed it
+/// as `wildcard match3>1`.
+const NAME_COL: usize = 15;
+
+/// One line per finding: distance, metric, the values that produced it,
+/// and where. `4697x` rather than `4697.4x` — a tenth of a multiple has
+/// never changed anyone's mind about which function to open.
+fn finding_line(o: &Offender, m: usize, trim: usize, tint: (ink::Ink, &str)) -> String {
+    let (ink, colour) = tint;
+    let def = &METRICS[m];
+    let over = o.over(m);
+    let sev = o.severity().unwrap_or_default().round() as u64;
+    let unit = match o.name.is_empty() {
+        true => String::new(),
+        false => format!("  {}", o.name),
+    };
+    format!(
+        "  {colour}{sev:>5}x{}  {:<NAME_COL$}{over:<11}{}{}:{}{}{unit}",
+        ink.off(),
+        def.name,
+        ink.faint(),
+        &o.path[trim.min(o.path.len())..],
+        o.line,
+        ink.off(),
+    )
+}
+
+/// At most one finding per metric and one per file. Without both caps a
+/// single pathological file spends the whole list: one generated lookup
+/// table carrying 51,671 magic numbers took two of six slots and said the
+/// same thing twice.
+fn ranked(agg: &Agg, rungs: std::ops::RangeInclusive<u8>, k: usize) -> Vec<(usize, &Offender)> {
+    let mut all: Vec<(usize, &Offender)> = agg
+        .offenders
+        .iter()
+        .enumerate()
+        .filter(|(m, _)| rungs.contains(&METRICS[*m].rung))
+        .flat_map(|(m, os)| os.iter().map(move |o| (m, o)))
+        .filter(|(_, o)| o.severity().is_some())
+        .collect();
+    let distance = |(_, o): &(usize, &Offender)| o.severity().unwrap_or_default();
+    let at = |(_, o): &(usize, &Offender)| (o.path.clone(), o.line);
+    all.sort_by(|a, b| {
+        distance(b)
+            .total_cmp(&distance(a))
+            .then_with(|| at(a).cmp(&at(b)))
+    });
+    let mut seen_metric = [false; N];
+    let mut seen_file: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (m, o) in all {
+        if seen_metric[m] || !seen_file.insert(&o.path) {
+            continue;
+        }
+        seen_metric[m] = true;
+        out.push((m, o));
+        if out.len() == k {
+            break;
+        }
+    }
+    out
+}
+
+/// What a rung's findings add up to. EVERY violation at the rung, not
+/// only the ones the ranked list can show: ten metrics gate on a budget
+/// of zero — `secrets`, `built query`, `shelled out` among them — and
+/// counting only the rankable ones reported 8,866 gates on a tree that
+/// fails CI on 12,597.
+fn count_rung(agg: &Agg, rungs: std::ops::RangeInclusive<u8>) -> u64 {
+    METRICS
+        .iter()
+        .enumerate()
+        .filter(|(_, def)| rungs.contains(&def.rung))
+        .map(|(m, _)| agg.violations_n[m])
+        .sum()
+}
+
+fn section(ink: ink::Ink, name: &str, gloss: &str, out: &mut String) {
+    let _ = writeln!(
+        out,
+        "\n{}{name}{} {}—{} {gloss}",
+        ink.bold(),
+        ink.off(),
+        ink.faint(),
+        ink.off()
+    );
+}
+
+fn cta(ink: ink::Ink, label: &str, command: &str, out: &mut String) {
+    let _ = writeln!(
+        out,
+        "  {}→ {label}{}  {}{command}{}",
+        ink.faint(),
+        ink.off(),
+        ink.command(),
+        ink.off()
+    );
+}
+
+/// Rungs that fail a build, and rungs that only ask for a look. Named
+/// because they are the report's two spines and appear in five places.
+const GATES: std::ops::RangeInclusive<u8> = 0..=2;
+const SUSPICIONS: std::ops::RangeInclusive<u8> = 3..=4;
+
+fn render_ranked(agg: &mut Agg, ink: ink::Ink, trim: usize, out: &mut String) {
+    let gates = count_rung(agg, GATES);
+    if gates == 0 {
+        section(ink, "gates", "clean — nothing here fails a build", out);
+    } else {
+        let gloss = format!(
+            "{gates} over budget. Old sludge is tolerated until touched, new sludge is blocked."
+        );
+        section(ink, "gates", &gloss, out);
+        for (m, o) in ranked(agg, GATES, SHOW_RANKED) {
+            let _ = writeln!(out, "{}", finding_line(o, m, trim, (ink, ink.gate())));
+        }
+        cta(ink, "see the rest, worst first", "elegance --full", out);
+    }
+    let susp = count_rung(agg, SUSPICIONS);
+    if susp == 0 {
+        return;
+    }
+    let gloss =
+        format!("{susp} over budget; is the design wrong, or does the metric not fit here?");
+    section(ink, "suspicions", &gloss, out);
+    let listed = ranked(agg, SUSPICIONS, SHOW_POLICY);
+    // Point the command at something real. A reader who has to invent the
+    // argument has been handed a manual page, not a next step.
+    let example = listed
+        .first()
+        .map(|(_, o)| format!("{}:{}", &o.path[trim.min(o.path.len())..], o.line));
+    for (m, o) in &listed {
+        let _ = writeln!(out, "{}", finding_line(o, *m, trim, (ink, ink.suspicion())));
+    }
+    if let Some(at) = example {
+        let cmd = format!("elegance --explain {at}");
+        cta(ink, "break one down line by line", &cmd, out);
+    }
+}
+
+/// Metrics whose budget is zero. Their distance from it is a bare count,
+/// not a multiple, and letting a count share a ranked list with real
+/// multiples put `suppressions 121` above `cognitive 262>18`.
+/// Findings a budget of zero leaves unrankable, per metric, worst first.
+///
+/// Classified per FINDING, not per metric. A metric can be pinned in one
+/// language and left at zero in another — `demeter` is, across this
+/// corpus — so judging the metric as a whole sent 3,147 findings to
+/// neither list: too unrankable for one, too rankable for the other.
+fn zero_budget_rows(agg: &Agg) -> Vec<(usize, u64)> {
+    let mut rows = Vec::new();
+    for (m, def) in METRICS.iter().enumerate() {
+        if !GATES.contains(&def.rung) && !SUSPICIONS.contains(&def.rung) {
+            continue;
+        }
+        let n = unrankable(agg, m).count() as u64;
+        if n > 0 {
+            rows.push((m, n));
+        }
+    }
+    // Most sites first, ties by name so the order never depends on the
+    // registry's. A key beats a comparator here: the comparator nested
+    // an index inside a field inside a compare inside two closures.
+    rows.sort_by_key(|(m, n)| (std::cmp::Reverse(*n), METRICS[*m].name));
+    rows
+}
+
+fn unrankable(agg: &Agg, m: usize) -> impl Iterator<Item = &Offender> {
+    agg.offenders[m].iter().filter(|o| o.severity().is_none())
+}
+
+fn render_policy(agg: &mut Agg, ink: ink::Ink, trim: usize, out: &mut String) {
+    let rows = zero_budget_rows(agg);
+    if rows.is_empty() {
+        return;
+    }
+    let total: u64 = rows.iter().map(|(_, n)| n).sum();
+    // Ten of these sit at gating rungs — `secrets`, `built query` and
+    // `shelled out` among them — so a section that only said "any
+    // occurrence is a finding" would file a credential leak next to a
+    // style note and let the reader guess which stops a release.
+    let gates_too = |(m, _): &&(usize, u64)| GATES.contains(&METRICS[*m].rung);
+    let gating: u64 = rows.iter().filter(gates_too).map(|(_, n)| n).sum();
+    let gloss = match gating {
+        0 => format!("{total} where the budget is zero, so any occurrence is a finding"),
+        n => format!(
+            "{total} where the budget is zero, so any occurrence is a finding; {n} of them gate"
+        ),
+    };
+    section(ink, "policy", &gloss, out);
+    for (m, n) in rows.iter().take(SHOW_POLICY) {
+        let files: std::collections::HashSet<&str> =
+            unrankable(agg, *m).map(|o| o.path.as_str()).collect();
+        // A binary metric's worst is always 1, and printing it says nothing.
+        let worst = unrankable(agg, *m)
+            .max_by(|a, b| a.value.total_cmp(&b.value))
+            .filter(|w| w.value > 1.0);
+        let tail = worst.map_or(String::new(), |w| {
+            let at = &w.path[trim.min(w.path.len())..];
+            let value = fmt(&METRICS[*m], w.value);
+            format!(
+                ", worst {}{at}:{}{} ({value})",
+                ink.faint(),
+                w.line,
+                ink.off()
+            )
+        });
+        let name = METRICS[*m].name;
+        let _ = writeln!(
+            out,
+            "  {name:<NAME_COL$}{n:>5} sites in {} files{tail}",
+            files.len()
+        );
+    }
+    cta(
+        ink,
+        "disagree with one?",
+        "set it in .elegance.toml [budgets]",
+        out,
+    );
+}
+
+/// Only budgets actually pinned to the corpus. Sorted by violation rate
+/// the head of this table is otherwise dominated by compiled-in defaults,
+/// and a section claiming to compare against admired code must not.
+fn render_shape(agg: &mut Agg, ink: ink::Ink, out: &mut String) {
+    // A budget is per language, so a mixed scan has no single number to
+    // print and `budget_label` rightly says "varies" — which is no use in
+    // a column. The section speaks for the language that dominates the
+    // tree and says which, rather than showing a word where a budget goes.
+    let Some(lang) = LANGS
+        .iter()
+        .copied()
+        .filter(|l| agg.files_by_lang[*l as usize] > 0)
+        .max_by_key(|l| agg.files_by_lang[*l as usize])
+    else {
+        return;
+    };
+    let budgets = *agg.budgets.root().for_lang(lang);
+    let mut rows: Vec<(usize, f64)> = METRICS
+        .iter()
+        .enumerate()
+        .filter(|(m, _)| {
+            !agg.dists[*m].is_empty() && agg.violations_n[*m] > 0 && metrics::is_pinned(lang, *m)
+        })
+        .map(|(m, _)| {
+            (
+                m,
+                100.0 * agg.violations_n[m] as f64 / agg.dists[m].len() as f64,
+            )
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    rows.sort_by(|a, b| {
+        b.1.total_cmp(&a.1)
+            .then(METRICS[a.0].name.cmp(METRICS[b.0].name))
+    });
+    section(
+        ink,
+        "shape",
+        &format!(
+            "where this sits against gold {}; budgets pinned to it, others left out",
+            lang.name()
+        ),
+        out,
+    );
+    let _ = writeln!(
+        out,
+        "  {}{:<NAME_COL$}{:>8}  {:<9}{:>7}{:>7}{:>8}{}",
+        ink.faint(),
+        "metric",
+        "outside",
+        "budget",
+        "p50",
+        "p99",
+        "max",
+        ink.off()
+    );
+    for (m, rate) in rows.iter().take(SHOW_SHAPE) {
+        let def = &METRICS[*m];
+        let budget = metrics::band_label(*m, budgets.0[*m]);
+        let dist = agg.sorted_dist(*m);
+        let (p50, p99, max) = (
+            fmt(def, quantile(dist, P50)),
+            fmt(def, quantile(dist, P99)),
+            fmt(def, *dist.last().expect("non-empty")),
+        );
+        let _ = writeln!(
+            out,
+            "  {:<NAME_COL$}{rate:>7.1}%  {budget:<9}{p50:>7}{p99:>7}{max:>8}",
+            def.name
+        );
+    }
+    let quiet = METRICS
+        .iter()
+        .enumerate()
+        .filter(|(m, _)| !agg.dists[*m].is_empty() && agg.violations_n[*m] == 0)
+        .count();
+    let dup = duplicated_pct(agg);
+    let _ = writeln!(
+        out,
+        "  {}{quiet} metrics never fired · {dup:.1}% of the code is duplicated{}",
+        ink.faint(),
+        ink.off()
+    );
+    cta(
+        ink,
+        "the same numbers as a style guide",
+        "elegance --context",
+        out,
+    );
+}
+
+fn render_aligned(agg: &mut Agg, ink: ink::Ink, out: &mut String) {
+    let n = aligned_tensions(agg).len();
+    if n == 0 {
+        return;
+    }
+    section(
+        ink,
+        "tensions",
+        &format!("{n} units where three independent facts land at once"),
+        out,
+    );
+    cta(ink, "list them", "elegance --full", out);
+}
+
+fn render_where(agg: &mut Agg, ink: ink::Ink, out: &mut String) {
+    let worst = crate::rollup::worst_dirs(agg, 3);
+    if worst.is_empty() {
+        return;
+    }
+    section(
+        ink,
+        "hotspots",
+        "gated findings per file, worst directory first",
+        out,
+    );
+    let shown: Vec<String> = worst
+        .iter()
+        .map(|(dir, per_file)| format!("{dir} {per_file:.1}"))
+        .collect();
+    let _ = writeln!(out, "  {}", shown.join(" · "));
+    cta(ink, "full rollup", "elegance --by", out);
+}
+
+pub fn render_full(agg: &mut Agg, top: usize) -> String {
     let mut out = headline(agg);
     render_distributions(agg, &mut out);
     render_verdict(agg, &mut out);
@@ -842,7 +1278,9 @@ const LOAD_BEARING: u32 = 5;
 /// normalisation that makes repositories incomparable, and a figure
 /// that launders a rung-5 description into the same currency as a
 /// rung-0 gate. A tension names every fact it is made of.
-fn render_tensions(agg: &mut Agg, out: &mut String) {
+/// Units where several independent facts land at once, worst first. The
+/// short report prints only how many there are; the long one prints them.
+fn aligned_tensions(agg: &mut Agg) -> Vec<(String, u32, String, Vec<String>)> {
     let untested: std::collections::HashSet<String> = select_untested(agg)
         .into_iter()
         .map(|(label, _)| label)
@@ -883,14 +1321,19 @@ fn render_tensions(agg: &mut Agg, out: &mut String) {
             (facts.len() >= MIN_TENSIONS).then_some((path, line, unit, facts))
         })
         .collect();
-    if aligned.is_empty() {
-        return;
-    }
     aligned.sort_by(|a, b| {
         b.3.len()
             .cmp(&a.3.len())
             .then_with(|| (&a.0, a.1).cmp(&(&b.0, b.1)))
     });
+    aligned
+}
+
+fn render_tensions(agg: &mut Agg, out: &mut String) {
+    let aligned = aligned_tensions(agg);
+    if aligned.is_empty() {
+        return;
+    }
     let _ = writeln!(
         out,
         "\ntensions — {} places where independent facts align:",
@@ -1899,8 +2342,8 @@ mod tests {
         right.add_file(&a);
         let mut rev = Agg::merge(left, right);
 
-        let fwd_out = render(&mut fwd, 10);
-        assert_eq!(fwd_out, render(&mut rev, 10));
+        let fwd_out = render_full(&mut fwd, 10);
+        assert_eq!(fwd_out, render_full(&mut rev, 10));
         assert!(
             fwd_out.contains("clones"),
             "twin functions must form a clone class"
@@ -2070,7 +2513,7 @@ mod tests {
             "public docs must not appear as a suspicion: {:?}",
             v.suspicion_drivers
         );
-        let out = render(&mut agg, 5);
+        let out = render_full(&mut agg, 5);
         assert!(
             out.contains("public docs  py    50% of 2 public units documented"),
             "one of two public units documented:\n{out}"
@@ -2092,12 +2535,12 @@ mod tests {
             assert_eq!(*n, agg.violations_n[m], "{name}");
             assert!(METRICS[m].rung <= 4, "reports never enter a verdict");
         }
-        let out = render(&mut agg, 3);
+        let out = render_full(&mut agg, 3);
         assert!(out.contains("gates (rungs 0-2)"), "verdict block rendered");
 
         let mut clean = Agg::new();
         clean.add_file(&facts("b.py", "def f(x):\n    return x + 1\n"));
-        assert!(render(&mut clean, 3).contains("gates (rungs 0-2)      clean"));
+        assert!(render_full(&mut clean, 3).contains("gates (rungs 0-2)      clean"));
     }
 
     #[test]
@@ -2133,7 +2576,89 @@ mod tests {
         agg.add_file(&garbage);
         assert_eq!(agg.files, 1);
         assert_eq!(agg.units, 0, "no metrics from an unparseable file");
-        let out = render(&mut agg, 5);
+        let out = render_full(&mut agg, 5);
         assert!(out.contains("1 low-confidence excluded"));
+    }
+
+    /// The summary is the default view, so it has to be readable when
+    /// nobody is watching a terminal.
+    #[test]
+    fn the_summary_carries_no_escapes_when_styling_is_off() {
+        let mut agg = Agg::complete();
+        agg.add_file(&facts("a.py", &TWIN.replace("NAME", "mess")));
+        let out = render(&mut agg, ink::Ink::none());
+        assert!(
+            !out.contains('\u{1b}'),
+            "escape leaked into plain output:\n{out}"
+        );
+        assert!(out.contains("gates —"), "{out}");
+    }
+
+    /// The whole point of the ranking: a unit far outside its budget must
+    /// outrank one barely past it, even though the second carries the far
+    /// larger raw number. Sorting on the value alone gets this backwards,
+    /// because 400 lines and 8 levels of nesting are not comparable until
+    /// each is divided by what it was allowed.
+    #[test]
+    fn distance_from_budget_ranks_above_raw_value() {
+        let mut agg = Agg::complete();
+        // Nesting far past its budget, against a function whose length is
+        // an order of magnitude bigger a number and barely past its own.
+        let deep = "def deep(x):\n".to_string()
+            + &(1..=9)
+                .map(|i| format!("{}if x > {i}:\n", "    ".repeat(i)))
+                .collect::<String>()
+            + &format!("{}return x\n", "    ".repeat(10));
+        agg.add_file(&facts("deep.py", &deep));
+        agg.add_file(&facts(
+            "wide.py",
+            &format!("def wide(x):\n{}    return x\n", "    x += 1\n".repeat(82)),
+        ));
+        let out = render(&mut agg, ink::Ink::none());
+        let at = |needle: &str| out.find(needle);
+        let (deep_at, wide_at) = (at("deep.py").expect("deep listed"), at("wide.py"));
+        assert!(
+            wide_at.is_none_or(|w| deep_at < w),
+            "the deeper overage must lead, whatever the raw values:\n{out}"
+        );
+    }
+
+    /// A band is violated from one side at a time, and the report has to
+    /// name that side. Formatting it by editing the band's label produced
+    /// `0%2%-60%`, and scoring it against the ceiling it never approached
+    /// produced a severity of zero.
+    #[test]
+    fn a_band_violated_from_below_reads_from_below() {
+        let o = Offender {
+            value: 0.0,
+            path: "a.py".to_string(),
+            line: 1,
+            name: String::new(),
+            band: (Some(0.02), Some(0.60)),
+        };
+        let m = METRICS
+            .iter()
+            .position(|d| d.name == "comment ratio")
+            .expect("metric exists");
+        assert_eq!(o.over(m), "0%<2%");
+        assert!(o.severity().is_some_and(|s| s > 1.0), "{:?}", o.severity());
+    }
+
+    /// A zero budget makes the "ratio" a bare count, so those findings are
+    /// reported apart from the ranked ones. Mixing them let a count of 121
+    /// outrank a genuine 14x overage.
+    #[test]
+    fn a_zero_budget_finding_never_enters_the_ranked_list() {
+        let mut agg = Agg::complete();
+        agg.add_file(&facts(
+            "f.py",
+            "def g(flag=True, other=False):\n    return flag\n",
+        ));
+        let out = render(&mut agg, ink::Ink::none());
+        let ranked_end = out.find("policy —").unwrap_or(out.len());
+        assert!(
+            !out[..ranked_end].contains("flag params"),
+            "a policy finding reached the ranked section:\n{out}"
+        );
     }
 }

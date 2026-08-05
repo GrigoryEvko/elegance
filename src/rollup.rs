@@ -49,7 +49,31 @@ impl Dir {
     }
 }
 
-pub fn run(agg: &Agg, top: usize) -> String {
+/// The worst directories by gated-violation density, for the summary
+/// report, which has room for a line rather than a table.
+pub fn worst_dirs(agg: &Agg, k: usize) -> Vec<(String, f64)> {
+    let mut ranked: Vec<(String, Dir)> = tally(agg)
+        .into_iter()
+        // A directory whose density rounds to 0.0 tells the reader
+        // nothing but occupies a slot a real hotspot wanted.
+        .filter(|(_, d)| d.files >= MIN_FILES && d.density() >= 0.05)
+        .collect();
+    ranked.sort_by(|(a_dir, a), (b_dir, b)| {
+        b.density()
+            .total_cmp(&a.density())
+            .then_with(|| b.gates.cmp(&a.gates))
+            .then_with(|| a_dir.cmp(b_dir))
+    });
+    let parent_of = |(dir, _): &(String, Dir)| dir.rfind('/').map_or(0, |cut| cut + 1);
+    let trim = ranked.iter().map(parent_of).min().unwrap_or(0);
+    let named = |(dir, d): (String, Dir)| {
+        let shown = dir[trim.min(dir.len())..].to_string();
+        (shown, d.density())
+    };
+    ranked.into_iter().take(k).map(named).collect()
+}
+
+fn tally(agg: &Agg) -> HashMap<String, Dir> {
     let mut dirs: HashMap<String, Dir> = HashMap::new();
     for g in &agg.graph {
         let dir = dirs.entry(dir_of(&g.path)).or_default();
@@ -69,7 +93,11 @@ pub fn run(agg: &Agg, top: usize) -> String {
             _ => {}
         }
     }
-    render(dirs, top.max(SHOW))
+    dirs
+}
+
+pub fn run(agg: &Agg, top: usize) -> String {
+    render(tally(agg), top.max(SHOW))
 }
 
 fn render(dirs: HashMap<String, Dir>, show: usize) -> String {

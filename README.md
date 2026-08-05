@@ -53,7 +53,8 @@ See [plugins/elegance-nudge](plugins/elegance-nudge/README.md).
 
 | Command | |
 | :--- | :--- |
-| `elegance [paths...] [--top N]` | scan; files or directories, defaults to `.` |
+| `elegance [paths...]` | scan; findings ranked by how far past budget they sit |
+| `elegance --full [--top N]` | every section and every per-metric offender list |
 | `elegance --brief [paths...]` | the headline only — what kind of trouble, not which unit |
 | `elegance --json [paths...]` | versioned machine output (schema 1) |
 | `elegance --explain file[:line]` | per-construct score breakdown |
