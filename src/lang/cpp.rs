@@ -338,8 +338,8 @@ fn name_node(node: Node) -> Option<Node> {
 /// whose "parameters" are bare type names carrying no declarator,
 /// because they are not parameters at all. Returns (macro, last
 /// argument), which is the name a human reads. Without this every
-/// gtest unit reports as `TEST` and fails `lazy test name` on the
-/// macro's own four letters.
+/// gtest unit reports under the macro's own four letters, and every
+/// test-quality metric judges `TEST` instead of the case.
 ///
 /// A constructor also has no return type, but its parameters are
 /// named; the only collision is a constructor whose every parameter is
@@ -668,8 +668,7 @@ mod tests {
     fn a_gtest_macro_declares_a_test_named_after_its_case() {
         // The grammar can only read `TEST(Pool, Takes) { ... }` as a
         // function called TEST. Left there, every gtest unit in every
-        // C++ repository reports under the macro's four letters and
-        // fails `lazy test name` on them.
+        // C++ repository reports under the macro's four letters.
         let f = facts(
             "TEST(PoolTest, TakesAKnownSlot) {\n  EXPECT_EQ(take(\"a\"), 1);\n}\n\nint Pool::take(const std::string& k) { return 1; }\n",
         );

@@ -223,7 +223,7 @@ React. Solid is exempt: it tracks dependencies at run time.
 | `echo comments` · `comment ratio` | |
 | `module doc` · `type doc` · `fn doc` · `field doc` · `inline doc` | prose words per comment run, pinned per language **and role** |
 | `doc param` | a parameter the documentation names and the signature does not declare |
-| `test asserts` · `lazy test name` | |
+| `test asserts` | a declared test whose body asserts nothing |
 | `untyped params` · `loose types` · `casts` · `suppressions` | type hygiene |
 
 **Doc length** is the whole wordiness signal — compression, type-token

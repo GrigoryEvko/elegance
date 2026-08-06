@@ -179,7 +179,6 @@ mod tests {
             metrics::ECHO_COMMENTS,
             metrics::SPOOKY,
             metrics::TEST_ASSERTS,
-            metrics::LAZY_TEST_NAME,
         ] {
             assert!(
                 for_metric(m, &u).is_none(),

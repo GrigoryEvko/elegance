@@ -212,47 +212,46 @@ pub const BROAD_CATCH: usize = 18;
 pub const UNWRAPS: usize = 19;
 pub const LYING_NAME: usize = 20;
 pub const TEST_ASSERTS: usize = 21;
-pub const LAZY_TEST_NAME: usize = 22;
-pub const ASSERTS: usize = 23;
-pub const PUBLIC_DOCS: usize = 24;
-pub const ECHO_COMMENTS: usize = 25;
-pub const COMMENT_RATIO: usize = 26;
-pub const UNTYPED_PARAMS: usize = 27;
-pub const LOOSE_TYPES: usize = 28;
-pub const CASTS: usize = 29;
-pub const SUPPRESSIONS: usize = 30;
-pub const CONFUSABLE: usize = 31;
-pub const TERSE_NAME: usize = 32;
-pub const ABBREVIATED: usize = 33;
-pub const VACUOUS_ASSERTS: usize = 34;
-pub const LOST_CONTEXT: usize = 35;
-pub const SECRETS: usize = 36;
-pub const BLOCKING_IN_ASYNC: usize = 37;
-pub const DROPPED_TASKS: usize = 38;
-pub const WILDCARD_MATCH: usize = 39;
-pub const STRINGLY_ID: usize = 40;
-pub const LOOP_DEPTH: usize = 41;
-pub const ALLOC_IN_LOOP: usize = 42;
-pub const CONDITIONAL_HOOK: usize = 43;
-pub const RETURN_ARITY: usize = 44;
-pub const INTERFACE_WIDTH: usize = 45;
-pub const REPURPOSED: usize = 46;
-pub const UNAWAITED: usize = 47;
-pub const MAGIC_STRINGS: usize = 48;
-pub const SLEEPY_TEST: usize = 49;
-pub const SKIPPED_TESTS: usize = 50;
-pub const BOOL_TRAPS: usize = 51;
-pub const COMMENTED_CODE: usize = 52;
-pub const COHESION: usize = 53;
-pub const SQL_BUILT: usize = 54;
-pub const SHELLED_OUT: usize = 55;
-pub const CEREMONY: usize = 56;
-pub const MODULE_DOC: usize = 57;
-pub const TYPE_DOC: usize = 58;
-pub const FN_DOC: usize = 59;
-pub const FIELD_DOC: usize = 60;
-pub const INLINE_DOC: usize = 61;
-pub const DOC_PARAM: usize = 62;
+pub const ASSERTS: usize = 22;
+pub const PUBLIC_DOCS: usize = 23;
+pub const ECHO_COMMENTS: usize = 24;
+pub const COMMENT_RATIO: usize = 25;
+pub const UNTYPED_PARAMS: usize = 26;
+pub const LOOSE_TYPES: usize = 27;
+pub const CASTS: usize = 28;
+pub const SUPPRESSIONS: usize = 29;
+pub const CONFUSABLE: usize = 30;
+pub const TERSE_NAME: usize = 31;
+pub const ABBREVIATED: usize = 32;
+pub const VACUOUS_ASSERTS: usize = 33;
+pub const LOST_CONTEXT: usize = 34;
+pub const SECRETS: usize = 35;
+pub const BLOCKING_IN_ASYNC: usize = 36;
+pub const DROPPED_TASKS: usize = 37;
+pub const WILDCARD_MATCH: usize = 38;
+pub const STRINGLY_ID: usize = 39;
+pub const LOOP_DEPTH: usize = 40;
+pub const ALLOC_IN_LOOP: usize = 41;
+pub const CONDITIONAL_HOOK: usize = 42;
+pub const RETURN_ARITY: usize = 43;
+pub const INTERFACE_WIDTH: usize = 44;
+pub const REPURPOSED: usize = 45;
+pub const UNAWAITED: usize = 46;
+pub const MAGIC_STRINGS: usize = 47;
+pub const SLEEPY_TEST: usize = 48;
+pub const SKIPPED_TESTS: usize = 49;
+pub const BOOL_TRAPS: usize = 50;
+pub const COMMENTED_CODE: usize = 51;
+pub const COHESION: usize = 52;
+pub const SQL_BUILT: usize = 53;
+pub const SHELLED_OUT: usize = 54;
+pub const CEREMONY: usize = 55;
+pub const MODULE_DOC: usize = 56;
+pub const TYPE_DOC: usize = 57;
+pub const FN_DOC: usize = 58;
+pub const FIELD_DOC: usize = 59;
+pub const INLINE_DOC: usize = 60;
+pub const DOC_PARAM: usize = 61;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -316,8 +315,6 @@ pub const METRICS: &[MetricDef] = &[
     // Beck's first rule is "passes the tests" — a test that asserts
     // nothing passes vacuously.
     MetricDef { name: "test asserts",  rung: 3, lo: Some(1.0),  hi: None,       fmt: Fmt::Int, calib: Calib::Policy },
-    // test_1/test_foo say nothing; a test name should state a behavior.
-    MetricDef { name: "lazy test name",rung: 3, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
     // Emitted only for complex units (cognitive >= ASSERT_WORTHY), and
     // rendered as a COVERAGE RATE, never per-unit findings: admired code
     // fails "every complex unit asserts" 89.6% of the time, and a
@@ -1271,12 +1268,6 @@ fn names_and_contracts(
             u.line,
             &u.qualname,
         );
-        f(
-            LAZY_TEST_NAME,
-            (words.len() < 3) as u32 as f32,
-            u.line,
-            &u.qualname,
-        );
     }
     if cog >= ASSERT_WORTHY {
         f(ASSERTS, asserts as f32, u.line, &u.qualname);
@@ -1366,7 +1357,6 @@ mod tests {
             (UNWRAPS, "unwraps"),
             (LYING_NAME, "lying name"),
             (TEST_ASSERTS, "test asserts"),
-            (LAZY_TEST_NAME, "lazy test name"),
             (ASSERTS, "asserts"),
             (PUBLIC_DOCS, "public docs"),
             (ECHO_COMMENTS, "echo comments"),
@@ -1410,7 +1400,7 @@ mod tests {
         for (idx, name) in PAIRS {
             assert_eq!(METRICS[*idx].name, *name, "index {idx}");
         }
-        assert_eq!(N, 63);
+        assert_eq!(N, 62);
     }
 
     #[test]
@@ -1598,7 +1588,7 @@ mod tests {
     }
 
     #[test]
-    fn test_quality_flags_assertless_and_lazy_tests() {
+    fn a_declared_test_is_judged_by_what_it_asserts() {
         let pack = Lang::Python.pack();
         let mut parser = pack.make_parser();
         let facts = extract(
@@ -1607,21 +1597,20 @@ mod tests {
             Path::new("test_thing.py"),
             "def test_1():\n    run()\n\ndef test_rejects_expired_token():\n    assert check() is False\n\ndef helper():\n    pass\n",
         );
-        let mut hits: Vec<(usize, String, f32)> = Vec::new();
+        let mut hits: Vec<(String, f32)> = Vec::new();
         for_each(&facts, |m, v, _, name| {
-            if m == TEST_ASSERTS || m == LAZY_TEST_NAME {
-                hits.push((m, name.to_string(), v));
+            if m == TEST_ASSERTS {
+                hits.push((name.to_string(), v));
             }
         });
-        // test_1: 0 asserts (violates lo), lazy name; the good test passes
-        // both; helper in a test file is test-support, not a named test.
+        // test_1 asserts nothing and violates the floor; the good test
+        // passes it; `helper` in a test file is test-support, not a
+        // declared test, and is not judged at all.
         assert_eq!(
             hits,
             [
-                (TEST_ASSERTS, "test_1".into(), 0.0),
-                (LAZY_TEST_NAME, "test_1".into(), 1.0),
-                (TEST_ASSERTS, "test_rejects_expired_token".into(), 1.0),
-                (LAZY_TEST_NAME, "test_rejects_expired_token".into(), 0.0),
+                ("test_1".into(), 0.0),
+                ("test_rejects_expired_token".into(), 1.0),
             ]
         );
     }
@@ -4061,10 +4050,6 @@ mod tests {
             "test asserts",
             "a_test_is_declared_only_by_evidence_its_context_supports",
         ),
-        (
-            "lazy test name",
-            "test_quality_flags_assertless_and_lazy_tests",
-        ),
         ("asserts", "assert_density_emitted_only_for_complex_units"),
         (
             "public docs",
@@ -4319,20 +4304,15 @@ mod tests {
             "test \"rejects expired token\" {\n    try std.testing.expect(true);\n}\n\ntest \"ok\" {\n    run();\n}\n",
         );
         assert_eq!(&*facts.units[1].name, "rejects expired token");
-        let mut hits: Vec<(usize, String, f32)> = Vec::new();
+        let mut hits: Vec<(String, f32)> = Vec::new();
         for_each(&facts, |m, v, _, name| {
-            if m == TEST_ASSERTS || m == LAZY_TEST_NAME {
-                hits.push((m, name.to_string(), v));
+            if m == TEST_ASSERTS {
+                hits.push((name.to_string(), v));
             }
         });
         assert_eq!(
             hits,
-            [
-                (TEST_ASSERTS, "rejects expired token".into(), 1.0),
-                (LAZY_TEST_NAME, "rejects expired token".into(), 0.0),
-                (TEST_ASSERTS, "ok".into(), 0.0),
-                (LAZY_TEST_NAME, "ok".into(), 1.0),
-            ]
+            [("rejects expired token".into(), 1.0), ("ok".into(), 0.0),]
         );
     }
 
