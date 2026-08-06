@@ -155,6 +155,25 @@ pub struct LabelSet {
     pub line: u32,
 }
 
+/// What a declaration's body amounts to.
+///
+/// A body that is one literal and nothing else declares nothing, and the
+/// distinction between a boolean and any other literal is load-bearing:
+/// naming a number is how a codebase AVOIDS magic numbers, which is why
+/// `const_item` sits in every pack's `magic_exempt`. Naming a boolean
+/// that asserts project state is a different act.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum BodyShape {
+    /// `{ true }`, `= false`, `:= true`.
+    BoolLiteral,
+    /// One literal of any other kind: `{ 1 }`, `= "v1"`.
+    Literal,
+    /// Names or does something. The default, and the safe answer for a
+    /// grammar whose definitions carry no `body` field.
+    #[default]
+    Real,
+}
+
 pub struct UnitFacts {
     pub name: Box<str>,
     /// Scope-qualified name (`Class.method`, `Type::method`, `outer.inner`)
@@ -173,6 +192,11 @@ pub struct UnitFacts {
     /// Contract-documentation lines (docstring, `///`, JSDoc) — interface
     /// docs, distinct from inline implementation comments.
     pub doc_lines: u32,
+    /// Whether this declaration's body says anything.
+    pub body: BodyShape,
+    /// A trait/interface default, or a method marked as overriding one.
+    /// Only meaningful when `body` is not `Real` — see `open_unit`.
+    pub is_override: bool,
     pub max_vis_depth: u16,
     /// Tallest single-line expression tree — the clever-one-liner signal.
     pub max_expr_depth: u16,

@@ -3,6 +3,7 @@ use std::path::Path;
 use tree_sitter::{Node, Parser};
 
 use super::{CloneSite, CtrlFact, FileFacts, UnitFacts};
+use crate::facts::BodyShape;
 use crate::lang::Pack;
 use crate::sem::Sem;
 
@@ -311,6 +312,8 @@ impl UnitFacts {
             qualname: "".into(),
             line: 0,
             lines: 0,
+            body: BodyShape::Real,
+            is_override: false,
             is_module: false,
             is_method: false,
             is_public: false,
@@ -450,6 +453,94 @@ struct Extractor<'a> {
 impl Extractor<'_> {
     fn sem_of(&self, node: Node) -> Sem {
         self.pack.sem_of(node, self.src)
+    }
+
+    /// Is this declaration an override point?
+    ///
+    /// Two mechanisms. The pack answers for an explicit marker —
+    /// `@Override`, `override`, a method inside `impl Trait for` — which
+    /// is the only route when the enclosing type is an ordinary class.
+    /// Beyond that, a member of a declaration that `interfaces`
+    /// recognises is a default for implementors, and that generic check
+    /// costs the packs nothing.
+    ///
+    /// Both matter to `ceremony`, whose 79 gold false positives were
+    /// every one of them a documented trait default.
+    fn is_override_point(&self, node: Node) -> bool {
+        if (self.pack.is_override)(node, self.src) {
+            return true;
+        }
+        let mut anc = node.parent();
+        while let Some(a) = anc {
+            if self.sem_of(a) == Sem::TypeDef {
+                return !(self.pack.interfaces)(a, self.src).is_empty();
+            }
+            anc = a.parent();
+        }
+        false
+    }
+
+    /// Is this declaration's body one literal and nothing else?
+    ///
+    /// Python and Ruby keep the docstring INSIDE the body, so a
+    /// documented function's first statement is prose rather than work
+    /// and has to be set aside — otherwise every documented Python stub
+    /// reads as two literals and escapes the metric that wants it.
+    ///
+    /// A grammar whose definitions carry no `body` field reads as
+    /// `Real`, which loses the finding rather than inventing one.
+    fn body_shape(&self, node: Node) -> BodyShape {
+        let Some(body) = node.child_by_field_name("body") else {
+            return BodyShape::Real;
+        };
+        let mut cursor = body.walk();
+        let mut kids = body.named_children(&mut cursor);
+        let Some(first) = kids.next() else {
+            return BodyShape::Real;
+        };
+        let rest: Vec<Node> = kids.collect();
+        let (head, tail) = match rest.split_first() {
+            Some((second, others)) if self.only_literal(first) == Some(Sem::StrLit) => {
+                (*second, others)
+            }
+            _ => (first, &rest[..]),
+        };
+        if !tail.is_empty() {
+            return BodyShape::Real;
+        }
+        match self.only_literal(head) {
+            Some(Sem::BoolLit) => BodyShape::BoolLiteral,
+            Some(_) => BodyShape::Literal,
+            None => BodyShape::Real,
+        }
+    }
+
+    /// The one literal this subtree amounts to, if that is all it is.
+    ///
+    /// Aborts on the first node that names or does anything, so an
+    /// ordinary statement costs a visit or two. A SECOND literal also
+    /// disqualifies: `(1, 2)` builds something.
+    fn only_literal(&self, node: Node) -> Option<Sem> {
+        let mut found = None;
+        let mut stack = vec![node];
+        while let Some(n) = stack.pop() {
+            match self.sem_of(n) {
+                sem @ (Sem::BoolLit | Sem::NumLit | Sem::StrLit) => {
+                    if found.is_some() {
+                        return None;
+                    }
+                    found = Some(sem);
+                }
+                // A block, an expression statement, a `return`: these
+                // carry the literal rather than being it.
+                Sem::None | Sem::Jump => {
+                    let mut c = n.walk();
+                    stack.extend(n.named_children(&mut c));
+                }
+                _ => return None,
+            }
+        }
+        found
     }
 
     /// Returns the subtree summary, or None for commentary (comments and doc
@@ -1001,6 +1092,11 @@ impl Extractor<'_> {
             .unwrap_or_else(|| "".into());
         unit.is_public = (self.pack.is_public)(node, self.src);
         unit.doc_lines = (self.pack.unit_docs)(node, self.src);
+        unit.body = self.body_shape(node);
+        // Only `ceremony` asks this, and only about literal-bodied
+        // declarations, so the ancestor walk and the `interfaces`
+        // allocation are skipped for every ordinary function.
+        unit.is_override = unit.body != BodyShape::Real && self.is_override_point(node);
         unit.is_passthrough = self.is_passthrough(node, &unit.params);
         unit.is_async = (self.pack.is_async)(node, self.src);
         unit.named_test = (self.pack.declares_test)(node, self.src)
@@ -1702,7 +1798,15 @@ impl Extractor<'_> {
         let Some(mut operand) = (self.pack.negation_operand)(node, self.src) else {
             return;
         };
-        while operand.kind() == "parenthesized_expression" {
+        // Parentheses, and the wrappers a grammar puts around every
+        // operand: Ruby writes `parenthesized_statements`, Solidity
+        // nests an `expression` node at each level. Only these — a
+        // general "one named child" rule would unwrap the inner `!` of
+        // `!!x` and defeat the coercion guard below.
+        while matches!(
+            operand.kind(),
+            "parenthesized_expression" | "parenthesized_statements" | "expression"
+        ) {
             match operand.named_child(0) {
                 Some(inner) => operand = inner,
                 None => break,
@@ -2698,11 +2802,28 @@ fn line_span(node: Node) -> u32 {
 fn param_list<'t>(node: Node<'t>) -> Option<Node<'t>> {
     node.child_by_field_name("parameters")
         .or_else(|| node.child_by_field_name("parameter"))
-        // Some grammars (Zig) leave the parameter list unfielded.
+        // Some grammars (Zig) leave the parameter list unfielded, and
+        // Perl calls it a `signature` — which is also the one place a
+        // Perl sub declares its parameters at all, so missing it made
+        // every modern signature read as taking none.
         .or_else(|| {
             let mut cursor = node.walk();
             node.named_children(&mut cursor)
-                .find(|c| c.kind() == "parameters")
+                .find(|c| matches!(c.kind(), "parameters" | "signature"))
+        })
+        // Elixir's definition is a CALL to `def`, whose first argument
+        // is the function head; the parameters are that head's own
+        // arguments, one level further down than anywhere else.
+        .or_else(|| {
+            let mut c = node.walk();
+            let head = node
+                .named_children(&mut c)
+                .find(|n| n.kind() == "arguments")?
+                .named_child(0)
+                .filter(|h| h.kind() == "call")?;
+            let mut i = head.walk();
+            head.named_children(&mut i)
+                .find(|n| n.kind() == "arguments")
         })
         // OCaml lists parameters as direct children of the binding
         // rather than wrapping them, so the definition IS the list and
@@ -2840,6 +2961,139 @@ mod tests {
         let pack = Lang::Python.pack();
         let mut parser = pack.make_parser();
         extract(pack, &mut parser, Path::new("test.py"), source)
+    }
+
+    #[test]
+    fn a_documented_trait_default_is_not_a_bare_literal_declaration() {
+        // Every one of `ceremony`'s 79 gold false positives was this
+        // shape: a trait or interface member whose literal body is a
+        // DEFAULT, documented at length so implementors know when to
+        // replace it. Excluding them cost 6 real hits out of 3,187.
+        use crate::lang::Lang;
+        let over = |lang: Lang, name: &str, src: &str, unit: &str| -> bool {
+            let pack = lang.pack();
+            let mut parser = pack.make_parser();
+            let f = extract(pack, &mut parser, Path::new(name), src);
+            f.units
+                .iter()
+                .find(|u| u.name.as_ref() == unit)
+                .unwrap_or_else(|| panic!("{lang:?}: no unit {unit}"))
+                .is_override
+        };
+        // Rust: a trait body reaches this through the generic
+        // `interfaces` check, an `impl Trait for` through the hook.
+        assert!(over(
+            Lang::Rust,
+            "t.rs",
+            "trait Bounded {\n    /// a\n    /// b\n    /// c\n    fn min_len(&self) -> usize { 1 }\n}\n",
+            "min_len",
+        ));
+        assert!(over(
+            Lang::Rust,
+            "t.rs",
+            "trait T { fn f(&self) -> bool; }\nimpl T for S {\n    fn f(&self) -> bool { true }\n}\n",
+            "f",
+        ));
+        // An inherent impl implements nobody's contract.
+        assert!(!over(
+            Lang::Rust,
+            "t.rs",
+            "impl S {\n    /// a\n    /// b\n    /// c\n    fn ready(&self) -> bool { true }\n}\n",
+            "ready",
+        ));
+        // Java: `@Override` inside an ordinary class, which the generic
+        // check cannot see.
+        assert!(over(
+            Lang::Java,
+            "T.java",
+            "class T {\n  @Override\n  public boolean isEmpty() { return true; }\n}\n",
+            "isEmpty",
+        ));
+        assert!(!over(
+            Lang::Java,
+            "T.java",
+            "class T {\n  public boolean ready() { return true; }\n}\n",
+            "ready",
+        ));
+        // A free function is nobody's override.
+        assert!(!over(
+            Lang::Rust,
+            "t.rs",
+            "fn ready() -> bool { true }\n",
+            "ready"
+        ));
+    }
+
+    #[test]
+    fn a_bare_literal_body_is_told_apart_from_a_real_one() {
+        // Ceremony reads this, and it splits booleans from other
+        // literals because naming a number is how a codebase avoids
+        // magic numbers — `const_item` sits in every pack's
+        // `magic_exempt` for that reason. Naming a boolean that asserts
+        // project state is a different act.
+        let shapes = |lang: crate::lang::Lang, name: &str, src: &str| -> Vec<(String, BodyShape)> {
+            let pack = lang.pack();
+            let mut parser = pack.make_parser();
+            let f = extract(pack, &mut parser, Path::new(name), src);
+            f.units
+                .iter()
+                .map(|u| (u.name.to_string(), u.body))
+                .collect()
+        };
+        use crate::lang::Lang;
+        let cases: &[(Lang, &str, &str)] = &[
+            (
+                Lang::Rust,
+                "t.rs",
+                "fn b() -> bool { true }\nfn n() -> u32 { 42 }\nfn s() -> &'static str { \"x\" }\n\
+                 fn r() -> u32 { compute() }\nfn two() -> (u32, u32) { (1, 2) }\nfn neg() -> i32 { -1 }\n",
+            ),
+            (
+                Lang::Python,
+                "t.py",
+                "def b():\n    return True\ndef n():\n    return 42\ndef r():\n    return compute()\n",
+            ),
+            (
+                Lang::TypeScript,
+                "t.ts",
+                "function b() { return true; }\nfunction n() { return 42; }\nfunction r() { return compute(); }\n",
+            ),
+            (
+                Lang::Go,
+                "t.go",
+                "package p\nfunc B() bool { return true }\nfunc N() int { return 42 }\nfunc R() int { return compute() }\n",
+            ),
+        ];
+        for (lang, name, src) in cases {
+            let got = shapes(*lang, name, src);
+            let by = |want: &str| {
+                got.iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(want))
+                    .map(|(_, s)| *s)
+            };
+            assert_eq!(by("b"), Some(BodyShape::BoolLiteral), "{lang:?} bare bool");
+            assert_eq!(by("n"), Some(BodyShape::Literal), "{lang:?} bare number");
+            assert_eq!(
+                by("r"),
+                Some(BodyShape::Real),
+                "{lang:?} a call is not a literal"
+            );
+        }
+        // Rust-only shapes: a string is a literal, a tuple of two builds
+        // something, and a negated number is still one number.
+        let rust = shapes(
+            Lang::Rust,
+            "t.rs",
+            "fn s() -> &'static str { \"x\" }\nfn two() -> (u32, u32) { (1, 2) }\nfn neg() -> i32 { -1 }\n",
+        );
+        let find = |want: &str| rust.iter().find(|(n, _)| n == want).map(|(_, s)| *s);
+        assert_eq!(find("s"), Some(BodyShape::Literal));
+        assert_eq!(
+            find("two"),
+            Some(BodyShape::Real),
+            "two literals build a value"
+        );
+        assert_eq!(find("neg"), Some(BodyShape::Literal), "-1 is one number");
     }
 
     #[test]

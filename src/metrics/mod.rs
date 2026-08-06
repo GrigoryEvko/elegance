@@ -2,7 +2,7 @@
 //! `[lo, hi]` bands — most metrics cap only the high side, comment ratio is
 //! two-sided (too few comments is obscurity, too many is noise).
 
-use crate::facts::{CtrlFact, FileFacts, UnitFacts};
+use crate::facts::{BodyShape, CtrlFact, FileFacts, UnitFacts};
 use crate::sem::Sem;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -246,6 +246,7 @@ pub const COMMENTED_CODE: usize = 53;
 pub const COHESION: usize = 54;
 pub const SQL_BUILT: usize = 55;
 pub const SHELLED_OUT: usize = 56;
+pub const CEREMONY: usize = 57;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -626,7 +627,46 @@ pub const METRICS: &[MetricDef] = &[
     // remedy, an argument LIST, needs no shell and carries no
     // interpolation, so the fix makes the finding disappear.
     MetricDef { name: "shelled out",   rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
+    // A declaration that asserts nothing, dressed as though it asserts
+    // something: nullary, body is one bare literal, and three or more
+    // lines of documentation above it.
+    //
+    // The CONJUNCTION carries the whole signal. Bare content-free-ness
+    // is worthless as a measure — gold Rust runs 51 such declarations
+    // per thousand and one AI corpus runs 100, both ABOVE the corpus
+    // this was built from at 61. The doc gate is what separates: at
+    // three lines the human rate over 512,927 declarations in twelve
+    // languages is 11, and at ten lines it is 1.
+    //
+    // Override points are excluded, and that exclusion is the metric.
+    // A trait default carrying nine lines of documentation is
+    // documented at length so implementors know when to replace it;
+    // counting those produced 79 false positives on admired code, and
+    // dropping them cost 6 real findings out of 3,187.
+    MetricDef { name: "ceremony",      rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
 ];
+
+/// A declaration that asserts nothing, carrying documentation that says
+/// it does.
+///
+/// Every clause is load-bearing and was measured against 512,927 human
+/// declarations. Nullary, because a function taking arguments does
+/// something with them. A bare literal body, because that is the whole
+/// of "asserts nothing". Three doc lines, because bare content-free-ness
+/// is COMMONER in admired code than in the corpus this was built from,
+/// and only the documentation separates them. Not an override point,
+/// because a trait default is documented for implementors on purpose.
+/// Not a test, because a stub returning `true` is how a fixture is
+/// written.
+fn ceremony(u: &UnitFacts) -> u32 {
+    let documented_nothing = u.params.is_empty()
+        && !u.is_method
+        && u.doc_lines >= 3
+        && u.body != BodyShape::Real
+        && !u.is_override
+        && !u.is_test;
+    documented_nothing as u32
+}
 
 /// Cognitive complexity at which a unit is expected to state invariants.
 const ASSERT_WORTHY: u32 = 10;
@@ -777,6 +817,7 @@ pub fn for_each(facts: &FileFacts, mut f: impl FnMut(usize, f32, u32, &str)) {
 /// Everything one unit is measured by.
 fn unit_metrics(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
     let (cog, cyc) = complexity(u);
+    f(CEREMONY, ceremony(u) as f32, u.line, &u.qualname);
     f(COGNITIVE, cog as f32, u.line, &u.qualname);
     f(CYCLOMATIC, cyc as f32, u.line, &u.qualname);
     f(DEPTH, u.max_vis_depth as f32, u.line, &u.qualname);
@@ -1094,7 +1135,8 @@ mod tests {
     fn metric_indices_match_registry_names() {
         // The consts and the METRICS table must never drift: a silent
         // mismatch would misattribute every value to the wrong metric.
-        for (idx, name) in [
+        const PAIRS: &[(usize, &str)] = &[
+            (CEREMONY, "ceremony"),
             (COGNITIVE, "cognitive"),
             (CYCLOMATIC, "cyclomatic"),
             (DEPTH, "depth"),
@@ -1152,10 +1194,11 @@ mod tests {
             (COHESION, "cohesion"),
             (SQL_BUILT, "built query"),
             (SHELLED_OUT, "shelled out"),
-        ] {
-            assert_eq!(METRICS[idx].name, name, "index {idx}");
+        ];
+        for (idx, name) in PAIRS {
+            assert_eq!(METRICS[*idx].name, *name, "index {idx}");
         }
-        assert_eq!(N, 57);
+        assert_eq!(N, 58);
     }
 
     #[test]
@@ -1278,6 +1321,49 @@ mod tests {
             hi(Lang::Cpp, LENGTH),
         );
         assert!(readme.contains(&cu), "README drifted: {cu:?} missing");
+    }
+
+    #[test]
+    fn the_readme_perl_era_numbers_cannot_drift_either() {
+        // Four languages added at once, each with a quoted number the
+        // prose draws a conclusion from. Same rule as everywhere else:
+        // a number in the README is pinned to the calibration or it is
+        // a claim nobody is checking.
+        use crate::lang::Lang;
+        let readme = include_str!("../../README.md").replace('\n', " ");
+        let cal = LangBudgets::calibrated();
+        let hi = |lang: Lang, m: usize| cal.for_lang(lang).0[m].1.expect("calibrated");
+        let ruby = format!(
+            "tightest function length in the corpus at {:.0}",
+            hi(Lang::Ruby, LENGTH)
+        );
+        assert!(readme.contains(&ruby), "README drifted: {ruby:?} missing");
+        let against = format!(
+            "against OCaml's {:.0} and Python's {:.0}",
+            hi(Lang::OCaml, LENGTH),
+            hi(Lang::Python, LENGTH)
+        );
+        assert!(
+            readme.contains(&against),
+            "README drifted: {against:?} missing"
+        );
+        // The prose calls Ruby's the tightest; that is a claim about
+        // every other language, so it is checked against every other
+        // language rather than against the two it names.
+        let tightest = crate::lang::LANGS
+            .iter()
+            .filter(|l| **l != Lang::Ruby)
+            .all(|l| {
+                cal.for_lang(*l).0[LENGTH]
+                    .1
+                    .is_none_or(|v| v > hi(Lang::Ruby, LENGTH))
+            });
+        assert!(
+            tightest,
+            "README calls Ruby's function length the tightest in the corpus; it no longer is"
+        );
+        let lua = format!("Lua reads cognitive p99 = {:.0}", hi(Lang::Lua, COGNITIVE));
+        assert!(readme.contains(&lua), "README drifted: {lua:?} missing");
     }
 
     #[test]
@@ -1685,6 +1771,99 @@ mod tests {
             ),
             0,
             "a sentence quoting a URL is a sentence"
+        );
+    }
+
+    /// Total `ceremony` findings in one source, in any language.
+    fn ceremony_in(lang: crate::lang::Lang, name: &str, src: &str) -> u32 {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        let f = extract(pack, &mut parser, Path::new(name), src);
+        let mut total = 0.0f32;
+        super::for_each(&f, |m, v, _, _| {
+            if m == CEREMONY {
+                total += v;
+            }
+        });
+        total as u32
+    }
+
+    #[test]
+    fn ceremony_needs_the_documentation_and_spares_the_override() {
+        use crate::lang::Lang;
+        const DOC: &str = "/// Whether the fast path is available.\n///\n/// Three lines.\n";
+
+        // FIRES: nullary, one bare literal, documented at length.
+        assert_eq!(
+            ceremony_in(
+                Lang::Rust,
+                "a.rs",
+                &format!("{DOC}pub fn ready() -> bool {{ true }}\n")
+            ),
+            1,
+        );
+        assert_eq!(
+            ceremony_in(
+                Lang::Python,
+                "a.py",
+                "def ready():\n    \"\"\"Whether ready.\n\n    Three lines.\n    \"\"\"\n    return True\n"
+            ),
+            1,
+        );
+
+        // SILENT — and each of these is why the rule has the shape it
+        // has, measured against 512,927 human declarations.
+
+        // Bare content-free-ness is COMMONER in admired code than in the
+        // corpus this was built from. Only the documentation separates.
+        assert_eq!(
+            ceremony_in(Lang::Rust, "a.rs", "pub fn ready() -> bool { true }\n"),
+            0,
+            "an undocumented stub is not the defect",
+        );
+
+        // A trait default is documented at length so implementors know
+        // when to replace it. This shape produced all 79 gold false
+        // positives.
+        assert_eq!(
+            ceremony_in(
+                Lang::Rust,
+                "a.rs",
+                &format!("trait Bounded {{\n    {DOC}    fn min_len(&self) -> usize {{ 1 }}\n}}\n"),
+            ),
+            0,
+            "a documented trait default is documented on purpose",
+        );
+
+        // A body that does anything at all.
+        assert_eq!(
+            ceremony_in(
+                Lang::Rust,
+                "a.rs",
+                &format!("{DOC}pub fn ready() -> bool {{ check() }}\n")
+            ),
+            0,
+        );
+
+        // A function taking arguments does something with them.
+        assert_eq!(
+            ceremony_in(
+                Lang::Rust,
+                "a.rs",
+                &format!("{DOC}pub fn ready(x: u32) -> bool {{ true }}\n")
+            ),
+            0,
+        );
+
+        // A stub returning `true` is how a fixture is written.
+        assert_eq!(
+            ceremony_in(
+                Lang::Rust,
+                "crate/tests/a.rs",
+                &format!("{DOC}pub fn ready() -> bool {{ true }}\n")
+            ),
+            0,
+            "test code declares stubs for a living",
         );
     }
 
@@ -3371,6 +3550,10 @@ mod tests {
         (
             "lost context",
             "a_handler_that_forgets_the_cause_is_flagged",
+        ),
+        (
+            "ceremony",
+            "ceremony_needs_the_documentation_and_spares_the_override",
         ),
         (
             "secrets",
