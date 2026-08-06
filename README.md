@@ -219,6 +219,7 @@ React. Solid is exempt: it tracks dependencies at run time.
 | `broad catch` · `unwraps` | |
 | `lost context` | a handler that binds the error, raises a new one and never names the original; an operandless re-raise — `throw;`, bare `raise` — carries the stack onward and is the remedy |
 | `spooky` | eval, computed attribute access, metaclasses, transmute |
+| `ceremony` · `unawaited coroutine` | both demoted from rung 2: neither has ever fired on the gold corpus, so neither has a precision anyone has tested. A gate has to be able to fail a build |
 | `echo comments` · `comment ratio` | |
 | `module doc` · `type doc` · `fn doc` · `field doc` · `inline doc` | prose words per comment run, pinned per language **and role** |
 | `doc param` | a parameter the documentation names and the signature does not declare |

@@ -544,10 +544,27 @@ pub const METRICS: &[MetricDef] = &[
     // unambiguous-name evidence only — a cross-file callee or a name
     // with a sync twin is never guessed at.
     //
-    // Rung 2 and Policy: like the conditional hook, this is a rule the
-    // runtimes themselves state (Python warns "coroutine was never
-    // awaited" at runtime; the evidence here arrives at read time).
-    MetricDef { name: "unawaited coroutine", rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
+    // Policy, because this is a rule the runtimes themselves state
+    // (Python warns "coroutine was never awaited" at RUN time; the
+    // evidence here arrives at read time).
+    //
+    // Rung 3, DEMOTED from 2, and the reason is that nothing has ever
+    // exercised it. Zero violations in 329,279 measurements across all
+    // twenty-four corpora — 26,614 Python units and 11,214 Rust in
+    // gold, 268,577 and 22,874 in the user trees — while every other
+    // language holds a declared-dead row with measured > 0. The recall
+    // seeds fire, so the rule is wired; what is unproven is that the
+    // SHAPE occurs in code anyone writes. The conjunction is very
+    // narrow — statement position, parent exactly an expression
+    // statement, result discarded, not under an await, and every
+    // same-file unit of that name async — and in practice a stray
+    // coroutine is handed to gather or create_task rather than left
+    // standing, and is cross-file more often than same-file.
+    //
+    // A build gate has to be able to fail a build. This one has never
+    // had the opportunity, on 1.4M measurements, so it reports until it
+    // does. Promote it back the day a corpus disagrees.
+    MetricDef { name: "unawaited coroutine", rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
     // `pointless async` — an async unit that never awaits — was built,
     // measured, and REJECTED. Admired code violates it 21.6% of the
     // time in Python, 17.4% in TypeScript, 18.2% in TSX and 20.5% in
@@ -665,7 +682,18 @@ pub const METRICS: &[MetricDef] = &[
     // documented at length so implementors know when to replace it;
     // counting those produced 79 false positives on admired code, and
     // dropping them cost 6 real findings out of 3,187.
-    MetricDef { name: "ceremony",      rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
+    //
+    // Rung 3, DEMOTED from 2, and this is the honest reading of its own
+    // precision. Zero findings in 710,967 gold measurements across all
+    // twenty-two corpora; the user's own trees give the only live
+    // evidence at seven firings in 672,357 measurements, about one per
+    // hundred thousand. Its 1.0 precision is VACUOUS — there is no
+    // false positive on admired code because there is no positive — and
+    // its liveness rests entirely on two recall seeds. A gate that has
+    // never had the chance to fail a build is not a gate; it is a
+    // suspicion with an untested precision claim, and it should say so
+    // rather than sit among the metrics gold has adjudicated.
+    MetricDef { name: "ceremony",      rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
     // DOC LENGTH, one budget per comment ROLE. This is the entire
     // wordiness signal: compression, type-token ratio and per-word
     // semantic density were all measured against the same corpus and
