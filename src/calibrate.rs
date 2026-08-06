@@ -149,10 +149,14 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
         if subset.is_empty() {
             continue;
         }
+        // Calibration reads distributions and nothing else, so none of
+        // the corpus-sized accumulators are built. On the gold corpus
+        // that is a 777,638-entry clone map not allocated.
         let mut agg = crate::scan(
             &subset,
             crate::config::Layers::flat(LangBudgets::defaults()),
             false,
+            crate::report::Wants::NONE,
         );
         let section = lang_section(&mut agg, lang);
         if !section.is_empty() {

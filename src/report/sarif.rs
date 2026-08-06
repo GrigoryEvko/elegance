@@ -277,7 +277,7 @@ fn clone_results(agg: &mut Agg) -> Vec<SarifResult> {
 
 fn recurrence_results(agg: &mut Agg) -> Vec<SarifResult> {
     let mut out = Vec::new();
-    for pair in crate::near::pairs(&agg.prints, usize::MAX).pairs {
+    for pair in crate::near::pairs(agg.prints.read(), usize::MAX).pairs {
         let sites: Vec<(String, u32)> = [&pair.a, &pair.b]
             .iter()
             .filter_map(|s| parse_site(s))

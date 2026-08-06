@@ -385,8 +385,9 @@ pub fn render_json(agg: &mut Agg) -> String {
     let (clones, dup) = clone_section(agg);
 
     // Owns its output; must precede `violations`, which borrows agg.
-    agg.graph.sort_by(|a, b| a.path.cmp(&b.path));
-    let architecture = crate::graph::analyze(&agg.graph, &agg.mentions).map(architecture_out);
+    agg.graph.read_mut().sort_by(|a, b| a.path.cmp(&b.path));
+    let architecture =
+        crate::graph::analyze(agg.graph.read(), agg.mentions.read()).map(architecture_out);
 
     let (clumps, repeated_dispatch, undeclared_shapes) = recurrences_out(agg);
     let untested_complexity = super::select_untested(agg)
@@ -395,7 +396,7 @@ pub fn render_json(agg: &mut Agg) -> String {
         .collect();
     let summary = summary_out(agg, dup);
     let coverage_rates = rates_out(agg);
-    let near = crate::near::pairs(&agg.prints, usize::MAX);
+    let near = crate::near::pairs(agg.prints.read(), usize::MAX);
     let near_clones = NearOut {
         pairs: near
             .pairs

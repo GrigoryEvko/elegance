@@ -122,7 +122,13 @@ fn distributions(files: &[std::path::PathBuf], budgets: LangBudgets, root: &Path
     let mut cache = crate::cache::Cache::load(root);
     let mut per: Vec<Agg> = crate::lang::LANGS
         .iter()
-        .map(|_| Agg::configured(crate::config::Layers::flat(budgets), false))
+        .map(|_| {
+            Agg::configured(
+                crate::config::Layers::flat(budgets),
+                false,
+                crate::report::Wants::NONE,
+            )
+        })
         .collect();
     for path in files {
         let Ok(source) = std::fs::read_to_string(path) else {
@@ -332,7 +338,13 @@ mod tests {
         let budgets = LangBudgets::defaults();
         let mut repo: Vec<crate::report::Agg> = crate::lang::LANGS
             .iter()
-            .map(|_| crate::report::Agg::configured(crate::config::Layers::flat(budgets), false))
+            .map(|_| {
+                crate::report::Agg::configured(
+                    crate::config::Layers::flat(budgets),
+                    false,
+                    crate::report::Wants::ALL,
+                )
+            })
             .collect();
         let flat: Vec<(u8, f32)> = (0..250).map(|_| (0u8, 0.0)).collect();
         let tall: Vec<(u8, f32)> = (0..250).map(|_| (0u8, 50.0)).collect();

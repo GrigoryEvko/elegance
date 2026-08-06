@@ -75,7 +75,7 @@ pub fn worst_dirs(agg: &Agg, k: usize) -> Vec<(String, f64)> {
 
 fn tally(agg: &Agg) -> HashMap<String, Dir> {
     let mut dirs: HashMap<String, Dir> = HashMap::new();
-    for g in &agg.graph {
+    for g in agg.graph.read() {
         let dir = dirs.entry(dir_of(&g.path)).or_default();
         dir.files += 1;
     }

@@ -137,12 +137,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         1 => println!("1 package sets its own budgets\n"),
         n => println!("{n} packages set their own budgets\n"),
     }
-    let mut agg = scan(&files, layers, complete);
+    let wants = wants_for(&args);
+    let mut agg = scan(&files, layers, complete, wants);
     // A contract is a question about the whole graph, so it is asked
-    // once the scan is done rather than per file.
-    agg.graph.sort_by(|a, b| a.path.cmp(&b.path));
-    agg.declared_layers = cfg.layers.len();
-    agg.breaches = layers::breaches(&cfg.layers, &agg.graph);
+    // once the scan is done rather than per file — and only where the
+    // graph was built at all.
+    if wants.graph {
+        agg.graph.read_mut().sort_by(|a, b| a.path.cmp(&b.path));
+        agg.declared_layers = cfg.layers.len();
+        agg.breaches = layers::breaches(&cfg.layers, agg.graph.read());
+    }
 
     present(&args, &mut agg)
 }
@@ -248,6 +252,47 @@ fn single_file_mode(args: &Args) -> Result<bool, Box<dyn Error>> {
 /// guard in `facts::extract` is the half that bounds the recursion.
 const WORKER_STACK: usize = 32 * 1024 * 1024;
 
+/// Which corpus-sized accumulators this invocation will read.
+///
+/// Everything here grows with the tree, and every mode reads only some
+/// of them — so the set is decided before the scan and the rest are
+/// never built. A mode that reads one it did not ask for panics in a
+/// debug build; `every_mode_asks_for_what_it_reads` runs them all to
+/// prove the sets are complete.
+fn wants_for(args: &Args) -> report::Wants {
+    use report::Wants;
+    // Machine output and the full report render everything there is.
+    if args.json || args.full || args.sarif {
+        return Wants::ALL;
+    }
+    // The headline still reports a duplication share: that needs the
+    // clone classes, and the graph to tell a test file from a source
+    // one so the share can be quoted both ways.
+    if args.brief {
+        return Wants {
+            clones: true,
+            graph: true,
+            ..Wants::NONE
+        };
+    }
+    // Ratchet, trend and hotspot modes rank offenders, which are not
+    // corpus-sized: they are capped per metric.
+    if args.baseline.is_some() || args.history.is_some() || args.hotspots {
+        return Wants::NONE;
+    }
+    // A rollup groups the graph's files by directory.
+    if args.rollup {
+        return Wants {
+            graph: true,
+            ..Wants::NONE
+        };
+    }
+    // The default report: tensions pair a clone class, a load-bearing
+    // file and an untested unit, and the shape section reads the
+    // recurrences.
+    Wants::ALL
+}
+
 /// Workers to scan with: PHYSICAL cores, not threads.
 ///
 /// Two hyperthreads share one core's execution units and its L1/L2, and
@@ -281,8 +326,8 @@ fn workers() -> usize {
 }
 
 /// Parallel scan: parse, extract, measure, and merge — the whole pipeline.
-fn scan(files: &[PathBuf], budgets: config::Layers, complete: bool) -> Agg {
-    in_pool(|| scan_in_pool(files, budgets, complete))
+fn scan(files: &[PathBuf], budgets: config::Layers, complete: bool, wants: report::Wants) -> Agg {
+    in_pool(|| scan_in_pool(files, budgets, complete, wants))
 }
 
 /// Run parallel work on workers with stacks deep enough for the trees
@@ -298,8 +343,13 @@ fn in_pool<T: Send>(work: impl FnOnce() -> T + Send) -> T {
     pool.install(work)
 }
 
-fn scan_in_pool(files: &[PathBuf], budgets: config::Layers, complete: bool) -> Agg {
-    let make = || Agg::configured(budgets.clone(), complete);
+fn scan_in_pool(
+    files: &[PathBuf],
+    budgets: config::Layers,
+    complete: bool,
+    wants: report::Wants,
+) -> Agg {
+    let make = || Agg::configured(budgets.clone(), complete, wants);
     files
         .par_iter()
         .fold(

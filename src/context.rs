@@ -39,7 +39,12 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
         return Ok(0);
     }
     let budgets = cfg.budgets();
-    let whole = crate::scan(&files, crate::config::Layers::flat(budgets), false);
+    let whole = crate::scan(
+        &files,
+        crate::config::Layers::flat(budgets),
+        false,
+        crate::report::Wants::NONE,
+    );
     // Percentiles must be per language or the table lies: a repository's
     // Python p90 says nothing about how to write its Rust. One scan per
     // language present — this mode runs once, not per commit.
@@ -60,7 +65,12 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
             let subset = std::mem::take(&mut by_lang[lang as usize]);
             (
                 lang,
-                crate::scan(&subset, crate::config::Layers::flat(budgets), false),
+                crate::scan(
+                    &subset,
+                    crate::config::Layers::flat(budgets),
+                    false,
+                    crate::report::Wants::NONE,
+                ),
             )
         })
         .collect();

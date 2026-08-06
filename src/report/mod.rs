@@ -146,9 +146,43 @@ struct Clump {
 /// bytes grows hashbrown's contiguous table across every one of the
 /// millions of entries, which costs more than the allocations it saves.
 /// Left as it was, deliberately.
+/// A clone class holds its FIRST site inline.
+///
+/// 89.9% of classes have exactly one site — 698,800 of 777,638 on the
+/// TypeScript gold corpus — and a `Vec` for a single 16-byte element is
+/// a heap block, a capacity and a pointer chase for a class that will
+/// never be reported. Only a class that recurs allocates.
 struct CloneClass {
     mass: u32,
-    sites: Vec<CloneLoc>,
+    first: CloneLoc,
+    rest: Vec<CloneLoc>,
+}
+
+impl CloneClass {
+    fn first(mass: u32, loc: CloneLoc) -> CloneClass {
+        CloneClass {
+            mass,
+            first: loc,
+            rest: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, loc: CloneLoc) {
+        self.rest.push(loc);
+    }
+
+    fn absorb(&mut self, mut other: CloneClass) {
+        self.rest.push(other.first);
+        self.rest.append(&mut other.rest);
+    }
+
+    fn len(&self) -> usize {
+        1 + self.rest.len()
+    }
+
+    fn sites(&self) -> impl Iterator<Item = &CloneLoc> {
+        std::iter::once(&self.first).chain(self.rest.iter())
+    }
 }
 
 /// One occurrence of a clone class. There is a site for every candidate
@@ -160,6 +194,116 @@ struct CloneLoc {
     path: std::sync::Arc<str>,
     line: u32,
     end_line: u32,
+}
+
+/// Which corpus-sized accumulators a run will read.
+///
+/// Everything else in `Agg` is a counter or a distribution and costs the
+/// same whatever the corpus is. These nine grow WITH the tree — a clone
+/// class per candidate subtree, a print per unit, a graph row per file —
+/// and each mode reads only some of them. Building the rest is memory
+/// spent on an answer nobody asks for: `calibrate` reads distributions
+/// only, and on the gold corpus it was carrying a 777,638-entry clone map
+/// to the end of the scan and dropping it unread.
+#[derive(Clone, Copy, Default)]
+pub struct Wants {
+    pub clones: bool,
+    pub prints: bool,
+    pub graph: bool,
+    pub mentions: bool,
+    pub synonyms: bool,
+    pub test_refs: bool,
+    pub untested: bool,
+    pub clumps: bool,
+    /// Switch signatures and record shapes: one section renders both.
+    pub sets: bool,
+}
+
+impl Wants {
+    /// Distributions only — what `calibrate` and `--brief` need.
+    pub const NONE: Wants = Wants {
+        clones: false,
+        prints: false,
+        graph: false,
+        mentions: false,
+        synonyms: false,
+        test_refs: false,
+        untested: false,
+        clumps: false,
+        sets: false,
+    };
+
+    pub const ALL: Wants = Wants {
+        clones: true,
+        prints: true,
+        graph: true,
+        mentions: true,
+        synonyms: true,
+        test_refs: true,
+        untested: true,
+        clumps: true,
+        sets: true,
+    };
+}
+
+/// An accumulator that is only filled when something will read it.
+///
+/// A disabled accumulator is EMPTY, and an empty one is indistinguishable
+/// from a real result with nothing in it — which is how a section renders
+/// blank under a green suite. That failure has a history here: nine
+/// detector families were dying silently because nothing checked they
+/// were reachable. So a read of a disabled accumulator panics where a
+/// test can see it, and `every_mode_asks_for_what_it_reads` runs every
+/// mode to prove no renderer touches state its mode did not request.
+pub struct Gated<T> {
+    on: bool,
+    name: &'static str,
+    value: T,
+}
+
+impl<T> Gated<T> {
+    fn new(name: &'static str, on: bool, value: T) -> Gated<T> {
+        Gated { on, name, value }
+    }
+
+    fn wanted(&self) -> bool {
+        self.on
+    }
+
+    /// Read it. Panics in a debug build if this mode never asked for it.
+    pub fn read(&self) -> &T {
+        debug_assert!(
+            self.on,
+            "`{}` was read by a mode that did not ask for it — add it to that mode's Wants, \
+             or the section reading it renders blank on a green suite",
+            self.name
+        );
+        &self.value
+    }
+
+    pub fn read_mut(&mut self) -> &mut T {
+        debug_assert!(
+            self.on,
+            "`{}` was mutated by a mode that did not ask for it",
+            self.name
+        );
+        &mut self.value
+    }
+
+    /// Fold another accumulator in, or drop it. Both sides carry the
+    /// same flag: they came from one `Wants`.
+    fn merge(&mut self, other: &mut Gated<T>, f: impl FnOnce(&mut T, &mut T)) {
+        if self.on {
+            f(&mut self.value, &mut other.value);
+        }
+    }
+
+    /// Fill it, or do nothing. Dropping the write IS the saving.
+    fn fill(&mut self, f: impl FnOnce(&mut T)) {
+        if self.on {
+            f(&mut self.value);
+        }
+    }
 }
 
 pub struct Agg {
@@ -195,13 +339,13 @@ pub struct Agg {
     /// Parameter-name groups by joined key: the same names traveling
     /// together through many signatures are a type the language was never
     /// told about (Fowler's Data Clumps).
-    clumps: HashMap<String, Clump>,
+    clumps: Gated<HashMap<String, Clump>>,
     /// Case-label sets by key: the same dispatch repeated across the
     /// codebase (every new variant forces N edits).
-    switches: HashMap<String, Clump>,
+    switches: Gated<HashMap<String, Clump>>,
     /// Anonymous record shapes by key set: the same fields built in many
     /// places is a type nobody declared.
-    shapes: HashMap<String, Clump>,
+    shapes: Gated<HashMap<String, Clump>>,
     /// Per-language spelling counts of unit names, for idiom entropy.
     spellings: [[u32; metrics::CASES]; LANGS.len()],
     /// Per-language, per-role comment tallies. A budget for how much a
@@ -210,26 +354,26 @@ pub struct Agg {
     /// they are pinned against has to be readable per role first.
     comments: [[Tally; CommentRole::ALL.len()]; LANGS.len()],
     /// Per-unit fingerprints, for near-clones the Merkle hash cannot see.
-    prints: Vec<crate::near::Print>,
-    clones: HashMap<u64, CloneClass>,
+    prints: Gated<Vec<crate::near::Print>>,
+    clones: Gated<HashMap<u64, CloneClass>>,
     /// Per-file module-graph facts, resolved at render time (two-phase:
     /// resolution needs the whole file set).
-    pub graph: Vec<crate::graph::GraphFacts>,
+    pub graph: Gated<Vec<crate::graph::GraphFacts>>,
     /// Per-language narrative ordering sums:
     /// [down refs, up refs, public-first pairs, public/private pairs].
     narrative: [[u64; 4]; LANGS.len()],
     /// Object -> the synonymous verbs the codebase reaches it by. Two
     /// names for one operation means a reader must learn both and a
     /// searcher will find half the call sites.
-    synonyms: HashMap<Box<str>, std::collections::BTreeSet<&'static str>>,
+    synonyms: Gated<HashMap<Box<str>, std::collections::BTreeSet<&'static str>>>,
     /// Names referenced anywhere in test code (global association set).
-    test_refs: std::collections::HashSet<Box<str>>,
+    test_refs: Gated<std::collections::HashSet<Box<str>>>,
     /// How many FILES mention each identifier. An export mentioned by one
     /// file is mentioned only where it is defined — nobody consumes it.
-    mentions: HashMap<Box<str>, u32>,
+    mentions: Gated<HashMap<Box<str>, u32>>,
     /// Complexity-over-budget production units awaiting the test join —
     /// McCabe's actual meaning: cyclomatic is a minimum test count.
-    untested_candidates: Vec<UntestedCandidate>,
+    untested_candidates: Gated<Vec<UntestedCandidate>>,
     /// (covered, total) per language per rate metric — the coverage
     /// claims demoted from per-unit suspicions to rates.
     rates: [[(u64, u64); metrics::RATE_METRICS.len()]; LANGS.len()],
@@ -246,18 +390,26 @@ struct UntestedCandidate {
 impl Agg {
     #[cfg(test)]
     pub fn new() -> Agg {
-        Agg::configured(crate::config::Layers::flat(LangBudgets::defaults()), false)
+        Agg::configured(
+            crate::config::Layers::flat(LangBudgets::defaults()),
+            false,
+            Wants::ALL,
+        )
     }
 
     /// Retains every violation — required for --json and baselines.
     #[cfg(test)]
     pub fn complete() -> Agg {
-        Agg::configured(crate::config::Layers::flat(LangBudgets::defaults()), true)
+        Agg::configured(
+            crate::config::Layers::flat(LangBudgets::defaults()),
+            true,
+            Wants::ALL,
+        )
     }
 
     /// `complete` retains every violation (machine output, baselines);
     /// display mode caps them.
-    pub fn configured(budgets: crate::config::Layers, complete: bool) -> Agg {
+    pub fn configured(budgets: crate::config::Layers, complete: bool, wants: Wants) -> Agg {
         Agg {
             files: 0,
             skipped: 0,
@@ -273,21 +425,25 @@ impl Agg {
             total_mass: 0,
             cap: if complete { usize::MAX } else { KEEP },
             low_confidence: Vec::new(),
-            clumps: HashMap::new(),
-            switches: HashMap::new(),
-            shapes: HashMap::new(),
+            clumps: Gated::new("clumps", wants.clumps, HashMap::new()),
+            switches: Gated::new("switches", wants.sets, HashMap::new()),
+            shapes: Gated::new("shapes", wants.sets, HashMap::new()),
             spellings: [[0; metrics::CASES]; LANGS.len()],
             comments: [[Tally::default(); CommentRole::ALL.len()]; LANGS.len()],
-            prints: Vec::new(),
-            clones: HashMap::new(),
-            graph: Vec::new(),
+            prints: Gated::new("prints", wants.prints, Vec::new()),
+            clones: Gated::new("clones", wants.clones, HashMap::new()),
+            graph: Gated::new("graph", wants.graph, Vec::new()),
             narrative: [[0; 4]; LANGS.len()],
-            synonyms: HashMap::new(),
-            test_refs: std::collections::HashSet::new(),
+            synonyms: Gated::new("synonyms", wants.synonyms, HashMap::new()),
+            test_refs: Gated::new(
+                "test refs",
+                wants.test_refs,
+                std::collections::HashSet::new(),
+            ),
             breaches: Vec::new(),
             declared_layers: 0,
-            mentions: HashMap::new(),
-            untested_candidates: Vec::new(),
+            mentions: Gated::new("mentions", wants.mentions, HashMap::new()),
+            untested_candidates: Gated::new("untested candidates", wants.untested, Vec::new()),
             rates: [[(0, 0); metrics::RATE_METRICS.len()]; LANGS.len()],
             dists: (0..N).map(|_| Vec::new()).collect(),
             offenders: (0..N).map(|_| Vec::new()).collect(),
@@ -308,14 +464,16 @@ impl Agg {
     /// A file too garbled to measure still exists as an import target, so
     /// it keeps its place in the graph — only its own facts are dropped.
     fn count_unmeasurable(&mut self, facts: &FileFacts) {
-        self.graph.push(crate::graph::GraphFacts {
-            path: facts.path.clone(),
-            lang: facts.lang,
-            is_test: facts.is_test_file,
-            imports: Vec::new(),
-            exports: Vec::new(),
-            mass: 0,
-            surface_cost: 0,
+        self.graph.fill(|g| {
+            g.push(crate::graph::GraphFacts {
+                path: facts.path.clone(),
+                lang: facts.lang,
+                is_test: facts.is_test_file,
+                imports: Vec::new(),
+                exports: Vec::new(),
+                mass: 0,
+                surface_cost: 0,
+            })
         });
         self.low_confidence.push(facts.path.display().to_string());
     }
@@ -328,7 +486,7 @@ impl Agg {
         self.total_mass += facts.mass as u64;
         self.junk_files += is_junk_drawer(facts) as u32;
         self.collect_recurrences(facts, &path, &shared);
-        self.graph.push(graph_facts(facts));
+        self.graph.fill(|g| g.push(graph_facts(facts)));
         // Narrative ordering is a production-code property; generated-
         // style test files would drown the signal.
         if !facts.is_test_file {
@@ -346,18 +504,23 @@ impl Agg {
             if u.fingerprints.is_empty() || u.is_test || u.is_module {
                 continue;
             }
-            self.prints.push(crate::near::Print {
-                label: format!("{path}:{}  {}", u.line, u.qualname),
-                prints: u.fingerprints.clone(),
+            self.prints.fill(|p| {
+                p.push(crate::near::Print {
+                    label: format!("{path}:{}  {}", u.line, u.qualname),
+                    prints: u.fingerprints.clone(),
+                })
             });
         }
         self.collect_spellings(facts);
         self.collect_comments(facts);
         self.collect_synonyms(facts);
-        self.test_refs.extend(facts.test_refs.iter().cloned());
-        for name in &facts.mentioned {
-            *self.mentions.entry(name.clone()).or_insert(0) += 1;
-        }
+        self.test_refs
+            .fill(|t| t.extend(facts.test_refs.iter().cloned()));
+        self.mentions.fill(|m| {
+            for name in &facts.mentioned {
+                *m.entry(name.clone()).or_insert(0) += 1;
+            }
+        });
         self.collect_untested(facts, &path);
         let budgets = *self.budgets.for_file(&facts.path).for_lang(facts.lang);
         metrics::for_each(facts, |m, value, line, name| {
@@ -384,22 +547,28 @@ impl Agg {
     /// The codebase-wide recurrences this file contributes to: clone
     /// classes, parameter clumps, and repeated dispatch.
     fn collect_recurrences(&mut self, facts: &FileFacts, path: &str, shared: &std::sync::Arc<str>) {
-        for site in &facts.clone_sites {
-            let class = self.clones.entry(site.hash).or_insert(CloneClass {
-                mass: site.mass,
-                sites: Vec::new(),
-            });
-            class.sites.push(CloneLoc {
-                path: shared.clone(),
-                line: site.line,
-                end_line: site.end_line,
-            });
-        }
+        self.clones.fill(|classes| {
+            for site in &facts.clone_sites {
+                let loc = CloneLoc {
+                    path: shared.clone(),
+                    line: site.line,
+                    end_line: site.end_line,
+                };
+                match classes.entry(site.hash) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().push(loc),
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(CloneClass::first(site.mass, loc));
+                    }
+                }
+            }
+        });
         for u in &facts.units {
             self.collect_clumps(u, path);
         }
-        note_sets(&mut self.switches, &facts.switch_sigs, path);
-        note_sets(&mut self.shapes, &facts.record_shapes, path);
+        self.switches
+            .fill(|w| note_sets(w, &facts.switch_sigs, path));
+        self.shapes
+            .fill(|w| note_sets(w, &facts.record_shapes, path));
     }
 
     /// Over-budget production units, held for the test-name join that
@@ -410,13 +579,50 @@ impl Agg {
         for u in &facts.units {
             let (_, cyc) = metrics::complexity(u);
             if !u.is_test && !u.is_module && cyc_budget.is_some_and(|hi| cyc as f32 > hi) {
-                self.untested_candidates.push(UntestedCandidate {
-                    name: u.name.clone(),
-                    label: format!("{path}:{}  {}", u.line, u.qualname),
-                    cyclomatic: cyc,
+                self.untested_candidates.fill(|c| {
+                    c.push(UntestedCandidate {
+                        name: u.name.clone(),
+                        label: format!("{path}:{}  {}", u.line, u.qualname),
+                        cyclomatic: cyc,
+                    })
                 });
             }
         }
+    }
+
+    /// Fold the corpus-sized accumulators of one partial aggregate into
+    /// another. Each is a no-op when this run never asked for it, so a
+    /// mode that reads none of them pays nothing to reduce.
+    fn merge_accumulators(&mut self, b: &mut Agg) {
+        self.clones.merge(&mut b.clones, |dst, src| {
+            for (hash, class) in src.drain() {
+                match dst.entry(hash) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().absorb(class),
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(class);
+                    }
+                }
+            }
+        });
+        self.clumps.merge(&mut b.clumps, merge_recurrences);
+        self.switches.merge(&mut b.switches, merge_recurrences);
+        self.shapes.merge(&mut b.shapes, merge_recurrences);
+        self.prints.merge(&mut b.prints, |d, s| d.append(s));
+        self.graph.merge(&mut b.graph, |d, s| d.append(s));
+        self.synonyms.merge(&mut b.synonyms, |d, s| {
+            for (object, verbs) in s.drain() {
+                d.entry(object).or_default().extend(verbs);
+            }
+        });
+        self.test_refs
+            .merge(&mut b.test_refs, |d, s| d.extend(s.drain()));
+        self.mentions.merge(&mut b.mentions, |d, s| {
+            for (name, n) in s.drain() {
+                *d.entry(name).or_insert(0) += n;
+            }
+        });
+        self.untested_candidates
+            .merge(&mut b.untested_candidates, |d, s| d.append(s));
     }
 
     pub fn merge(mut a: Agg, mut b: Agg) -> Agg {
@@ -434,36 +640,18 @@ impl Agg {
         for (i, n) in b.files_by_lang.iter().enumerate() {
             a.files_by_lang[i] += n;
         }
-        for (hash, mut class) in b.clones.drain() {
-            a.clones
-                .entry(hash)
-                .and_modify(|c| c.sites.append(&mut class.sites))
-                .or_insert(class);
-        }
+        a.merge_accumulators(&mut b);
         for (lang, row) in b.narrative.iter().enumerate() {
             for (k, v) in row.iter().enumerate() {
                 a.narrative[lang][k] += v;
             }
         }
-        merge_recurrences(&mut a.clumps, &mut b.clumps);
-        merge_recurrences(&mut a.switches, &mut b.switches);
-        merge_recurrences(&mut a.shapes, &mut b.shapes);
         for (lang, row) in b.spellings.iter().enumerate() {
             for (case, n) in row.iter().enumerate() {
                 a.spellings[lang][case] += n;
             }
         }
         a.absorb_comments(&b.comments);
-        a.prints.append(&mut b.prints);
-        a.graph.append(&mut b.graph);
-        for (object, verbs) in b.synonyms.drain() {
-            a.synonyms.entry(object).or_default().extend(verbs);
-        }
-        a.test_refs.extend(b.test_refs.drain());
-        for (name, n) in b.mentions.drain() {
-            *a.mentions.entry(name).or_insert(0) += n;
-        }
-        a.untested_candidates.append(&mut b.untested_candidates);
         for (lang, row) in b.rates.iter().enumerate() {
             for (r, (covered, total)) in row.iter().enumerate() {
                 a.rates[lang][r].0 += covered;
@@ -486,7 +674,9 @@ impl Agg {
     /// through >=3 signatures are a struct the language was never told
     /// about.
     fn collect_clumps(&mut self, u: &crate::facts::UnitFacts, path: &str) {
-        if u.params.len() < 3 || u.params.len() > 8 {
+        // The combination walk below is O(n^4) in parameter count, so a
+        // mode that never reads clumps should not pay for it either.
+        if !self.clumps.wanted() || u.params.len() < 3 || u.params.len() > 8 {
             return;
         }
         let mut names: Vec<&str> = u.params.iter().map(|p| &*p.name).collect();
@@ -495,7 +685,7 @@ impl Agg {
         let n = names.len();
         let mut add = |group: &[&str]| {
             let key = group.join("\u{1f}");
-            let entry = self.clumps.entry(key).or_insert(Clump {
+            let entry = self.clumps.read_mut().entry(key).or_insert(Clump {
                 count: 0,
                 sites: Vec::new(),
             });
@@ -570,12 +760,19 @@ impl Agg {
     /// whatever it likes, but the surface is vocabulary others must
     /// learn.
     fn collect_synonyms(&mut self, facts: &FileFacts) {
+        if !self.synonyms.wanted() {
+            return;
+        }
         for u in &facts.units {
             if u.is_module || !u.is_public || u.is_test {
                 continue;
             }
             if let Some((verb, object)) = crate::metrics::split_synonym(&u.name) {
-                self.synonyms.entry(object.into()).or_default().insert(verb);
+                self.synonyms
+                    .read_mut()
+                    .entry(object.into())
+                    .or_default()
+                    .insert(verb);
             }
         }
     }
@@ -614,6 +811,7 @@ impl Agg {
     /// baselined path is GONE rather than merely clean this run.
     pub fn scanned_paths(&self) -> std::collections::HashSet<String> {
         self.graph
+            .read()
             .iter()
             .map(|g| g.path.display().to_string())
             .collect()
@@ -1428,7 +1626,7 @@ const SHOW_TENSIONS: usize = 10;
 
 /// Files enough of the codebase imports that changing them is costly.
 fn load_bearing_files(agg: &Agg) -> HashMap<String, u32> {
-    let Some(arch) = crate::graph::analyze(&agg.graph, &agg.mentions) else {
+    let Some(arch) = crate::graph::analyze(agg.graph.read(), agg.mentions.read()) else {
         return HashMap::new();
     };
     arch.load_bearing
@@ -1440,14 +1638,14 @@ fn load_bearing_files(agg: &Agg) -> HashMap<String, u32> {
 
 fn render_architecture(agg: &mut Agg, out: &mut String) {
     crate::layers::render(&agg.breaches, agg.declared_layers, out);
-    if agg.graph.iter().all(|g| g.imports.is_empty()) {
+    if agg.graph.read().iter().all(|g| g.imports.is_empty()) {
         return;
     }
     // Path order makes ambiguous resolutions and listings deterministic.
-    agg.graph.sort_by(|a, b| a.path.cmp(&b.path));
-    let exports: usize = agg.graph.iter().map(|g| g.exports.len()).sum();
-    let Some(arch) = crate::graph::analyze(&agg.graph, &agg.mentions) else {
-        let r = crate::graph::resolve(&agg.graph);
+    agg.graph.read_mut().sort_by(|a, b| a.path.cmp(&b.path));
+    let exports: usize = agg.graph.read().iter().map(|g| g.exports.len()).sum();
+    let Some(arch) = crate::graph::analyze(agg.graph.read(), agg.mentions.read()) else {
+        let r = crate::graph::resolve(agg.graph.read());
         let _ = writeln!(
             out,
             "\nimports — {} internal, {} external, {} unresolved; {exports} exported symbols",
@@ -1720,7 +1918,7 @@ pub(super) type Drift = (String, Vec<&'static str>);
 /// `get` from `fetch`, and this cannot know whether they did.
 pub(super) fn select_synonyms(agg: &Agg) -> Vec<Drift> {
     let mut drifted: Vec<Drift> = Vec::new();
-    for (object, verbs) in &agg.synonyms {
+    for (object, verbs) in agg.synonyms.read() {
         if verbs.len() < 2 {
             continue;
         }
@@ -1889,6 +2087,7 @@ pub(super) struct SelectedClump {
 pub(super) fn select_clumps(agg: &Agg) -> Vec<SelectedClump> {
     let mut all: Vec<(Vec<&str>, &Clump)> = agg
         .clumps
+        .read()
         .iter()
         .filter(|(_, c)| c.count >= CLUMP_MIN)
         .map(|(key, c)| (key.split('\u{1f}').collect(), c))
@@ -1923,12 +2122,12 @@ pub(super) fn select_clumps(agg: &Agg) -> Vec<SelectedClump> {
 
 /// Anonymous record shapes built in >=3 places: a type nobody declared.
 pub(super) fn select_shapes(agg: &Agg) -> Vec<SelectedClump> {
-    recurring_sets(&agg.shapes)
+    recurring_sets(agg.shapes.read())
 }
 
 /// Repeated dispatch: label-sets recurring >=3 times, strongest first.
 pub(super) fn select_switches(agg: &Agg) -> Vec<SelectedClump> {
-    recurring_sets(&agg.switches)
+    recurring_sets(agg.switches.read())
 }
 
 fn recurring_sets(sets: &HashMap<String, Clump>) -> Vec<SelectedClump> {
@@ -1954,7 +2153,7 @@ fn recurring_sets(sets: &HashMap<String, Clump>) -> Vec<SelectedClump> {
 /// copy-paste that has since been edited, which the Merkle detector
 /// stops seeing the moment a line is inserted.
 fn render_near(agg: &Agg, top: usize, out: &mut String) {
-    let found = crate::near::pairs(&agg.prints, top);
+    let found = crate::near::pairs(agg.prints.read(), top);
     if found.pairs.is_empty() && found.suppressed_cores == 0 {
         return;
     }
@@ -2040,8 +2239,9 @@ fn render_switches(agg: &Agg, top: usize, out: &mut String) {
 pub(super) fn select_untested(agg: &Agg) -> Vec<(String, u32)> {
     let mut hits: Vec<(String, u32)> = agg
         .untested_candidates
+        .read()
         .iter()
-        .filter(|c| !agg.test_refs.contains(&c.name))
+        .filter(|c| !agg.test_refs.read().contains(&c.name))
         .map(|c| (c.label.clone(), c.cyclomatic))
         .collect();
     hits.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -2097,10 +2297,11 @@ struct SelectedClone {
 /// that actually recur pay for this.
 fn recurring(agg: &Agg) -> Vec<SelectedClone> {
     agg.clones
+        .read()
         .values()
-        .filter(|c| c.sites.len() >= 2)
+        .filter(|c| c.len() >= 2)
         .map(|c| {
-            let mut sites: Vec<CloneLoc> = c.sites.clone();
+            let mut sites: Vec<CloneLoc> = c.sites().cloned().collect();
             // Total order: two candidates can start on the same line of
             // the same file (a subtree and its parent), and an unstable
             // sort would let rayon's merge order pick between them.
@@ -2155,6 +2356,7 @@ fn select_clones(agg: &mut Agg) -> (Vec<SelectedClone>, Duplication) {
     // split costs a lookup rather than a byte on every clone site.
     let tests: std::collections::HashSet<String> = agg
         .graph
+        .read()
         .iter()
         .filter(|g| g.is_test)
         .map(|g| g.path.display().to_string())
@@ -2428,6 +2630,71 @@ mod tests {
     /// copies in different files produce equal metric values (tie on value)
     /// and one clone class — both tie-break paths get exercised.
     const TWIN: &str = "def NAME(xs):\n    t = 0\n    for x in xs:\n        if x > 0:\n            if x > 1:\n                if x > 2:\n                    if x > 3:\n                        if x > 4:\n                            t += x\n    return t\n";
+
+    #[test]
+    fn every_mode_asks_for_what_it_reads() {
+        // A `Wants` set is declared by hand, and a mode that forgets one
+        // renders that section BLANK on a green suite — the same silent
+        // failure that let nine detector families die unnoticed. So each
+        // mode is run here against its own declared set, over a tree
+        // holding every shape the accumulators feed on: a clone class, a
+        // near-clone, an import, a parameter clump, a repeated dispatch,
+        // an anonymous record and an over-budget untested unit.
+        //
+        // `Gated::read` panics in a debug build when its mode did not
+        // ask, so a missing want fails HERE rather than shipping silence.
+        use crate::config::Layers;
+        let dup = "def handler(alpha, beta, gamma, delta):\n                       cfg = {'host': 1, 'port': 2, 'name': 3}\n                       if alpha == 'a':\n        return 1\n                       elif alpha == 'b':\n        return 2\n                       elif alpha == 'c':\n        return 3\n                       for i in range(9):\n                           for j in range(9):\n                               for k in range(9):\n                                   beta += i * j * k\n    return beta\n";
+        let files = [
+            ("a.py", format!("import os\n{dup}")),
+            ("b.py", format!("import os\n{dup}")),
+        ];
+        let build = |wants: Wants| {
+            let mut agg = Agg::configured(Layers::flat(LangBudgets::defaults()), true, wants);
+            for (name, src) in &files {
+                let pack = crate::lang::Lang::Python.pack();
+                let mut parser = pack.make_parser();
+                let f = crate::facts::extract(pack, &mut parser, Path::new(name), src);
+                agg.add_file(&f);
+            }
+            agg
+        };
+        // Each entry is a mode and the set `wants_for` grants it. Both
+        // halves have to agree; that agreement is the whole test.
+        /// A mode: what it is called, what it declares, how it renders.
+        type Mode = (&'static str, Wants, fn(&mut Agg) -> String);
+        let modes: Vec<Mode> = vec![
+            ("default", Wants::ALL, |a| render(a, ink::Ink::none())),
+            ("--full", Wants::ALL, |a| render_full(a, 10)),
+            (
+                "--brief",
+                Wants {
+                    clones: true,
+                    graph: true,
+                    ..Wants::NONE
+                },
+                render_brief,
+            ),
+            ("--json", Wants::ALL, crate::report::json::render_json),
+            ("--sarif", Wants::ALL, crate::report::sarif::render),
+            (
+                "--by",
+                Wants {
+                    graph: true,
+                    ..Wants::NONE
+                },
+                |a| crate::rollup::run(a, 10),
+            ),
+        ];
+        for (name, wants, render_it) in modes {
+            let mut agg = build(wants);
+            if wants.graph {
+                agg.graph.read_mut().sort_by(|x, y| x.path.cmp(&y.path));
+            }
+            let out = render_it(&mut agg);
+            assert!(!out.is_empty(), "{name} rendered nothing");
+        }
+    }
 
     #[test]
     fn render_is_independent_of_aggregation_order() {
