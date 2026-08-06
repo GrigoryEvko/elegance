@@ -94,6 +94,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         seed: mix(0, pack.lang as u64 + 1),
         commentary: Rows::new(blank.len),
         live: vec![LiveMap::new()],
+        declared: vec![std::collections::HashSet::new()],
         envy: vec![std::collections::HashMap::new()],
         callees: vec![Vec::new()],
         self_names: vec!["".into()],
@@ -133,6 +134,7 @@ fn finish(ex: Extractor, blank: &Rows, mass: u32) {
     let Extractor {
         commentary,
         live,
+        declared,
         envy,
         callees,
         import_roots,
@@ -156,7 +158,7 @@ fn finish(ex: Extractor, blank: &Rows, mass: u32) {
     facts.mentioned = mentions.into_iter().collect();
     facts.step_refs = step_refs(&facts.units, &callees);
     facts.pub_order = pub_order(&facts.units);
-    resolve_envy(&mut facts.units, envy, &import_roots);
+    resolve_envy(&mut facts.units, envy, &import_roots, &declared);
     resolve_chains(&mut facts.units, chain_roots, &import_roots);
     facts.test_refs = resolve_locals(&mut facts.units, live, facts.is_test_file);
     facts.mass = mass;
@@ -237,16 +239,37 @@ fn fingerprint_units(facts: &mut FileFacts, tokens: &[Vec<u64>]) {
 
 /// The foreign receiver each unit touches most, which is the one Feature
 /// Envy is about. Name tie-break so HashMap order cannot leak into output.
+///
+/// FOREIGN is the load-bearing word. Fowler's smell is a method more
+/// interested in ANOTHER class's data than in its own; a method cannot
+/// be envying an object it allocated three lines earlier, because that
+/// object is its own working state and there is nowhere to move the
+/// method to. `JsonReader reader = new JsonTextReader(..); reader.Read();
+/// reader.Read();` was the largest single shape in the metric — 8,035 of
+/// 19,424 gold findings named a target the flagging unit had DECLARED,
+/// counted exactly over the whole population rather than sampled.
+///
+/// `declared` already knows, and knows narrowly: a pattern that reaches
+/// through a member access binds nothing, so Ruby's
+/// `@config.cache[k] = 1` does not make `@config` this unit's own.
+/// Parameters are deliberately NOT in any pack's `def_sites`, so a
+/// receiver passed in — Zig's `fn parse(parser: *Parser)` — is
+/// untouched by this rule and stays a separate question.
 fn resolve_envy(
     units: &mut [UnitFacts],
     envy: Vec<std::collections::HashMap<Box<str>, u16>>,
     import_roots: &std::collections::HashSet<Box<str>>,
+    declared: &[std::collections::HashSet<Box<str>>],
 ) {
-    for (unit, foreign) in units.iter_mut().zip(envy) {
+    for ((unit, foreign), locals) in units.iter_mut().zip(envy).zip(declared) {
         for (name, count) in foreign {
             // Imported roots are modules in disguise (os, np, std) —
             // reaching into a module is not Feature Envy of an object.
             if import_roots.contains(&name) {
+                continue;
+            }
+            // A local this unit declared is its own, not a neighbour's.
+            if locals.contains(&name) {
                 continue;
             }
             if count > unit.envy_count
@@ -482,6 +505,12 @@ struct Extractor<'a> {
     commentary: Rows,
     /// One live map per unit, parallel to `facts.units`.
     live: Vec<LiveMap>,
+    /// Names each unit BOUND, parallel to `facts.units`. Narrower than
+    /// the live map's definition rows, which a language without a
+    /// declaration keyword also writes for `cfg.field = v` — that
+    /// statement rebinds nothing, and Feature Envy has to know the
+    /// difference. See [`Extractor::record_defs`].
+    declared: Vec<std::collections::HashSet<Box<str>>>,
     /// Foreign-receiver access counts per unit, parallel to `facts.units`.
     envy: Vec<std::collections::HashMap<Box<str>, u16>>,
     /// Bare-name callees per unit, parallel to `facts.units` — the raw
@@ -1305,6 +1334,7 @@ impl Extractor<'_> {
         unit.return_arity = self.pack.return_arity(node, self.src);
         self.facts.units.push(unit);
         self.live.push(LiveMap::new());
+        self.declared.push(std::collections::HashSet::new());
         self.envy.push(std::collections::HashMap::new());
         self.callees.push(Vec::new());
         self.self_names.push(self_name);
@@ -2189,21 +2219,24 @@ impl Extractor<'_> {
 
     /// Binding sites: every identifier inside the bound pattern becomes a
     /// local of the current unit (first definition wins).
+    ///
+    /// A pattern that REACHES THROUGH a member access binds no name at
+    /// all — `cfg.field = v` and `@config.cache[k] = 1` write state the
+    /// unit already had a handle on. `single_reassign_target` has always
+    /// said so on the write side; `declared` now says it on the bind
+    /// side, and it is what lets Feature Envy tell an object the unit
+    /// built from one whose member it merely set. The live map keeps its
+    /// older, looser reading, so no span and no repurposing moves.
     fn record_defs(&mut self, node: Node, field: &str, unit: usize) {
         let Some(target) = bound_pattern(node, field) else {
             return;
         };
+        let binds = !self.reaches_through_a_member(target);
         let row = node.start_position().row as u32 + 1;
         let mut stack = vec![target];
         while let Some(n) = stack.pop() {
             if self.pack.table_sem(n) == Sem::Ident {
-                if let Ok(name) = n.utf8_text(self.src)
-                    && !name.starts_with('_')
-                {
-                    let entry = self.live[unit].entry(name.into()).or_insert((None, row));
-                    entry.0.get_or_insert(row);
-                    entry.1 = entry.1.max(row);
-                }
+                self.note_bound_name(n, row, unit, binds);
                 continue;
             }
             let mut cursor = n.walk();
@@ -2211,6 +2244,41 @@ impl Extractor<'_> {
                 stack.push(child);
             }
         }
+    }
+
+    /// One name out of a binding pattern: alive from `row`, and this
+    /// unit's own if the pattern bound it rather than reached through it.
+    fn note_bound_name(&mut self, n: Node, row: u32, unit: usize, binds: bool) {
+        let Ok(name) = n.utf8_text(self.src) else {
+            return;
+        };
+        if name.starts_with('_') {
+            return;
+        }
+        let entry = self.live[unit].entry(name.into()).or_insert((None, row));
+        entry.0.get_or_insert(row);
+        entry.1 = entry.1.max(row);
+        if binds {
+            self.declared[unit].insert(name.into());
+        }
+    }
+
+    /// Does this bound pattern touch a member access anywhere inside it?
+    fn reaches_through_a_member(&self, target: Node) -> bool {
+        let Some((attr_kind, _)) = self.pack.attr() else {
+            return false;
+        };
+        let mut stack = vec![target];
+        while let Some(n) = stack.pop() {
+            if n.kind_id() == attr_kind {
+                return true;
+            }
+            let mut cursor = n.walk();
+            for child in n.named_children(&mut cursor) {
+                stack.push(child);
+            }
+        }
+        false
     }
 
     fn mark_commentary(&mut self, node: Node) {
@@ -3595,73 +3663,92 @@ mod tests {
     #[test]
     fn a_receiver_spelled_with_a_sigil_is_not_a_foreign_object() {
         use crate::lang::Lang;
-        // (envied object, times envied, self accesses, members touched)
-        let reach = |lang: Lang, name: &str, src: &str, unit: &str| {
-            let pack = lang.pack();
-            let mut parser = pack.make_parser();
-            let f = extract(pack, &mut parser, Path::new(name), src);
-            let u = f
-                .units
-                .iter()
-                .find(|u| u.name.as_ref() == unit)
-                .unwrap_or_else(|| panic!("{lang:?}: no unit {unit}"));
+        // (lang, file, source, unit, envied object, times envied,
+        //  self accesses, members touched, what the row proves)
+        #[allow(clippy::type_complexity)]
+        const SIGIL: &[(Lang, &str, &str, &str, &str, u16, u16, &str, &str)] = &[
+            // PHP: `$this` is the only receiver the language has.
             (
-                u.envy_object.to_string(),
-                u.envy_count,
-                u.self_accesses,
-                u.own_members.join(","),
-            )
-        };
-        // PHP: `$this` is the only receiver the language has.
-        assert_eq!(
-            reach(
                 Lang::Php,
                 "Repo.php",
                 "<?php\nclass Repo {\n  function put($k) {\n    $this->cache[$k] = 1;\n    $this->log[] = $k;\n    return $this->cache;\n  }\n}\n",
                 "put",
+                "",
+                0,
+                3,
+                "cache,log",
+                "PHP: $this is the receiver, and cache/log are its own members",
             ),
-            (String::new(), 0, 3, "cache,log".to_string()),
-            "PHP: $this is the receiver, and cache/log are its own members",
-        );
-        // Perl: `$self` is a local bound from @_, not a parameter, so
-        // no pack hook can mark it selfish — only the text can. The
-        // chain here is a method call, which is what Perl's `attr` is.
-        assert_eq!(
-            reach(
+            // Perl: `$self` is a local bound from @_, not a parameter, so
+            // no pack hook can mark it selfish — only the text can. The
+            // chain here is a method call, which is what Perl's `attr` is.
+            (
                 Lang::Perl,
                 "Repo.pm",
                 "package Repo;\nsub put {\n  my ($self, $k) = @_;\n  $self->cache($k);\n  $self->notes($k);\n  return $self->cache;\n}\n1;\n",
                 "put",
+                "",
+                0,
+                3,
+                "cache,notes",
+                "Perl: $self is the receiver",
             ),
-            (String::new(), 0, 3, "cache,notes".to_string()),
-            "Perl: $self is the receiver",
-        );
-        // Ruby: an instance variable is state the object HOLDS, not the
-        // object. `@config` must stay foreign after one sigil comes off.
-        assert_eq!(
-            reach(
+            // Ruby: an instance variable is state the object HOLDS, not
+            // the object. `@config` must stay foreign after one sigil
+            // comes off — and `@config.cache[k] = 1` must not make it
+            // this unit's OWN either, which is what binds nothing.
+            (
                 Lang::Ruby,
                 "repo.rb",
                 "class Repo\n  def put(k)\n    @config.cache[k] = 1\n    @config.log[k] = 1\n    @config.cache\n  end\nend\n",
                 "put",
+                "@config",
+                3,
+                0,
+                "",
+                "Ruby: @config is an ivar, not the receiver",
             ),
-            ("@config".to_string(), 3, 0, String::new()),
-            "Ruby: @config is an ivar, not the receiver",
-        );
-        // Solidity: `$` is a whole identifier, and OpenZeppelin's
-        // ERC-7201 storage pointer is called exactly that. Stripping it
-        // to the empty string made it equal the empty receiver name a
-        // unit with no declared receiver carries.
-        assert_eq!(
-            reach(
+            // Solidity: `$` is a whole identifier, and OpenZeppelin's
+            // ERC-7201 storage pointer is called exactly that. Stripping
+            // it to the empty string made it equal the empty receiver
+            // name a unit with no declared receiver carries.
+            //
+            // It arrives as a PARAMETER so the sigil rule is the only
+            // thing under test: were it declared in the body, the
+            // own-object rule would withdraw it first and the row would
+            // pass whatever `unsigiled` did.
+            (
                 Lang::Solidity,
                 "S.sol",
-                "contract S {\n  function f() internal {\n    Layout storage $ = _layout();\n    bool a = $._initializing;\n    uint64 b = $._initialized;\n    $._initializing = a;\n  }\n}\n",
+                "contract S {\n  function f(Layout storage $) internal {\n    bool a = $._initializing;\n    uint64 b = $._initialized;\n    $._initializing = a;\n    $._initialized = b;\n  }\n}\n",
                 "f",
+                "$",
+                4,
+                0,
+                "",
+                "Solidity: a bare $ is a name, not a sigil",
             ),
-            ("$".to_string(), 3, 0, String::new()),
-            "Solidity: a bare $ is a name, not a sigil",
-        );
+        ];
+        for (lang, file, src, unit, object, count, selves, members, why) in SIGIL {
+            let pack = lang.pack();
+            let mut parser = pack.make_parser();
+            let f = extract(pack, &mut parser, Path::new(file), src);
+            let u = f
+                .units
+                .iter()
+                .find(|u| u.name.as_ref() == *unit)
+                .unwrap_or_else(|| panic!("{lang:?}: no unit {unit}"));
+            assert_eq!(
+                (
+                    &*u.envy_object,
+                    u.envy_count,
+                    u.self_accesses,
+                    u.own_members.join(",")
+                ),
+                (*object, *count, *selves, (*members).to_string()),
+                "{why}",
+            );
+        }
     }
 
     #[test]
@@ -4104,6 +4191,75 @@ mod tests {
             "def f(cfg):\n    import torch\n    torch.nn.functional.pad(x)\n    return cfg.db.conn.host\n",
         );
         assert_eq!(late.units[1].demeter, 1);
+    }
+
+    /// An object the unit built is not a neighbour it envies.
+    ///
+    /// This was the largest single false class in the whole tool: 8,035
+    /// of 19,424 gold feature-envy findings named a target the flagging
+    /// unit had DECLARED — `JsonReader reader = new JsonTextReader(..)`
+    /// followed by four calls on it. There is nowhere to move such a
+    /// method to, so the smell cannot apply.
+    ///
+    /// Each row keeps a CONTROL beside the excluded shape, because the
+    /// rule must not become "any name the unit mentions": a receiver
+    /// passed IN is still foreign, and parameters are deliberately
+    /// absent from every pack's `def_sites` so the two stay separable.
+    #[test]
+    fn an_object_the_unit_declared_is_not_a_foreign_receiver() {
+        use crate::lang::Lang;
+        let envied = |lang: Lang, name: &str, src: &str, unit: &str| {
+            let pack = lang.pack();
+            let mut parser = pack.make_parser();
+            let f = extract(pack, &mut parser, Path::new(name), src);
+            let u = f
+                .units
+                .iter()
+                .find(|u| u.name.as_ref() == unit)
+                .unwrap_or_else(|| panic!("{lang:?}: no unit {unit}"));
+            (u.envy_object.to_string(), u.envy_count)
+        };
+        // C#: the shape that dominated the metric. `reader` is born on
+        // the first line of the body, so the four calls on it are the
+        // method's own working state.
+        let cs_body = |decl: &str| {
+            format!(
+                "class Host {{\n  void Load(string text) {{\n    {decl}\n    reader.Read();\n    reader.Skip();\n    reader.Close();\n    reader.Dispose();\n  }}\n}}\n"
+            )
+        };
+        assert_eq!(
+            envied(
+                Lang::CSharp,
+                "Host.cs",
+                &cs_body("JsonReader reader = new JsonTextReader(text);"),
+                "Load",
+            ),
+            (String::new(), 0),
+            "C#: a local the method constructed is its own",
+        );
+        // Control: the SAME four calls on a receiver handed in.
+        assert_eq!(
+            envied(
+                Lang::CSharp,
+                "Host.cs",
+                "class Host {\n  void Load(JsonReader reader) {\n    reader.Read();\n    reader.Skip();\n    reader.Close();\n    reader.Dispose();\n  }\n}\n",
+                "Load",
+            ),
+            ("reader".to_string(), 4),
+            "C#: a parameter is still someone else's object",
+        );
+        // Python: same rule, and the second-most-envied name wins once
+        // the declared one is withdrawn.
+        assert_eq!(
+            envied(
+                Lang::Python,
+                "host.py",
+                "class Host:\n    def load(self, order):\n        buf = Buffer()\n        buf.a\n        buf.b\n        buf.c\n        order.x\n        order.y\n",
+                "load",
+            ),
+            ("order".to_string(), 2),
+            "Python: withdrawing the local leaves the real neighbour",
+        );
     }
 
     #[test]
