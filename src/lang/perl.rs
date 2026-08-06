@@ -372,8 +372,19 @@ fn declares_test(node: Node, src: &[u8]) -> bool {
     declaring_test(node, src).is_some()
 }
 
+/// `skip` and `todo_skip` suppress the block they head. `plan` does not
+/// suppress anything by itself — `plan tests => 15` DECLARES how many
+/// tests will run, which is the opposite — so it counts only in the one
+/// form that switches a file off wholesale.
 fn skips_test(node: Node, src: &[u8]) -> bool {
-    matches!(callee_text(node, src), Some("skip" | "todo_skip" | "plan"))
+    match callee_text(node, src) {
+        Some("skip" | "todo_skip") => true,
+        Some("plan") => node
+            .child_by_field_name("arguments")
+            .and_then(|a| a.utf8_text(src).ok())
+            .is_some_and(|a| a.trim_start().starts_with("skip_all")),
+        _ => false,
+    }
 }
 
 fn asserty(call: Node, src: &[u8]) -> bool {

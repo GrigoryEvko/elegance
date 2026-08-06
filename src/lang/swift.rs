@@ -335,9 +335,25 @@ fn declares_test(node: Node, src: &[u8]) -> bool {
         || node.utf8_text(src).is_ok_and(|t| t.contains("@Test"))
 }
 
+/// `XCTSkip` thrown unconditionally, or swift-testing's `.disabled`
+/// trait. Judged on the CALL, not on any node whose text happens to
+/// contain the word: this hook is asked of every node, so a containment
+/// test made an enclosing function match too and one file reporting 19
+/// `XCTSkip` occurrences counted 33.
+///
+/// `XCTSkipUnless` and `XCTSkipIf` take their condition as an ARGUMENT,
+/// where the extractor's branch guard cannot see it. They are the
+/// conditional form the metric's own doctrine exempts, and they are
+/// excluded here for the same reason a guarded `t.Skip()` is.
 fn skips_test(node: Node, src: &[u8]) -> bool {
-    node.utf8_text(src)
-        .is_ok_and(|t| t.contains("XCTSkip") || t.contains(".disabled("))
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = node.named_child(0).and_then(|c| c.utf8_text(src).ok()) else {
+        return false;
+    };
+    let name = callee.rsplit('.').next().unwrap_or(callee).trim();
+    name == "XCTSkip" || name == "disabled"
 }
 
 /// XCTest spells an assertion `XCTAssert*`; swift-testing, which

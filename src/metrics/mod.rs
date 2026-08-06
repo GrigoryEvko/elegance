@@ -3394,93 +3394,124 @@ mod tests {
             .len()
     }
 
+    /// Every skip spelling, with the CONDITIONAL twin beside it. The
+    /// doctrine is one line: a suppression records nothing, and a
+    /// conditional skip is stated judgment about where a test applies.
+    const SKIP_CASES: &[(Lang, &str, &str, usize, &str)] = &[
+        (
+            Lang::Rust,
+            "a.rs",
+            "#[test]\n#[ignore]\nfn slow_path() {\n    assert!(check());\n}\n",
+            1,
+            "#[ignore] silences it outright",
+        ),
+        (
+            Lang::Rust,
+            "a.rs",
+            "#[test]\n#[cfg_attr(not(panic = \"unwind\"), ignore)]\nfn slow_path() {\n    assert!(check());\n}\n",
+            0,
+            "a cfg_attr ignore is conditional",
+        ),
+        (
+            Lang::TypeScript,
+            "a.test.ts",
+            "it.skip('handles retries', () => {\n  expect(f()).toBe(1);\n});\nxit('other', () => {});\n",
+            2,
+            "both spellings switch a case off",
+        ),
+        (
+            Lang::TypeScript,
+            "a.test.ts",
+            "it.only('handles retries', () => {\n  expect(f()).toBe(1);\n});\n",
+            0,
+            "`.only` silences its SIBLINGS, a different claim CI usually catches",
+        ),
+        (
+            Lang::Go,
+            "a_test.go",
+            "func TestSlow(t *testing.T) {\n\tt.Skip(\"flaky\")\n\tcheck(t)\n}\n",
+            1,
+            "an unguarded t.Skip",
+        ),
+        (
+            Lang::Go,
+            "a_test.go",
+            "func TestSlow(t *testing.T) {\n\tif runtime.GOOS == \"windows\" {\n\t\tt.Skip(\"posix only\")\n\t}\n\tcheck(t)\n}\n",
+            0,
+            "a guarded skip is a platform decision",
+        ),
+        (
+            Lang::Python,
+            "tests/test_a.py",
+            "@pytest.mark.skip(reason=\"broken\")\ndef test_slow():\n    assert check()\n",
+            1,
+            "the marker names no condition",
+        ),
+        (
+            Lang::Python,
+            "tests/test_a.py",
+            "@pytest.mark.skipif(sys.platform == 'win32', reason=\"posix only\")\ndef test_slow():\n    assert check()\n",
+            0,
+            "skipif states where the test applies",
+        ),
+        (
+            Lang::Python,
+            "tests/test_a.py",
+            "skip_py38 = pytest.mark.skipif(sys.version_info < (3, 9), reason=\"3.9+\")\n\n@skip_py38\ndef test_slow():\n    assert check()\n",
+            0,
+            "an ALIAS hides the condition behind a name; rich binds five",
+        ),
+        (
+            Lang::Perl,
+            "t/a.t",
+            "plan skip_all => 'loader pending';\n",
+            1,
+            "skip_all switches the whole file off",
+        ),
+        (
+            Lang::Perl,
+            "t/a.t",
+            "plan tests => 15;\n",
+            0,
+            "a test count is the opposite of a skip",
+        ),
+        (
+            Lang::Java,
+            "T.java",
+            "class T {\n  @Test\n  @Disabled(\"legacy\")\n  void b() {}\n}\n",
+            1,
+            "@Disabled switches it off",
+        ),
+        (
+            Lang::Java,
+            "T.java",
+            "class T {\n  @Test\n  @DisabledIfEnvironmentVariable(named = \"CI\", matches = \"true\")\n  void a() {}\n}\n",
+            0,
+            "every conditional name BEGINS with Disabled, so the name is compared whole",
+        ),
+        (
+            Lang::Swift,
+            "T.swift",
+            "func setUp() throws {\n  throw XCTSkip(\"not on windows\")\n}\n",
+            1,
+            "judged on the CALL: a containment test matched the enclosing function too, and one file with 19 XCTSkip occurrences reported 33",
+        ),
+        (
+            Lang::Swift,
+            "T.swift",
+            "func other() throws {\n  try XCTSkipUnless(hasNet, \"needs net\")\n}\n",
+            0,
+            "XCTSkipUnless takes its condition as an argument, where the branch guard cannot see it",
+        ),
+    ];
+
     #[test]
     fn only_an_unconditional_skip_is_a_suppression() {
         // The suite reports green and nothing records what the test
         // would have said — a suppression wearing a test's name.
-        assert_eq!(
-            skips(
-                Lang::Rust,
-                "a.rs",
-                "#[test]\n#[ignore]\nfn slow_path() {\n    assert!(check());\n}\n"
-            ),
-            1
-        );
-        assert_eq!(
-            skips(
-                Lang::TypeScript,
-                "a.test.ts",
-                "it.skip('handles retries', () => {\n  expect(f()).toBe(1);\n});\nxit('other', () => {});\n"
-            ),
-            2
-        );
-        assert_eq!(
-            skips(
-                Lang::Go,
-                "a_test.go",
-                "func TestSlow(t *testing.T) {\n\tt.Skip(\"flaky\")\n\tcheck(t)\n}\n"
-            ),
-            1
-        );
-        assert_eq!(
-            skips(
-                Lang::Python,
-                "tests/test_a.py",
-                "@pytest.mark.skip(reason=\"broken\")\ndef test_slow():\n    assert check()\n"
-            ),
-            1
-        );
-        // A CONDITIONAL skip is stated judgment: the test still runs
-        // where it applies, and nothing was silenced.
-        assert_eq!(
-            skips(
-                Lang::Python,
-                "tests/test_a.py",
-                "@pytest.mark.skipif(sys.platform == 'win32', reason=\"posix only\")\ndef test_slow():\n    assert check()\n"
-            ),
-            0
-        );
-        assert_eq!(
-            skips(
-                Lang::Go,
-                "a_test.go",
-                "func TestSlow(t *testing.T) {\n\tif runtime.GOOS == \"windows\" {\n\t\tt.Skip(\"posix only\")\n\t}\n\tcheck(t)\n}\n"
-            ),
-            0,
-            "a guarded skip is a platform decision"
-        );
-        // Rust spells the conditional form inside the attribute, and
-        // rayon carries dozens: the test runs wherever the predicate
-        // is false, so nothing was silenced.
-        assert_eq!(
-            skips(
-                Lang::Rust,
-                "a.rs",
-                "#[test]\n#[cfg_attr(not(panic = \"unwind\"), ignore)]\nfn slow_path() {\n    assert!(check());\n}\n"
-            ),
-            0,
-            "a cfg_attr ignore is conditional"
-        );
-        // An ALIAS hides the condition behind a name; rich binds five.
-        assert_eq!(
-            skips(
-                Lang::Python,
-                "tests/test_a.py",
-                "skip_py38 = pytest.mark.skipif(sys.version_info < (3, 9), reason=\"3.9+\")\n\n@skip_py38\ndef test_slow():\n    assert check()\n"
-            ),
-            0,
-            "an alias for skipif is still conditional"
-        );
-        // `.only` silences its SIBLINGS, not itself — a different
-        // claim, and one CI usually catches.
-        assert_eq!(
-            skips(
-                Lang::TypeScript,
-                "a.test.ts",
-                "it.only('handles retries', () => {\n  expect(f()).toBe(1);\n});\n"
-            ),
-            0
-        );
+        for (lang, path, src, want, why) in SKIP_CASES {
+            assert_eq!(skips(*lang, path, src), *want, "{lang:?}: {why}");
+        }
     }
 
     fn sleeps(lang: Lang, path: &str, src: &str) -> u16 {

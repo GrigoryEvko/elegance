@@ -308,8 +308,29 @@ fn declares_test(node: Node, src: &[u8]) -> bool {
         .is_some_and(|m| m.contains("@Test") || m.contains("@ParameterizedTest"))
 }
 
+/// `@Disabled` and `@Ignore` switch a test off; `@DisabledOnOs`,
+/// `@DisabledOnJre`, `@DisabledIfEnvironmentVariable` and the rest of
+/// the conditional family state a JUDGMENT about where the test applies,
+/// which is the same exemption a guarded `t.Skip()` already gets. A
+/// substring test cannot tell them apart — every conditional name BEGINS
+/// with `@Disabled` — so the annotation's own name is compared whole.
 fn skips_test(node: Node, src: &[u8]) -> bool {
-    modifiers_text(node, src).is_some_and(|m| m.contains("@Disabled") || m.contains("@Ignore"))
+    let Some(mods) = node
+        .named_children(&mut node.walk())
+        .find(|c| c.kind() == "modifiers")
+    else {
+        return false;
+    };
+    mods.named_children(&mut mods.walk()).any(|a| {
+        let name = match a.kind() {
+            "marker_annotation" | "annotation" => a.child_by_field_name("name"),
+            _ => None,
+        };
+        matches!(
+            name.and_then(|n| n.utf8_text(src).ok()),
+            Some("Disabled" | "Ignore")
+        )
+    })
 }
 
 fn modifiers_text<'a>(node: Node, src: &'a [u8]) -> Option<&'a str> {

@@ -266,7 +266,6 @@
 "abbreviated" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 1.0 }
-"skipped tests" = { hi = 4.0 }
 "module doc" = { hi = 43.0 }
 # 17 runs is under the 200 a percentile needs: borrowed from pl's pooled doc p99
 "type doc" = { hi = 545.0 }
@@ -320,7 +319,6 @@
 "loop depth" = { hi = 1.0 }
 "interface width" = { hi = 27.0 }
 "magic strings" = { hi = 1.0 }
-"skipped tests" = { hi = 1.0 }
 "cohesion" = { hi = 11.0 }
 "module doc" = { hi = 95.0 }
 "type doc" = { hi = 360.0 }
@@ -374,7 +372,7 @@
 "wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 1.0 }
 "magic strings" = { hi = 1.0 }
-"skipped tests" = { hi = 9.0 }
+"skipped tests" = { hi = 3.0 }
 "module doc" = { hi = 171.0 }
 "type doc" = { hi = 203.0 }
 "fn doc" = { hi = 162.0 }
