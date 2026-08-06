@@ -315,6 +315,23 @@ fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {
 /// against 2 files using assert* directly). The capital is required, or
 /// a production `expectedValue()` would read as an assertion — the same
 /// rule the Zig pack uses.
+///
+/// The sentence above about testify was FALSE for half of testify:
+/// `assertish` matches `assert` and nothing matches `require`, which is
+/// the stop-on-first-failure half and the more common one in the user's
+/// trees (224 calls against 0 in gold). It is accepted as a package
+/// name only — a bare `require(...)` is not a Go assertion.
+///
+/// The stdlib assertion is `t.Errorf(...)` and it was invisible, so 458
+/// of gold's 527 Go tests — 86.9% — and 12,530 of the user's 12,640
+/// reported that they check nothing. It is not a name rule: the same
+/// verbs are `fmt.Errorf`, `err.Error()` and `log.Fatal` in production
+/// code, 66 times in gold's test files alone. What makes it an assertion
+/// is the RECEIVER, so the receiver is resolved: an identifier that some
+/// enclosing function declares with a `testing.T`/`B`/`TB`/`F` parameter
+/// type. That reads a subtest's own `func(t *testing.T)` correctly.
+const HANDLE_FAILS: &[&str] = &["Error", "Errorf", "Fatal", "Fatalf", "Fail", "FailNow"];
+
 fn asserty(call: Node, src: &[u8]) -> bool {
     let Some(f) = call.child_by_field_name("function") else {
         return false;
@@ -323,11 +340,58 @@ fn asserty(call: Node, src: &[u8]) -> bool {
     let helper = |n: &str| super::assertish(n) || super::expectish(n);
     match f.kind() {
         "identifier" => helper(text(f)),
-        "selector_expression" => f
-            .child_by_field_name("operand")
-            .is_some_and(|pkg| helper(text(pkg))),
+        "selector_expression" => {
+            let Some(recv) = f.child_by_field_name("operand") else {
+                return false;
+            };
+            helper(text(recv))
+                || text(recv) == "require"
+                || (f
+                    .child_by_field_name("field")
+                    .is_some_and(|m| HANDLE_FAILS.contains(&text(m)))
+                    && recv.kind() == "identifier"
+                    && names_the_test_handle(call, text(recv), src))
+        }
         _ => false,
     }
+}
+
+/// Is `name` bound, by an enclosing function, to the testing handle?
+fn names_the_test_handle(call: Node, name: &str, src: &[u8]) -> bool {
+    let mut anc = call.parent();
+    while let Some(n) = anc {
+        if let Some(params) = n.child_by_field_name("parameters")
+            && let Some(declared) = handle_param(params, name, src)
+        {
+            return declared;
+        }
+        anc = n.parent();
+    }
+    false
+}
+
+/// `Some(true)` when this parameter list binds `name` to a testing type,
+/// `Some(false)` when it binds `name` to something else — a nearer
+/// binding wins, so a closure taking its own `t` is answered by that
+/// closure and the walk stops.
+fn handle_param(params: Node, name: &str, src: &[u8]) -> Option<bool> {
+    let mut cursor = params.walk();
+    let mut names = params.walk();
+    for p in params.named_children(&mut cursor) {
+        // One declaration may bind several names — `func f(a, b *testing.T)`.
+        let binds = p
+            .children_by_field_name("name", &mut names)
+            .any(|n| n.utf8_text(src).unwrap_or("") == name);
+        if !binds {
+            continue;
+        }
+        let ty = p
+            .child_by_field_name("type")
+            .and_then(|t| t.utf8_text(src).ok())
+            .unwrap_or("");
+        return Some(ty.trim_start_matches('*').starts_with("testing."));
+    }
+    None
 }
 
 /// Go convention: exported means capitalized.

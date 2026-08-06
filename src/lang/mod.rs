@@ -1589,6 +1589,55 @@ let classify items limit =
         );
     }
 
+    /// (lang, path, source, how many assertion CALLS the file holds).
+    /// Every ASSERTING line below read zero before this table existed,
+    /// and each file also carries a call the rule must NOT believe:
+    /// Go's `fmt.Errorf` and `err.Error()` wear the same verbs as
+    /// `t.Errorf`, TypeScript's `ok` is an ordinary function name unless
+    /// the file took it from Node's assert module, and Lua's `assert`
+    /// namespace has to survive being read whole.
+    const ASSERTION_VOCABULARY: &[(Lang, &str, &str, u16)] = &[
+        (
+            Lang::Go,
+            "e_test.go",
+            "package p\n\nimport (\n\t\"testing\"\n\t\"fmt\"\n\t\"github.com/stretchr/testify/require\"\n)\n\nfunc TestReady(t *testing.T) {\n\tt.Errorf(\"no\")\n\trequire.Equal(t, 1, one())\n\tt.Run(\"inner\", func(t *testing.T) { t.Fatal(\"nope\") })\n\tfmt.Errorf(\"wrapped\")\n\terr := run()\n\t_ = err.Error()\n}\n",
+            3,
+        ),
+        (
+            Lang::Lua,
+            "e_spec.lua",
+            "it(\"keeps the size it was given\", function()\n  assert.same(3, size())\n  assert.is_true(ok())\n  local m = obj.same(1)\nend)\n",
+            2,
+        ),
+        (
+            Lang::Swift,
+            "ETests.swift",
+            "@Test func addsUp() {\n    #expect(1 + 1 == 2)\n    let v = try #require(maybe())\n    XCTAssertEqual(v, 3)\n    #available(macOS 13, *)\n}\n",
+            3,
+        ),
+        (
+            Lang::TypeScript,
+            "e.test.ts",
+            "import { strictEqual, ok } from 'assert';\n\ntest('holds', () => {\n  strictEqual(1, 1);\n  ok(true);\n});\n",
+            2,
+        ),
+        (
+            Lang::TypeScript,
+            "f.test.ts",
+            "function ok(v: boolean) { return v; }\n\ntest('holds', () => {\n  ok(true);\n});\n",
+            0,
+        ),
+    ];
+
+    #[test]
+    fn an_assertion_is_recognised_in_the_vocabulary_its_ecosystem_writes() {
+        for (lang, path, src, want) in ASSERTION_VOCABULARY {
+            let f = facts_at(*lang, path, src);
+            let asserts: u16 = f.units.iter().map(|u| u.assert_calls).sum();
+            assert_eq!(asserts, *want, "{path}");
+        }
+    }
+
     #[test]
     fn a_test_is_declared_only_by_evidence_its_context_supports() {
         // One name used to do two jobs: a production `test_connection`

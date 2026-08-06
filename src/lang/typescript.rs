@@ -264,6 +264,31 @@ pub(super) fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     }]
 }
 
+/// Node's `assert` module, destructured. vscode writes
+/// `import { strictEqual, ok } from 'assert'` in 109 gold files and then
+/// calls the bare name, which is neither assertish nor expectish — so
+/// those suites read as asserting nothing. A bare `ok(x)` is far too
+/// common a spelling to accept on the name alone, so the import is
+/// checked before the name is believed.
+const NODE_ASSERT: &[&str] = &[
+    "strictEqual",
+    "notStrictEqual",
+    "deepStrictEqual",
+    "notDeepStrictEqual",
+    "deepEqual",
+    "notDeepEqual",
+    "equal",
+    "notEqual",
+    "ok",
+    "fail",
+    "match",
+    "doesNotMatch",
+    "throws",
+    "doesNotThrow",
+    "rejects",
+    "doesNotReject",
+];
+
 /// expect()/assert*() plus member styles: assert.equal, t.assertEqual.
 pub(super) fn asserty(node: Node, src: &[u8]) -> bool {
     let Some(f) = node.child_by_field_name("function") else {
@@ -273,7 +298,9 @@ pub(super) fn asserty(node: Node, src: &[u8]) -> bool {
     match f.kind() {
         "identifier" => {
             let n = text(f);
-            n == "expect" || n.starts_with("assert")
+            n == "expect"
+                || n.starts_with("assert")
+                || (NODE_ASSERT.contains(&n) && imports_node_assert(node, src))
         }
         "member_expression" => {
             f.child_by_field_name("object")
@@ -283,6 +310,27 @@ pub(super) fn asserty(node: Node, src: &[u8]) -> bool {
         }
         _ => false,
     }
+}
+
+/// Does this file take names from Node's assertion module? Asked only
+/// after a callee has already matched one of those names, so the walk
+/// to the file's imports costs nothing on ordinary calls.
+fn imports_node_assert(node: Node, src: &[u8]) -> bool {
+    let mut root = node;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    let mut cursor = root.walk();
+    root.named_children(&mut cursor)
+        .filter(|c| c.kind() == "import_statement")
+        .filter_map(|c| c.child_by_field_name("source"))
+        .filter_map(|s| s.utf8_text(src).ok())
+        .any(|s| {
+            matches!(
+                s.trim_matches(['"', '\'']),
+                "assert" | "node:assert" | "assert/strict" | "node:assert/strict"
+            )
+        })
 }
 
 /// `it.skip(...)`, `describe.skip(...)`, `xit(...)` — the suite still

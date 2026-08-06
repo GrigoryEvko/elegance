@@ -108,7 +108,13 @@ pub fn pack() -> Pack {
         names_test: declares_test,
         is_test_code: |_, _| false,
         test_path: |p| p.contains("/spec/") || p.contains("/test/") || p.ends_with("_spec.lua"),
-        asserty: |call, src| callee_text(call, src).is_some_and(super::assertish),
+        // Read the WHOLE callee, not its trailing segment: busted spells
+        // every assertion `assert.same`, `assert.is_true`, `assert.falsy`,
+        // and stripping to the last segment left `same`/`is_true`/`falsy`,
+        // none of which is assertish. Only a bare `assert(...)` survived,
+        // which is why 872 of the 893 gold Lua tests reported as asserting
+        // nothing were asserting.
+        asserty: |call, src| callee_qualified(call, src).is_some_and(super::assertish),
         is_hook: |_, _| false,
         // Multiple returns are the language's ordinary idiom and carry
         // no declaration, so there is no width to read without running
@@ -192,9 +198,14 @@ fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {
 /// The callee text of a call, trailing component only: `M.run` reads as
 /// `run` so a table-stored function is recognised by its own name.
 fn callee_text<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
-    let name = call.child_by_field_name("name")?;
-    let text = name.utf8_text(src).ok()?;
+    let text = callee_qualified(call, src)?;
     Some(text.rsplit(['.', ':']).next().unwrap_or(text))
+}
+
+/// The callee text with its qualifier intact — what a rule about the
+/// NAMESPACE a call comes from has to read.
+fn callee_qualified<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
+    call.child_by_field_name("name")?.utf8_text(src).ok()
 }
 
 fn first_string<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {

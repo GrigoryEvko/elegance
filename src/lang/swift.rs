@@ -36,6 +36,12 @@ const KINDS: &[(&str, Sem)] = &[
     ("conjunction_expression", Sem::BoolOp),
     ("disjunction_expression", Sem::BoolOp),
     ("call_expression", Sem::Call),
+    // A macro invocation is a call site the grammar spells with a `#`.
+    // swift-testing's whole assertion vocabulary is two of them —
+    // `#expect` and `#require` — and while this kind was unmapped no
+    // hook was ever asked about either, so 677 of the 1,182 gold Swift
+    // tests reported as checking nothing were checking.
+    ("macro_invocation", Sem::Call),
     ("as_expression", Sem::Cast),
     ("await_expression", Sem::Await),
     ("comment", Sem::Comment),
@@ -335,8 +341,14 @@ fn skips_test(node: Node, src: &[u8]) -> bool {
         .is_ok_and(|t| t.contains("XCTSkip") || t.contains(".disabled("))
 }
 
+/// XCTest spells an assertion `XCTAssert*`; swift-testing, which
+/// replaced it, spells one `#expect(cond)` and its stop-on-failure form
+/// `#require`. `expectish` is not enough for either: the macro's name is
+/// exactly `expect`, and `require` starts with neither word.
 fn asserty(call: Node, src: &[u8]) -> bool {
-    callee_text(call, src).is_some_and(|t| super::assertish(t) || t.starts_with("XCTAssert"))
+    callee_text(call, src).is_some_and(|t| {
+        super::assertish(t) || t.starts_with("XCTAssert") || matches!(t, "expect" | "require")
+    })
 }
 
 /// A protocol's width is the surface an adopter must satisfy.

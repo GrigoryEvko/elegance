@@ -439,6 +439,22 @@ after a scan. The test that reads it found Lua's and Ruby's `imports`
 hooks had never been asked once: both are written against `require`,
 which is a CALL in both languages, and neither had a module graph.
 
+An assertion is spelled differently in every ecosystem, and where a
+pack could not read the spelling its tests all reported that they check
+nothing. Go's stdlib assertion is `t.Errorf(...)`, which is a method
+call on the test handle rather than a name — and `fmt.Errorf`,
+`err.Error()` and `log.Fatal` wear the same verbs, so the receiver is
+resolved against the enclosing function's `testing.T` parameter rather
+than guessed from the name. swift-testing's `#expect` and `#require`
+are macro invocations, a node kind the Swift pack had not mapped at
+all. Lua's busted writes `assert.same`, and reading only the trailing
+segment left `same`. TypeScript takes `strictEqual` and `ok` bare from
+`node:assert`, so the file's imports decide whether that name is an
+assertion. Together those four read 86.9% of gold's Go tests, 91.3% of
+its Lua and 31.6% of its Swift as assertionless; the figures are now
+12.7%, 28.0% and 11.4%, and Lua's whole remainder is `describe`
+containers counted as tests.
+
 Whether a declaration is a method was read from the tree alone, and
 that reading is exactly as good as the parse. `tree-sitter-c-sharp`
 cannot parse a `#if`-guarded `else if` between an `if` and its `else`,
