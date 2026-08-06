@@ -1655,6 +1655,18 @@ impl Extractor<'_> {
     /// `shell=True` with a LITERAL command is a style choice and stays
     /// silent: nothing untrusted reaches the parser.
     fn check_shelled_command(&mut self, call: Node, unit_idx: usize) {
+        // A shell script IS the shell. The remedy this metric names —
+        // an argument list, which needs no shell at all — does not
+        // exist in the language: `bash -c "$a && $b"` has no argv form,
+        // and `exec cmd args...` is the POSIX builtin that REPLACES the
+        // process with an argv vector, sharing only a spelling with
+        // Node's child_process.exec. The matrix has said so since the
+        // row was written; nothing enforced it, and gold shell read 36
+        // findings at precision zero — seven times the ceiling a rung-2
+        // gate may cost.
+        if self.pack.lang == crate::lang::Lang::Shell {
+            return;
+        }
         if self.facts.is_test_file || self.facts.units[unit_idx].is_test {
             return;
         }
@@ -1713,9 +1725,19 @@ impl Extractor<'_> {
     /// callee is one that always does, or an argument says so —
     /// `shell=True`, or the `-c` that turns any shell into an
     /// interpreter of whatever follows.
+    ///
+    /// A `-c` only counts when A SHELL INTRODUCED IT. Read as a bare
+    /// flag it belongs to half the tools anyone runs: `git -c`,
+    /// `git switch -c`, `clang -c`, `tar -c`, `jq -c`, `stat -c`,
+    /// `shasum -c`, `pytest -c`, `perl -c`, `swift run -c` were 17 of
+    /// the metric's 38 gold false positives, against zero true ones —
+    /// every real `sh -c` on gold names the shell right beside the
+    /// flag, which is also the only form the rule was added for
+    /// (`exec.Command("sh", "-c", ..)` in Java, Go and C#).
     fn reaches_a_shell(&self, call: Node) -> bool {
+        let callee = self.callee_trailing_name(call);
         let always = matches!(
-            self.callee_trailing_name(call),
+            callee,
             Some("system" | "popen" | "exec" | "execSync" | "spawnSync" | "shell")
         );
         if always {
@@ -1723,13 +1745,18 @@ impl Extractor<'_> {
         }
         let args = call_arguments(self.pack, call);
         let text = |n: Node| n.utf8_text(self.src).unwrap_or("");
-        args.iter().any(|a| {
+        if args.iter().any(|a| text(*a).contains("shell=True")) {
+            return true;
+        }
+        args.iter().enumerate().any(|(i, a)| {
             let t = text(*a);
             // `-c` alone, or `-c` with the command riding in the same
             // string — Java and C# hand the shell one argument, and a
             // rule that only knew the separated form saw neither.
             let bare = t.trim_start_matches('$').trim_matches(['"', '\'']);
-            t.contains("shell=True") || bare == "-c" || bare.starts_with("-c ")
+            let interprets = bare == "-c" || bare.starts_with("-c ");
+            interprets
+                && (callee.is_some_and(names_a_shell) || i > 0 && names_a_shell(text(args[i - 1])))
         })
     }
 
@@ -2978,6 +3005,33 @@ fn share_state(units: &[UnitFacts], callees: &[Vec<Box<str>>], a: usize, b: usiz
 /// Does this literal OPEN an SQL statement? Anchored on purpose: a
 /// log line mentioning "select" is prose, and only a string that
 /// begins as a statement is one.
+/// Does this argument name a shell interpreter? A path is allowed —
+/// `/bin/sh` and `/usr/bin/env bash` are how a script names one — and
+/// the quotes come off first, because every language spells the name as
+/// a literal.
+fn names_a_shell(text: &str) -> bool {
+    const SHELLS: &[&str] = &[
+        "sh",
+        "bash",
+        "zsh",
+        "dash",
+        "ksh",
+        "csh",
+        "tcsh",
+        "fish",
+        "ash",
+        "busybox",
+        "cmd",
+        "cmd.exe",
+        "powershell",
+        "powershell.exe",
+        "pwsh",
+    ];
+    let bare = text.trim().trim_matches(['"', '\'', '`']).trim();
+    let name = bare.rsplit(['/', '\\']).next().unwrap_or(bare);
+    SHELLS.contains(&name)
+}
+
 fn starts_a_statement(raw: &str) -> bool {
     // Each verb with the keyword that makes it a STATEMENT rather than
     // an English sentence. `"Update File Error: ..."` opens with the

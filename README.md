@@ -189,6 +189,7 @@ The rung decides what a finding can *do*:
 | `live span` | McConnell ch. 13: a live variable is a mental register |
 | `swallowed` | a handler that silences the error entirely |
 | `built query` | SQL assembled by interpolation |
+| `shelled out` | a value spliced into a command a shell will re-parse; a `-c` counts only where a shell name introduces it |
 | `conditional hook` | a React hook reached through a branch |
 
 **`built query`** is judged by where the hole lands — a comparison slot,
@@ -485,7 +486,7 @@ the whole gold corpus.
 | C | `.c` `.h`\* | no preprocessing; numbers are floors |
 | C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` `.h`\* | RAII kills `unmanaged`; gtest names composed |
 | CUDA | `.cu` `.cuh` | rides the C++ pack, own budgets |
-| shell | `.sh` `.bash` | no declared parameters, so no interface family |
+| shell | `.sh` `.bash` | no declared parameters, so no interface family; `shelled out` is dead here — the language IS the shell |
 | Perl | `.pl` `.pm` `.t` | parameters only where signatures are used |
 | PHP | `.php` | types grew in from the outside; `untyped params` reads the migration |
 | Ruby | `.rb` `.rake` `.gemspec` | tightest function length in the corpus at 37 |

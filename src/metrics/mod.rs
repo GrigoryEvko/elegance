@@ -3146,6 +3146,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_dash_c_counts_only_where_a_shell_introduced_it() {
+        // The form the rule exists for: the shell is named right beside
+        // the flag, which is how Go, Java and C# hand one a string.
+        for shell in ["sh", "bash", "/bin/bash", "/usr/bin/env"] {
+            let src = format!(
+                "package main\nfunc a(n string) {{ exec.Command(\"{shell}\", \"-c\", fmt.Sprintf(\"rm -rf %s\", n)).Run() }}\n"
+            );
+            let want = usize::from(shell != "/usr/bin/env");
+            assert_eq!(shelled(Lang::Go, "a.go", &src), want, "{shell}");
+        }
+        // `-c` READ AS A BARE FLAG belongs to half the tools anyone
+        // runs. These were 17 of the metric's 38 gold false positives,
+        // against zero true ones.
+        for tool in ["git", "clang", "tar", "jq", "stat", "shasum", "perl"] {
+            let src = format!(
+                "package main\nfunc a(n string) {{ exec.Command(\"{tool}\", \"-c\", fmt.Sprintf(\"%s\", n)).Run() }}\n"
+            );
+            assert_eq!(
+                shelled(Lang::Go, "a.go", &src),
+                0,
+                "{tool} -c is not a shell"
+            );
+        }
+        // A SHELL SCRIPT IS THE SHELL. The matrix has declared this cell
+        // dead since the row was written — "the whole language IS the
+        // shell" — and nothing enforced it: gold shell read 36 findings
+        // at precision zero. `exec` here is the POSIX builtin, which
+        // replaces the process with an argv vector and shares only a
+        // spelling with Node's child_process.exec.
+        assert_eq!(
+            shelled(
+                Lang::Shell,
+                "a.sh",
+                "run() {\n  bash -c \"$cmd1 && $cmd2\"\n  exec git update-index --remove -- \"$1\"\n}\n"
+            ),
+            0,
+            "a shell script has no argv remedy to recommend"
+        );
+    }
+
     fn built(lang: Lang, path: &str, src: &str) -> usize {
         let pack = lang.pack();
         let mut parser = pack.make_parser();
