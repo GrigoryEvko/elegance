@@ -81,8 +81,6 @@
 "interface width" = { hi = 13.0 }
 "magic strings" = { hi = 3.0 }
 "cohesion" = { hi = 4.0 }
-# gold p05 is zero: this floor is vacuous by the corpus's verdict
-"ground density" = { lo = 0.0 }
 "module doc" = { hi = 22.0 }
 "type doc" = { hi = 124.0 }
 "fn doc" = { hi = 128.0 }
@@ -110,8 +108,6 @@
 "returns" = { hi = 1.0 }
 "interface width" = { hi = 4.0 }
 "magic strings" = { hi = 3.0 }
-# gold p05 is zero: this floor is vacuous by the corpus's verdict
-"ground density" = { lo = 0.0 }
 # 65 runs is under the 200 a percentile needs: borrowed from tsx's pooled doc p99
 "module doc" = { hi = 89.0 }
 # 95 runs is under the 200 a percentile needs: borrowed from tsx's pooled doc p99
@@ -195,8 +191,6 @@
 "wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 1.0 }
-# gold p05 is zero: this floor is vacuous by the corpus's verdict
-"ground density" = { lo = 0.0 }
 "module doc" = { hi = 363.0 }
 "type doc" = { hi = 137.0 }
 "fn doc" = { hi = 149.0 }
@@ -273,8 +267,6 @@
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 1.0 }
 "skipped tests" = { hi = 4.0 }
-# gold p05 is zero: this floor is vacuous by the corpus's verdict
-"ground density" = { lo = 0.0 }
 "module doc" = { hi = 43.0 }
 # 17 runs is under the 200 a percentile needs: borrowed from pl's pooled doc p99
 "type doc" = { hi = 545.0 }
@@ -330,8 +322,6 @@
 "magic strings" = { hi = 1.0 }
 "skipped tests" = { hi = 1.0 }
 "cohesion" = { hi = 11.0 }
-# gold p05 is zero: this floor is vacuous by the corpus's verdict
-"ground density" = { lo = 0.0 }
 "module doc" = { hi = 95.0 }
 "type doc" = { hi = 360.0 }
 "fn doc" = { hi = 150.0 }
@@ -357,8 +347,6 @@
 "loop depth" = { hi = 1.0 }
 "interface width" = { hi = 26.0 }
 "magic strings" = { hi = 1.0 }
-# gold p05 is zero: this floor is vacuous by the corpus's verdict
-"ground density" = { lo = 0.0 }
 # 15 runs is under the 200 a percentile needs: borrowed from cs's pooled doc p99
 "module doc" = { hi = 209.0 }
 "type doc" = { hi = 95.0 }
@@ -387,8 +375,6 @@
 "loop depth" = { hi = 1.0 }
 "magic strings" = { hi = 1.0 }
 "skipped tests" = { hi = 9.0 }
-# gold p05 is zero: this floor is vacuous by the corpus's verdict
-"ground density" = { lo = 0.0 }
 "module doc" = { hi = 171.0 }
 "type doc" = { hi = 203.0 }
 "fn doc" = { hi = 162.0 }
@@ -414,8 +400,6 @@
 "interface width" = { hi = 9.0 }
 "magic strings" = { hi = 1.0 }
 "sleepy test" = { hi = 1.0 }
-# gold p05 is zero: this floor is vacuous by the corpus's verdict
-"ground density" = { lo = 0.0 }
 "module doc" = { hi = 166.0 }
 "type doc" = { hi = 193.0 }
 "fn doc" = { hi = 94.0 }
@@ -490,8 +474,6 @@
 "loop depth" = { hi = 2.0 }
 "repurposed" = { hi = 2.0 }
 "magic strings" = { hi = 1.0 }
-# gold p05 is zero: this floor is vacuous by the corpus's verdict
-"ground density" = { lo = 0.0 }
 "module doc" = { hi = 277.0 }
 "type doc" = { hi = 105.0 }
 "fn doc" = { hi = 176.0 }
@@ -595,8 +577,6 @@
 "repurposed" = { hi = 2.0 }
 "magic strings" = { hi = 2.0 }
 "commented code" = { hi = 1.0 }
-# gold p05 is zero: this floor is vacuous by the corpus's verdict
-"ground density" = { lo = 0.0 }
 "module doc" = { hi = 235.0 }
 "type doc" = { hi = 65.0 }
 "fn doc" = { hi = 93.0 }

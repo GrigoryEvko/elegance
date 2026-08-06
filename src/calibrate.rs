@@ -246,11 +246,6 @@ fn pinned(def: &crate::metrics::MetricDef, dist: &[f32]) -> Option<Pin> {
             entry: format!("hi = {:.1}", q(GOLD_PIN).ceil()),
             shown: format!("{:.0}", q(GOLD_PIN)),
         }),
-        Calib::P05 => Some(Pin {
-            note: vacuous("# gold p05 is zero: this floor is vacuous by the corpus's verdict"),
-            entry: format!("lo = {:.1}", q(BAND_LO).floor()),
-            shown: format!("p05 {:.0}", q(BAND_LO)),
-        }),
         Calib::Band => Some(Pin {
             note: vacuous("# gold p05 is zero: the low flank is vacuous by the corpus's verdict"),
             entry: format!("lo = {:.2}, hi = {:.2}", q(BAND_LO), q(BAND_HI)),

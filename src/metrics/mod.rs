@@ -33,11 +33,6 @@ pub struct MetricDef {
 pub enum Calib {
     P99,
     Band,
-    /// A one-sided FLOOR, pinned to gold p05: the metric where MORE is
-    /// better and the tail worth naming is the thin one. Only `ground
-    /// density` is this way round, and a p99 ceiling on it would say
-    /// "you explained too much".
-    P05,
     Policy,
 }
 
@@ -257,8 +252,7 @@ pub const TYPE_DOC: usize = 58;
 pub const FN_DOC: usize = 59;
 pub const FIELD_DOC: usize = 60;
 pub const INLINE_DOC: usize = 61;
-pub const GROUND_DENSITY: usize = 62;
-pub const DOC_PARAM: usize = 63;
+pub const DOC_PARAM: usize = 62;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -689,27 +683,6 @@ pub const METRICS: &[MetricDef] = &[
     MetricDef { name: "fn doc",        rung: 3, lo: None, hi: Some(140.0), fmt: Fmt::Int, calib: Calib::P99 },
     MetricDef { name: "field doc",     rung: 3, lo: None, hi: Some(90.0),  fmt: Fmt::Int, calib: Calib::P99 },
     MetricDef { name: "inline doc",    rung: 3, lo: None, hi: Some(80.0),  fmt: Fmt::Int, calib: Calib::P99 },
-    // Does a comment give a REASON, or only a label? Grounds per
-    // thousand prose words, over the statement-attached comments of
-    // one file.
-    //
-    // Rung 5, report only, and it stays there. The within-repo
-    // experiment that killed generic subordinator density (0.97 over
-    // 43 repositories) tested a POOLED set — grounds and purposes
-    // together, which move in opposite directions. It never tested
-    // this subset, so the repo-level rank-AUC of 1.000 with zero
-    // overlap (worst human 0.175, best machine 0.106, 0 of 36
-    // repo-pair sign flips) rests on the smaller design alone:
-    // promising, not proven. Gating it would also invite `because`
-    // filler; at report-only the Goodhart pressure is weak and its
-    // direction is still favourable, since gaming it means writing
-    // reasons that have to survive review.
-    //
-    // Floored, not capped, and it is the only metric that way round:
-    // too FEW reasons is the finding, and there is no such thing as
-    // too many. Where gold's own p05 is zero the flank is vacuous and
-    // calibration.toml says so.
-    MetricDef { name: "ground density", rung: 5, lo: Some(0.0), hi: None, fmt: Fmt::Int, calib: Calib::P05 },
     // A parameter the documentation NAMES and the signature does not
     // declare: renamed when the code changed, or invented. Provable
     // without reference to any corpus — the signature is right there —
@@ -772,14 +745,6 @@ fn doc_metric(role: crate::facts::CommentRole) -> Option<usize> {
         R::Trailing => None,
     }
 }
-
-/// Prose words a file's inline comments must add up to before their
-/// ground density means anything. Below a paragraph, one `because`
-/// swings the reading by ten points and the number measures rounding.
-const GROUNDED_WORDS: u32 = 100;
-
-/// Grounds per this many prose words — the density's unit.
-const PER_WORDS: f32 = 1000.0;
 
 /// A declaration that asserts nothing, carrying documentation that says
 /// it does.
@@ -1202,7 +1167,6 @@ fn file_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
 /// FILE, because a single comment is far too small a denominator —
 /// one `because` in an eight-word run reads as 125 per thousand.
 fn comment_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
-    use crate::facts::CommentRole;
     for c in &facts.comments {
         let Some(m) = doc_metric(c.role) else {
             continue;
@@ -1216,24 +1180,6 @@ fn comment_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str))
             .map_or("", |u| &*u.qualname);
         f(m, c.prose.words as f32, c.line, unit);
     }
-    let inline = || {
-        facts
-            .comments
-            .iter()
-            .filter(|c| c.role == CommentRole::Inline)
-    };
-    let words: u32 = inline().map(|c| c.prose.words as u32).sum();
-    if words < GROUNDED_WORDS {
-        return;
-    }
-    let grounds: u32 = inline().map(|c| c.prose.grounds as u32).sum();
-    let first = inline().map(|c| c.line).min().unwrap_or(1);
-    f(
-        GROUND_DENSITY,
-        PER_WORDS * grounds as f32 / words as f32,
-        first,
-        "",
-    );
 }
 
 /// What a unit's NAME promises and whether the unit keeps it: honest
@@ -1459,13 +1405,12 @@ mod tests {
             (FN_DOC, "fn doc"),
             (FIELD_DOC, "field doc"),
             (INLINE_DOC, "inline doc"),
-            (GROUND_DENSITY, "ground density"),
             (DOC_PARAM, "doc param"),
         ];
         for (idx, name) in PAIRS {
             assert_eq!(METRICS[*idx].name, *name, "index {idx}");
         }
-        assert_eq!(N, 64);
+        assert_eq!(N, 63);
     }
 
     #[test]
@@ -2396,43 +2341,6 @@ mod tests {
         assert_eq!(readings(Lang::Rust, "a.rs", src, FIELD_DOC), [3.0]);
         assert_eq!(readings(Lang::Rust, "a.rs", src, INLINE_DOC), [2.0]);
         assert!(readings(Lang::Rust, "a.rs", src, FN_DOC).is_empty());
-    }
-
-    #[test]
-    fn ground_density_needs_a_paragraph_of_statement_comments() {
-        // A file of pure FIELD docs contains no reasons and is right
-        // not to: a field's doc names the field. Statement-attached
-        // comments are the only ones asked, so this file is not
-        // measured at all — silent at any budget, rather than silent
-        // because the budget happens to be zero.
-        let mut fields = String::from("pub struct Cfg {\n");
-        for n in 0..40 {
-            fields.push_str(&format!(
-                "    /// The name of the {n}th retry window in seconds.\n    pub w{n}: u64,\n"
-            ));
-        }
-        fields.push_str("}\n");
-        assert!(readings(Lang::Rust, "a.rs", &fields, GROUND_DENSITY).is_empty());
-
-        // Nor is a lone statement comment measured, however it reads:
-        // one `because` in eight words is 125 per thousand, which is
-        // rounding wearing a rate's clothes.
-        let thin = "pub fn go() {\n    // Retried because the socket was reset.\n    run();\n}\n";
-        assert!(readings(Lang::Rust, "a.rs", thin, GROUND_DENSITY).is_empty());
-
-        // A paragraph of them IS measured, and the reading is grounds
-        // per thousand prose words.
-        let mut wordy = String::from("pub fn go() {\n");
-        for n in 0..20 {
-            wordy.push_str(&format!(
-                "    // Step {n} copies the header into the scratch buffer first.\n    step{n}();\n"
-            ));
-        }
-        wordy.push_str("    // Retried because the peer reset the socket.\n    run();\n}\n");
-        let seen = readings(Lang::Rust, "a.rs", &wordy, GROUND_DENSITY);
-        // 20 runs of 9 words, one of 7: 187 words, one ground.
-        assert_eq!(seen.len(), 1);
-        assert!((5.0..6.0).contains(&seen[0]), "{seen:?}");
     }
 
     fn secrets(src: &str) -> usize {
@@ -4289,10 +4197,6 @@ mod tests {
         ("fn doc", "a_long_example_is_not_a_long_doc"),
         ("field doc", "a_long_example_is_not_a_long_doc"),
         ("inline doc", "a_long_example_is_not_a_long_doc"),
-        (
-            "ground density",
-            "ground_density_needs_a_paragraph_of_statement_comments",
-        ),
         (
             "doc param",
             "a_correct_param_doc_and_a_destructured_one_stay_silent",

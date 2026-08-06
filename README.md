@@ -286,17 +286,6 @@ step-down narrative ordering.
 | `param clumps` | Fowler's Data Clumps |
 | `repeated dispatch` · `untested complexity` | |
 | `public docs` · `asserts` | coverage **rates**, rendered beside gold's own share |
-| `ground density` | does a statement comment give a *reason*, or only a label — grounds per 1k prose words |
-
-`ground density` counts `because` · `otherwise` · `thus` · `hence` ·
-`therefore` · `so that`, and a causal `since` — `since 1.2.0` and
-`since the last flush` are dates and are skipped. Purposes (`to avoid`,
-`in order to`, `prevents`, `due to`) are counted separately and never
-credited: pooled as one subordinator density the signal measured 0.97
-within-repo and died, because the two halves move in opposite
-directions. It reports and never gates, for two reasons — the
-within-repo experiment tested the pooled set and never this subset, and
-gating it would invite `because` filler.
 
 
 Rates never render as per-unit findings — `63% of 103 public units
