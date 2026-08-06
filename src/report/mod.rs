@@ -1069,17 +1069,47 @@ const SHOW_SHAPE: usize = 4;
 /// for one fact and left the functions breaking six budgets each
 /// unnamed.
 pub fn render(agg: &mut Agg, ink: ink::Ink) -> String {
-    let trim = shared_prefix(agg);
+    let page = Page {
+        ink,
+        trim: shared_prefix(agg),
+        costs: Costs::read(agg),
+    };
     let mut out = headline(agg);
     while out.ends_with("\n\n") {
         out.pop();
     }
-    render_ranked(agg, ink, trim, &mut out);
-    render_policy(agg, ink, trim, &mut out);
+    render_ranked(agg, &page, &mut out);
+    render_policy(agg, &page, &mut out);
     render_shape(agg, ink, &mut out);
-    render_aligned(agg, ink, &mut out);
+    render_aligned(agg, &page, &mut out);
     render_where(agg, ink, &mut out);
     out
+}
+
+/// What every ranked section needs and none of them can recompute
+/// cheaply: how to colour, how much of each path is boilerplate every
+/// finding shares, and what a finding costs beyond its own body. Built
+/// once so the import graph is analysed once, which is what it cost
+/// before the cost clause existed.
+struct Page {
+    ink: ink::Ink,
+    trim: usize,
+    costs: Costs,
+}
+
+impl Page {
+    /// Ask what each entry costs beyond itself. Asked AFTER the ranking
+    /// and never before it, so the answer can change what a reader is
+    /// told and not which body they are told about.
+    fn costed<'a>(&self, bodies: Vec<Carried<'a>>) -> Vec<Carried<'a>> {
+        bodies
+            .into_iter()
+            .map(|g| Carried {
+                cost: self.costs.of(&g),
+                ..g
+            })
+            .collect()
+    }
 }
 
 /// Bytes of leading path every finding shares, cut at a separator. Whole
@@ -1140,6 +1170,10 @@ struct Carried<'a> {
     /// to tenth. Breadth is worth showing and is; it is not worth
     /// ranking by.
     worst: f32,
+    /// What this body costs beyond itself, once a `Costs` has been
+    /// asked. Ranking must not depend on it: a load-bearing file is a
+    /// reason to be careful, not evidence of a bigger overage.
+    cost: Option<String>,
 }
 
 /// Metric names and values one entry lists before the line stops being
@@ -1167,11 +1201,17 @@ fn carried_lines(g: &Carried, noun: &str, trim: usize, tint: (ink::Ink, &str)) -
         true => String::new(),
         false => format!("  {}", at.name),
     };
+    // What it costs beyond itself goes last, on its own line: it is a
+    // fact about the file or the codebase, not another budget.
+    let cost = match &g.cost {
+        None => String::new(),
+        Some(cost) => format!("\n          {}{cost}{}", ink.faint(), ink.off()),
+    };
     format!(
         // Indented to the budget column, so the metric list reads as a
         // continuation of the line that counted it rather than as
         // another finding.
-        "  {colour}{sev:>5}x{}  {budgets:<CARRIED_COL$}{}{}:{}{}{unit}\n          {}{}{}",
+        "  {colour}{sev:>5}x{}  {budgets:<CARRIED_COL$}{}{}:{}{}{unit}\n          {}{}{}{cost}",
         ink.off(),
         ink.faint(),
         &at.path[trim.min(at.path.len())..],
@@ -1181,6 +1221,82 @@ fn carried_lines(g: &Carried, noun: &str, trim: usize, tint: (ink::Ink, &str)) -
         carried_metrics(g),
         ink.off(),
     )
+}
+
+/// A finding repeated this often in one file is a fact about the FILE,
+/// not about the body: one edit there answers for all of them. Eight
+/// because a file with eight of anything wrote it on purpose.
+const REPEATED: u32 = 8;
+
+/// What a finding costs beyond its own body.
+///
+/// Every fact here is one the report already computed for rung 7 and
+/// then printed as an integer — `render_aligned` calls
+/// `aligned_tensions`, counts the result and throws the structure away.
+/// On the reference tree that discarded `config.py` carrying the
+/// report's second-worst body while 17 of the tree's 39 modules import
+/// it: both facts known, neither ever on the same line.
+struct Costs {
+    /// Files enough of the codebase imports that changing them is costly.
+    heavy: HashMap<String, u32>,
+    /// Over-budget bodies no test names, by label.
+    untested: std::collections::HashSet<String>,
+    /// How many findings each (metric, file) pair holds.
+    repeats: HashMap<(usize, String), u32>,
+}
+
+impl Costs {
+    fn read(agg: &Agg) -> Costs {
+        let mut repeats: HashMap<(usize, String), u32> = HashMap::new();
+        for (m, os) in agg.offenders.iter().enumerate() {
+            for o in os {
+                let seen = repeats.entry((m, o.path.clone())).or_default();
+                *seen += 1;
+            }
+        }
+        let untested = select_untested(agg).into_iter().map(|(label, _)| label);
+        Costs {
+            heavy: load_bearing_files(agg),
+            untested: untested.collect(),
+            repeats,
+        }
+    }
+
+    /// How many findings this metric has in that file.
+    fn repeats_in(&self, m: usize, path: &str) -> Option<u32> {
+        let found = self.repeats.get(&(m, path.to_string()));
+        found.copied()
+    }
+
+    /// The metric this body trips most often across the whole file, and
+    /// how often.
+    fn repeated(&self, g: &Carried) -> Option<(usize, u32)> {
+        let path = &g.at.path;
+        g.findings
+            .iter()
+            .filter_map(|(m, _)| Some((*m, self.repeats_in(*m, path)?)))
+            .max_by_key(|(_, n)| *n)
+    }
+
+    /// The rarest fact that is true of this body, or none.
+    ///
+    /// Rarest, because they stack — a body can be load-bearing AND
+    /// untested AND one of a hundred like it — and a clause per fact
+    /// would put the entry back where the grouping found it. Measured
+    /// over the reference tree's 391 over-budget bodies: a load-bearing
+    /// file covers 4.1% of them, an untested body 7.9%, a repeated
+    /// finding 44.5%.
+    fn of(&self, g: &Carried) -> Option<String> {
+        let at = g.at;
+        if let Some(n) = self.heavy.get(&at.path) {
+            return Some(format!("{n} files import this one"));
+        }
+        if self.untested.contains(&at.label()) {
+            return Some("no test names it".to_string());
+        }
+        let (m, n) = self.repeated(g)?;
+        (n >= REPEATED).then(|| format!("{n} {} findings in this one file", METRICS[m].name))
+    }
 }
 
 /// Every budget the body broke, worst first, until the line is as wide
@@ -1241,6 +1357,7 @@ fn ranked_units(agg: &Agg, rungs: std::ops::RangeInclusive<u8>, k: usize) -> Vec
                 at: findings[0].1,
                 worst: distance(&findings[0]),
                 findings,
+                cost: None,
             }
         })
         .collect();
@@ -1313,7 +1430,8 @@ fn cta(ink: ink::Ink, label: &str, command: &str, out: &mut String) {
 const GATES: std::ops::RangeInclusive<u8> = 0..=2;
 const SUSPICIONS: std::ops::RangeInclusive<u8> = 3..=4;
 
-fn render_ranked(agg: &mut Agg, ink: ink::Ink, trim: usize, out: &mut String) {
+fn render_ranked(agg: &mut Agg, page: &Page, out: &mut String) {
+    let (ink, trim) = (page.ink, page.trim);
     let gates = count_rung(agg, GATES);
     if gates == 0 {
         section(ink, "gates", "clean — nothing here fails a build", out);
@@ -1323,7 +1441,7 @@ fn render_ranked(agg: &mut Agg, ink: ink::Ink, trim: usize, out: &mut String) {
             bodies_at(agg, GATES)
         );
         section(ink, "gates", &gloss, out);
-        for g in ranked_units(agg, GATES, SHOW_RANKED) {
+        for g in page.costed(ranked_units(agg, GATES, SHOW_RANKED)) {
             let _ = writeln!(
                 out,
                 "{}",
@@ -1341,7 +1459,7 @@ fn render_ranked(agg: &mut Agg, ink: ink::Ink, trim: usize, out: &mut String) {
         bodies_at(agg, SUSPICIONS)
     );
     section(ink, "suspicions", &gloss, out);
-    let listed = ranked_units(agg, SUSPICIONS, SHOW_POLICY);
+    let listed = page.costed(ranked_units(agg, SUSPICIONS, SHOW_POLICY));
     // Point the command at something real. A reader who has to invent the
     // argument has been handed a manual page, not a next step.
     let example = listed
@@ -1390,7 +1508,8 @@ fn unrankable(agg: &Agg, m: usize) -> impl Iterator<Item = &Offender> {
     agg.offenders[m].iter().filter(|o| o.severity().is_none())
 }
 
-fn render_policy(agg: &mut Agg, ink: ink::Ink, trim: usize, out: &mut String) {
+fn render_policy(agg: &mut Agg, page: &Page, out: &mut String) {
+    let (ink, trim) = (page.ink, page.trim);
     let rows = zero_budget_rows(agg);
     if rows.is_empty() {
         return;
@@ -1534,8 +1653,9 @@ fn render_shape(agg: &mut Agg, ink: ink::Ink, out: &mut String) {
     );
 }
 
-fn render_aligned(agg: &mut Agg, ink: ink::Ink, out: &mut String) {
-    let n = aligned_tensions(agg).len();
+fn render_aligned(agg: &mut Agg, page: &Page, out: &mut String) {
+    let ink = page.ink;
+    let n = aligned_tensions(agg, &page.costs).len();
     if n == 0 {
         return;
     }
@@ -1573,7 +1693,8 @@ pub fn render_full(agg: &mut Agg, top: usize) -> String {
     render_verdict(agg, &mut out);
     render_rates(agg, &mut out);
     render_architecture(agg, &mut out);
-    render_tensions(agg, &mut out);
+    let costs = Costs::read(agg);
+    render_tensions(agg, &costs, &mut out);
     render_narrative(agg, &mut out);
     render_idioms(agg, &mut out);
     render_clones(agg, top, &mut out);
@@ -1726,12 +1847,8 @@ const LOAD_BEARING: u32 = 5;
 /// rung-0 gate. A tension names every fact it is made of.
 /// Units where several independent facts land at once, worst first. The
 /// short report prints only how many there are; the long one prints them.
-fn aligned_tensions(agg: &mut Agg) -> Vec<(String, u32, String, Vec<String>)> {
-    let untested: std::collections::HashSet<String> = select_untested(agg)
-        .into_iter()
-        .map(|(label, _)| label)
-        .collect();
-    let heavy = load_bearing_files(agg);
+fn aligned_tensions(agg: &mut Agg, costs: &Costs) -> Vec<(String, u32, String, Vec<String>)> {
+    let (untested, heavy) = (&costs.untested, &costs.heavy);
     let duplicated: std::collections::HashSet<String> = recurring(agg)
         .iter()
         .flat_map(|c| c.sites.iter().map(|s| s.path.to_string()))
@@ -1775,8 +1892,8 @@ fn aligned_tensions(agg: &mut Agg) -> Vec<(String, u32, String, Vec<String>)> {
     aligned
 }
 
-fn render_tensions(agg: &mut Agg, out: &mut String) {
-    let aligned = aligned_tensions(agg);
+fn render_tensions(agg: &mut Agg, costs: &Costs, out: &mut String) {
+    let aligned = aligned_tensions(agg, costs);
     if aligned.is_empty() {
         return;
     }
@@ -3055,7 +3172,8 @@ mod tests {
             .count();
         assert!(gates >= 3, "the fixture must trip several gates: {gates}");
         let mut out = String::new();
-        render_tensions(&mut agg, &mut out);
+        let costs = Costs::read(&agg);
+        render_tensions(&mut agg, &costs, &mut out);
         assert!(
             out.is_empty(),
             "one big TESTED function is one fact, not a tension:\n{out}"
@@ -3301,6 +3419,42 @@ mod tests {
         assert!(
             named == 5 || block.contains(&format!("+{} more", 5 - named)),
             "unnamed and uncounted:\n{block}"
+        );
+    }
+
+    /// The report computed all three of these for rung 7 and printed
+    /// the result as an integer, so `config.py` could carry the
+    /// second-worst body in the tree while 17 of 39 modules imported it
+    /// and neither fact ever reached the other. They also stack, and a
+    /// clause per fact would put the entry back where the grouping
+    /// found it — so the rarest wins, and a repeat too small to be a
+    /// fact about the file says nothing at all.
+    #[test]
+    fn a_cost_clause_names_the_rarest_fact_that_is_true() {
+        let mut agg = Agg::complete();
+        agg.offenders[metric("cognitive")].push(over(("hot.py", 10, "f"), 55.0, 18.0));
+        let bodies = ranked_units(&agg, GATES, SHOW_RANKED);
+        // Each row drops the fact above it, so the clause has to fall
+        // through to the next-rarest rather than go silent.
+        let costs = |heavy: &[(&str, u32)], untested: &[&str], repeat: u32| Costs {
+            heavy: heavy.iter().map(|(p, n)| (p.to_string(), *n)).collect(),
+            untested: untested.iter().map(|u| u.to_string()).collect(),
+            repeats: HashMap::from([((metric("cognitive"), "hot.py".to_string()), repeat)]),
+        };
+        let clause = |c: Costs| c.of(&bodies[0]).unwrap_or_else(|| "nothing".to_string());
+        assert_eq!(
+            clause(costs(&[("hot.py", 17)], &["hot.py:10  f"], 8)),
+            "17 files import this one"
+        );
+        assert_eq!(clause(costs(&[], &["hot.py:10  f"], 8)), "no test names it");
+        assert_eq!(
+            clause(costs(&[], &[], 8)),
+            "8 cognitive findings in this one file"
+        );
+        assert_eq!(
+            clause(costs(&[], &[], REPEATED - 1)),
+            "nothing",
+            "a handful is not a house style"
         );
     }
 

@@ -99,6 +99,21 @@ against a budget of zero has no distance and stays in the `policy`
 section, so the count is of budgets that can be exceeded, not of every
 rule the body trips.
 
+A third line says what the body costs beyond itself, when something
+does:
+
+```
+    9x  3 gates      config.py:42  _build_v5
+        magic numbers 101>11  live span 192>48  length 195>76
+        17 files import this one
+```
+
+Three facts can be true — the file is load-bearing, no test names the
+body, the same finding fills the file — and only the rarest is printed,
+because a clause per fact puts the entry back where the grouping found
+it. All three are rung-7 inputs the report already computed and then
+summarized as a count.
+
 ### Machine output
 
 `--json` emits **schema 2**; `--sarif` emits SARIF 2.1.0. A format flag
