@@ -183,8 +183,12 @@ impl Index {
                 }
             }
             idx.modules.entry(comps).or_insert(i);
+            // A package's representative file must be one the
+            // production graph keeps. toml's root package sorts
+            // bench_test.go first, and standing for the package with a
+            // test file dropped every edge into it.
             let dir: Vec<Box<str>> = components(f.path.parent().unwrap_or(Path::new("")));
-            if let Some(last) = dir.last() {
+            if let (Some(last), false) = (dir.last(), f.is_test) {
                 idx.dirs.entry(last.clone()).or_default().push((dir, i));
             }
             let full = components(&f.path);
@@ -769,6 +773,29 @@ mod tests {
         ];
         let (_, e) = edges(&files);
         assert_eq!(e, [(3, 1)]);
+    }
+
+    #[test]
+    fn a_package_is_represented_by_a_file_the_graph_keeps() {
+        // A Go package's edges land on a representative file of it, and
+        // the representative was whichever sorted first. toml's root
+        // package sorts bench_test.go first, so the production graph
+        // dropped the representative and every edge into the package
+        // with it: 16 of toml's 22 modules read as orphans.
+        let mut bench = file(Lang::Go, "toml/bench_test.go", &[]);
+        bench.is_test = true;
+        let files = [
+            bench,
+            file(
+                Lang::Go,
+                "toml/cmd/tomlv/main.go",
+                &["github.com/BurntSushi/toml"],
+            ),
+            file(Lang::Go, "toml/decode.go", &[]),
+        ];
+        let (_, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[1][0], Some(idx("toml/decode.go")));
     }
 
     #[test]

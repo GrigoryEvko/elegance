@@ -105,7 +105,8 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
     let module_depths = module_depths(&sccs, &comp_succ, n);
     let q = |p: f64| depth_at(&module_depths, p);
 
-    let blasts = blast_radii(&sccs, &comp_succ, n);
+    let mut blasts = blast_radii(&sccs, &comp_succ, n);
+    fold_over_modules(&files, &edge_list, &mut fan_in, &mut blasts);
     let judged = judgeable(&files);
     let (judged_modules, deletable_pct) = deletability(&blasts, &judged);
     let load = load_bearing(&file_labels, &blasts);
@@ -552,6 +553,59 @@ fn leak_names(imp: &crate::facts::ImportFact, from: &str, to: &str, leaks: &mut 
     }
 }
 
+/// Swift and Go state a dependency on a MODULE, which is a directory,
+/// and the edge lands on a representative file of it — so every OTHER
+/// file of that module reads as depended on by nothing.
+///
+/// There is no import to fix. Alamofire's Source/Core/AFError.swift
+/// declares `public enum AFError` and 24 files under Source reference
+/// it; Source/Core/Session.swift contains exactly one import, and it is
+/// `import Foundation`. Swift has no syntax that would say more. At
+/// file granularity 98% of Swift is orphaned by construction, and Go
+/// sits at 52% for the same reason one tier milder.
+///
+/// So the answer is folded over the module: a file inherits whatever
+/// depends on the directory it belongs to, and a module nobody imports
+/// keeps its zero. What survives is the answer worth reading — example
+/// executables, benchmark targets, demo servers.
+///
+/// A Go package is exactly its directory. A Swift target is an
+/// ancestor, since `Sources/NIOCore/Channel/` is still NIOCore, so the
+/// nearest depended ancestor is the one that counts.
+fn fold_over_modules(
+    files: &[&GraphFacts],
+    edges: &[(u32, u32)],
+    fan_in: &mut [u32],
+    blasts: &mut [u32],
+) {
+    use crate::lang::Lang;
+    let folded = |f: &GraphFacts| matches!(f.lang, Lang::Swift | Lang::Go);
+    if !files.iter().any(|f| folded(f)) {
+        return;
+    }
+    // Keyed by language as well as path: a directory only vouches for
+    // the files of the language whose import named it.
+    let mut depended: HashSet<(usize, &Path)> = HashSet::new();
+    for &(_, b) in edges {
+        let target = files[b as usize];
+        if let (true, Some(dir)) = (folded(target), target.path.parent()) {
+            depended.insert((target.lang as usize, dir));
+        }
+    }
+    for (i, f) in files.iter().enumerate() {
+        if !folded(f) {
+            continue;
+        }
+        let holds = |d| depended.contains(&(f.lang as usize, d));
+        let module = match f.lang {
+            Lang::Go => f.path.parent().is_some_and(holds),
+            _ => f.path.ancestors().skip(1).any(holds),
+        };
+        fan_in[i] = u32::from(module);
+        blasts[i] = u32::from(module);
+    }
+}
+
 /// One flag per file: can this module be asked whether anything depends
 /// on it? A translation unit is a sink by construction, so its answer
 /// is settled before the code is read. See `Lang::is_sink`.
@@ -750,6 +804,31 @@ mod tests {
         let arch = arch(&files);
         assert_eq!(arch.dir_cycle_mass_pct, 100.0 * 2.0 / 3.0);
         assert_eq!(arch.largest_dir_cycle, ["app/core", "app/ui"]);
+    }
+
+    #[test]
+    fn a_module_directory_answers_for_every_file_inside_it() {
+        // Alamofire's Source/Core/AFError.swift is referenced by 24
+        // files in its own target and imported by name from none of
+        // them, because Swift has no syntax that would say so. At file
+        // granularity 98% of Swift was orphaned by construction, and Go
+        // sat at 52% for the same reason one tier milder.
+        let files = [
+            fixture(Lang::Swift, "Sources/App/main.swift", &["NIOCore"]),
+            fixture(Lang::Swift, "Sources/Demo/Server.swift", &["NIOCore"]),
+            fixture(
+                Lang::Swift,
+                "Sources/NIOCore/AsyncChannel/Inbound.swift",
+                &[],
+            ),
+            fixture(Lang::Swift, "Sources/NIOCore/Channel.swift", &[]),
+        ];
+        let arch = arch(&files);
+        // The import lands on one file of NIOCore; the other is a
+        // directory deeper and belongs to the same target either way.
+        // Nothing imports Demo, and that is the answer worth reading.
+        assert_eq!(arch.orphans, ["Sources/Demo/Server.swift"]);
+        assert_eq!(arch.orphan_count, 1);
     }
 
     #[test]
