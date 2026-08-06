@@ -943,6 +943,13 @@ impl Extractor<'_> {
         let panics = self.pack.panicky(node, self.src);
         let trap = self.bare_boolean_arguments(node) >= MIN_BOOL_TRAP;
         let unit = &self.facts.units[unit_idx];
+        // NOT gated on `ctx.awaited`. The verdict asked for that as a
+        // cheap stand-in for the name table below, on the evidence that
+        // eight of the suffix-rule's false positives were awaited — but
+        // once the table decides, awaiting proves nothing: `await
+        // fs.readFileSync(p)` and `await requests.get(url)` block
+        // exactly as hard, and the guard silenced both. Measured, not
+        // reasoned: a two-file probe reported zero with it in place.
         let parks = unit.is_async && self.parks_the_thread(node);
         let recursive = !unit.self_recursive && self.pack.is_self_call(node, self.src, &unit.name);
         let unit = &mut self.facts.units[unit_idx];
@@ -1523,7 +1530,8 @@ impl Extractor<'_> {
     }
 
     /// Does this call park the thread rather than yield? Node's `*Sync`
-    /// family is named after the problem. `sleep` needs its QUALIFIER
+    /// family is named after the problem — but only the family, read
+    /// off [`BLOCKING_SYNC`], because the SUFFIX is not the family. `sleep` needs its QUALIFIER
     /// read: `time.sleep` and `std::thread::sleep` park the thread,
     /// while `asyncio.sleep`, `tokio::time::sleep` and the promise
     /// `sleep` helper every JS codebase carries are the CORRECT pattern
@@ -1548,7 +1556,7 @@ impl Extractor<'_> {
         let Some(last) = path.rsplit(['.', ':']).find(|s| !s.is_empty()) else {
             return false;
         };
-        if last.len() > 4 && last.ends_with("Sync") {
+        if BLOCKING_SYNC.contains(&last) {
             return true;
         }
         // tokio's own naming: blocking_recv/blocking_send/blocking_lock
@@ -3005,6 +3013,91 @@ fn share_state(units: &[UnitFacts], callees: &[Vec<Box<str>>], a: usize, b: usiz
 /// Does this literal OPEN an SQL statement? Anchored on purpose: a
 /// log line mentioning "select" is prose, and only a string that
 /// begins as a statement is one.
+/// Node's documented synchronous API, spelled out. A trailing `Sync`
+/// is not a family: `Sync` is also an ordinary domain noun (vscode's
+/// entire user-data-SYNC feature writes performSync, triggerSync,
+/// getKeysForSync, onDidFinishSync) and the conventional suffix for a
+/// pure-CPU variant of a user API (summarizeDocumentSync,
+/// computeDiffSync, mergeObjectSync). Reading the suffix cost 48 of
+/// this metric's 137 gold false positives against 3 true ones — and
+/// eight of the 48 were AWAITED, which alone proves they yield.
+///
+/// The lesson `parks_the_thread` already writes down for `sleep`: the
+/// qualifier decides, and where there is no qualifier the name must be
+/// one the platform documents.
+const BLOCKING_SYNC: &[&str] = &[
+    // fs
+    "accessSync",
+    "appendFileSync",
+    "chmodSync",
+    "chownSync",
+    "closeSync",
+    "copyFileSync",
+    "cpSync",
+    "existsSync",
+    "fchmodSync",
+    "fchownSync",
+    "fdatasyncSync",
+    "fstatSync",
+    "fsyncSync",
+    "ftruncateSync",
+    "futimesSync",
+    "globSync",
+    "lchmodSync",
+    "lchownSync",
+    "linkSync",
+    "lstatSync",
+    "lutimesSync",
+    "mkdirSync",
+    "mkdtempSync",
+    "openSync",
+    "opendirSync",
+    "readFileSync",
+    "readSync",
+    "readdirSync",
+    "readlinkSync",
+    "readvSync",
+    "realpathSync",
+    "renameSync",
+    "rmSync",
+    "rmdirSync",
+    "statSync",
+    "statfsSync",
+    "symlinkSync",
+    "truncateSync",
+    "unlinkSync",
+    "utimesSync",
+    "writeFileSync",
+    "writeSync",
+    "writevSync",
+    // child_process
+    "execFileSync",
+    "execSync",
+    "spawnSync",
+    // zlib
+    "brotliCompressSync",
+    "brotliDecompressSync",
+    "deflateRawSync",
+    "deflateSync",
+    "gunzipSync",
+    "gzipSync",
+    "inflateRawSync",
+    "inflateSync",
+    "unzipSync",
+    // crypto
+    "checkPrimeSync",
+    "generateKeyPairSync",
+    "generateKeySync",
+    "generatePrimeSync",
+    "hkdfSync",
+    "randomFillSync",
+    "scryptSync",
+    // Electron's modal dialogs, which block the main process
+    "showMessageBoxSync",
+    "showOpenDialogSync",
+    "showSaveDialogSync",
+];
+
 /// Does this argument name a shell interpreter? A path is allowed —
 /// `/bin/sh` and `/usr/bin/env bash` are how a script names one — and
 /// the quotes come off first, because every language spells the name as

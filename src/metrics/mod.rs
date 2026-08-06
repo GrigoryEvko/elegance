@@ -2604,6 +2604,63 @@ mod tests {
     }
 
     #[test]
+    fn only_the_documented_sync_family_parks_a_thread() {
+        // The suffix is not the family. `Sync` is an ordinary domain
+        // noun — vscode's whole user-data-SYNC feature — and the
+        // conventional name for a pure-CPU variant of a user API.
+        // Reading it cost 48 of this metric's 137 gold false positives
+        // against 3 true ones.
+        let park = |body: &str| {
+            blocking(
+                Lang::TypeScript,
+                "a.ts",
+                &format!("export async function h(p: string) {{\n  return {body};\n}}\n"),
+            )
+        };
+        for real in [
+            "fs.readFileSync(p)",
+            "fs.existsSync(p)",
+            "mkdirSync(p)",
+            "execSync(p)",
+            "spawnSync(p)",
+            "gzipSync(p)",
+            "showMessageBoxSync(p)",
+        ] {
+            assert_eq!(park(real), 1, "{real}");
+        }
+        for domain in [
+            "this.performSync()",
+            "triggerSync(p)",
+            "getKeysForSync(p)",
+            "onDidFinishSync(p)",
+            "computeDiffSync(p)",
+            "summarizeDocumentSync(p)",
+            "mergeObjectSync(p)",
+        ] {
+            assert_eq!(park(domain), 0, "{domain} is a domain noun, not an API");
+        }
+        // AWAITING PROVES NOTHING once the table decides. A synchronous
+        // function returns a value, not a promise, so awaiting it wraps
+        // an answer already computed on this thread — the suggested
+        // `ctx.awaited` guard silenced both of these.
+        assert_eq!(
+            park("await fs.readFileSync(p)"),
+            1,
+            "awaiting a synchronous read does not make it yield"
+        );
+        assert_eq!(
+            park("await this.delegate.getDiffScrollSync()"),
+            0,
+            "and a domain noun is still not an API"
+        );
+        assert_eq!(
+            park("await fs.promises.readFile(p)"),
+            0,
+            "the remedy stays silent"
+        );
+    }
+
+    #[test]
     fn sync_io_is_judged_by_its_qualifier_never_its_receiver() {
         // The sync-HTTP ecosystems, by qualified spelling. A client
         // held in a VARIABLE is never judged: no name decides whether

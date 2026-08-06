@@ -190,6 +190,7 @@ The rung decides what a finding can *do*:
 | `swallowed` | a handler that silences the error entirely |
 | `built query` | SQL assembled by interpolation |
 | `shelled out` | a value spliced into a command a shell will re-parse; a `-c` counts only where a shell name introduces it |
+| `blocking async` | a call that parks the thread inside an `async` unit — a qualified `sleep`, sync HTTP, `std::fs`, or a name from Node's documented sync API; a trailing `Sync` alone is not one |
 | `conditional hook` | a React hook reached through a branch |
 
 **`built query`** is judged by where the hole lands — a comparison slot,
