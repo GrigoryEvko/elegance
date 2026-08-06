@@ -1063,6 +1063,11 @@ const SHOW_SHAPE: usize = 4;
 /// from unrelated metrics can be compared. The rung still picks the
 /// SECTION — sorting by distance across rungs floats a 3x `abbreviated`
 /// above a 34x `live span` purely because token hygiene is rung 0.
+///
+/// One entry is one BODY, not one finding: the body-shape metrics move
+/// together, so a row per metric named a different function five times
+/// for one fact and left the functions breaking six budgets each
+/// unnamed.
 pub fn render(agg: &mut Agg, ink: ink::Ink) -> String {
     let trim = shared_prefix(agg);
     let mut out = headline(agg);
@@ -1103,63 +1108,168 @@ fn shared_prefix(agg: &Agg) -> usize {
 /// as `wildcard match3>1`.
 const NAME_COL: usize = 15;
 
-/// One line per finding: distance, metric, the values that produced it,
-/// and where. `4697x` rather than `4697.4x` — a tenth of a multiple has
-/// never changed anyone's mind about which function to open.
-fn finding_line(o: &Offender, m: usize, trim: usize, tint: (ink::Ink, &str)) -> String {
+/// Which body a finding is about: file, line, and the unit's name. A
+/// file-level finding has an empty name, so those group per file.
+type Body<'a> = (&'a str, u32, &'a str);
+
+/// A metric and the finding it produced there.
+type Finding<'a> = (usize, &'a Offender);
+
+/// Every rankable finding one body carries, as one entry.
+///
+/// The body-shape metrics state ONE fact between them, and the tool
+/// already knows it — `aligned_tensions` says so in as many words and
+/// collapses them for rung 7. Measured per unit on this stage's
+/// reference tree: P(cognitive | cyclomatic) 93%, P(live span | length)
+/// 96%, P(loop depth | depth) 93%. So a list capped at one row per
+/// metric spent its rows restating one fact about five bodies: 646
+/// findings sat on 391 units there, and 94 of those units carried 349 of
+/// them.
+struct Carried<'a> {
+    /// Any of the findings — they share path, line and name. Kept for
+    /// the location, which is what the entry is about.
+    at: &'a Offender,
+    /// Metric index and its finding, furthest out first.
+    findings: Vec<Finding<'a>>,
+    /// The largest distance among them: what the entry is ranked by.
+    ///
+    /// Ranking by the COUNT instead — one edit clearing six budgets
+    /// before one clearing four — was measured on the reference tree and
+    /// rejected. It put a body 2x past on five budgets above the body
+    /// 13x past on four, and dropped the furthest-out body in the tree
+    /// to tenth. Breadth is worth showing and is; it is not worth
+    /// ranking by.
+    worst: f32,
+}
+
+/// Metric names and values one entry lists before the line stops being
+/// read. A WIDTH rather than a count: `depth 5>3` and `magic numbers
+/// 101>11` are not the same size, so a fixed count of four printed a
+/// 41-column line beside a 96-column one.
+const CARRIED_WIDTH: usize = 74;
+
+/// Width of the "how many budgets" column, sized for `12 suspicions`.
+const CARRIED_COL: usize = 13;
+
+/// Two lines per body: how far out it is and how many budgets say so,
+/// then every one of them. `4697x` rather than `4697.4x` — a tenth of a
+/// multiple has never changed anyone's mind about which function to
+/// open.
+fn carried_lines(g: &Carried, noun: &str, trim: usize, tint: (ink::Ink, &str)) -> String {
     let (ink, colour) = tint;
-    let def = &METRICS[m];
-    let over = o.over(m);
-    let sev = o.severity().unwrap_or_default().round() as u64;
-    let unit = match o.name.is_empty() {
+    let at = g.at;
+    let sev = g.worst.round() as u64;
+    let budgets = match g.findings.len() {
+        1 => format!("1 {noun}"),
+        n => format!("{n} {noun}s"),
+    };
+    let unit = match at.name.is_empty() {
         true => String::new(),
-        false => format!("  {}", o.name),
+        false => format!("  {}", at.name),
     };
     format!(
-        "  {colour}{sev:>5}x{}  {:<NAME_COL$}{over:<11}{}{}:{}{}{unit}",
+        // Indented to the budget column, so the metric list reads as a
+        // continuation of the line that counted it rather than as
+        // another finding.
+        "  {colour}{sev:>5}x{}  {budgets:<CARRIED_COL$}{}{}:{}{}{unit}\n          {}{}{}",
         ink.off(),
-        def.name,
         ink.faint(),
-        &o.path[trim.min(o.path.len())..],
-        o.line,
+        &at.path[trim.min(at.path.len())..],
+        at.line,
+        ink.off(),
+        ink.faint(),
+        carried_metrics(g),
         ink.off(),
     )
 }
 
-/// At most one finding per metric and one per file. Without both caps a
-/// single pathological file spends the whole list: one generated lookup
-/// table carrying 51,671 magic numbers took two of six slots and said the
-/// same thing twice.
-fn ranked(agg: &Agg, rungs: std::ops::RangeInclusive<u8>, k: usize) -> Vec<(usize, &Offender)> {
-    let mut all: Vec<(usize, &Offender)> = agg
-        .offenders
-        .iter()
-        .enumerate()
-        .filter(|(m, _)| rungs.contains(&METRICS[*m].rung))
-        .flat_map(|(m, os)| os.iter().map(move |o| (m, o)))
-        .filter(|(_, o)| o.severity().is_some())
-        .collect();
-    let distance = |(_, o): &(usize, &Offender)| o.severity().unwrap_or_default();
-    let at = |(_, o): &(usize, &Offender)| (o.path.clone(), o.line);
-    all.sort_by(|a, b| {
-        distance(b)
-            .total_cmp(&distance(a))
-            .then_with(|| at(a).cmp(&at(b)))
-    });
-    let mut seen_metric = [false; N];
-    let mut seen_file: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for (m, o) in all {
-        if seen_metric[m] || !seen_file.insert(&o.path) {
-            continue;
-        }
-        seen_metric[m] = true;
-        out.push((m, o));
-        if out.len() == k {
+/// Every budget the body broke, worst first, until the line is as wide
+/// as it may be — then a count of what did not fit, so nothing the entry
+/// stands for goes unmentioned.
+fn carried_metrics(g: &Carried) -> String {
+    let mut shown = String::new();
+    for (i, (m, o)) in g.findings.iter().enumerate() {
+        let one = format!("{} {}", METRICS[*m].name, o.over(*m));
+        if !shown.is_empty() && shown.len() + 2 + one.len() > CARRIED_WIDTH {
+            let _ = write!(shown, "  +{} more", g.findings.len() - i);
             break;
         }
+        if !shown.is_empty() {
+            shown.push_str("  ");
+        }
+        shown.push_str(&one);
     }
-    out
+    shown
+}
+
+/// One entry per body, worst first, at most one body per file.
+///
+/// The per-file cap survives the regrouping for the reason it was added:
+/// one generated lookup table carrying 51,671 magic numbers took two of
+/// six slots and said the same thing twice. The per-METRIC cap does not,
+/// because it was the thing forcing five rows to name five bodies for
+/// one fact.
+///
+/// A finding a zero budget leaves unrankable stays out, as it always
+/// has: "121 times a budget of none" is a count wearing a ratio's
+/// clothes, and the policy section names those per metric. So the count
+/// on an entry is of gates that have a distance, not of every gate the
+/// body trips.
+fn ranked_units(agg: &Agg, rungs: std::ops::RangeInclusive<u8>, k: usize) -> Vec<Carried<'_>> {
+    let mut by_body: HashMap<Body, Vec<Finding>> = HashMap::new();
+    for (m, os) in agg.offenders.iter().enumerate() {
+        if !rungs.contains(&METRICS[m].rung) {
+            continue;
+        }
+        for o in os.iter().filter(|o| o.severity().is_some()) {
+            by_body
+                .entry((&o.path, o.line, &o.name))
+                .or_default()
+                .push((m, o));
+        }
+    }
+    let distance = |(_, o): &Finding| o.severity().unwrap_or_default();
+    let mut bodies: Vec<Carried> = by_body
+        .into_values()
+        .map(|mut findings| {
+            findings.sort_by(|a, b| {
+                distance(b)
+                    .total_cmp(&distance(a))
+                    .then_with(|| METRICS[a.0].name.cmp(METRICS[b.0].name))
+            });
+            Carried {
+                at: findings[0].1,
+                worst: distance(&findings[0]),
+                findings,
+            }
+        })
+        .collect();
+    bodies.sort_by(|a, b| {
+        b.worst
+            .total_cmp(&a.worst)
+            .then_with(|| b.findings.len().cmp(&a.findings.len()))
+            .then_with(|| (&a.at.path, a.at.line).cmp(&(&b.at.path, b.at.line)))
+    });
+    let mut seen_file: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    bodies.retain(|g| seen_file.insert(&g.at.path));
+    bodies.truncate(k);
+    bodies
+}
+
+/// Distinct bodies carrying a rankable finding at these rungs. Read off
+/// the same offenders the list ranks, so the gloss and the entries can
+/// never disagree about how much is hidden below the fold.
+fn bodies_at(agg: &Agg, rungs: std::ops::RangeInclusive<u8>) -> usize {
+    let mut seen: std::collections::HashSet<Body> = std::collections::HashSet::new();
+    for (m, os) in agg.offenders.iter().enumerate() {
+        if !rungs.contains(&METRICS[m].rung) {
+            continue;
+        }
+        for o in os.iter().filter(|o| o.severity().is_some()) {
+            seen.insert((&o.path, o.line, &o.name));
+        }
+    }
+    seen.len()
 }
 
 /// What a rung's findings add up to. EVERY violation at the rung, not
@@ -1209,11 +1319,16 @@ fn render_ranked(agg: &mut Agg, ink: ink::Ink, trim: usize, out: &mut String) {
         section(ink, "gates", "clean — nothing here fails a build", out);
     } else {
         let gloss = format!(
-            "{gates} over budget. Old sludge is tolerated until touched, new sludge is blocked."
+            "{gates} over budget across {} bodies. Old sludge is tolerated until touched, new sludge is blocked.",
+            bodies_at(agg, GATES)
         );
         section(ink, "gates", &gloss, out);
-        for (m, o) in ranked(agg, GATES, SHOW_RANKED) {
-            let _ = writeln!(out, "{}", finding_line(o, m, trim, (ink, ink.gate())));
+        for g in ranked_units(agg, GATES, SHOW_RANKED) {
+            let _ = writeln!(
+                out,
+                "{}",
+                carried_lines(&g, "gate", trim, (ink, ink.gate()))
+            );
         }
         cta(ink, "see the rest, worst first", "elegance --full", out);
     }
@@ -1221,17 +1336,23 @@ fn render_ranked(agg: &mut Agg, ink: ink::Ink, trim: usize, out: &mut String) {
     if susp == 0 {
         return;
     }
-    let gloss =
-        format!("{susp} over budget; is the design wrong, or does the metric not fit here?");
+    let gloss = format!(
+        "{susp} over budget across {} bodies; is the design wrong, or does the metric not fit here?",
+        bodies_at(agg, SUSPICIONS)
+    );
     section(ink, "suspicions", &gloss, out);
-    let listed = ranked(agg, SUSPICIONS, SHOW_POLICY);
+    let listed = ranked_units(agg, SUSPICIONS, SHOW_POLICY);
     // Point the command at something real. A reader who has to invent the
     // argument has been handed a manual page, not a next step.
     let example = listed
         .first()
-        .map(|(_, o)| format!("{}:{}", &o.path[trim.min(o.path.len())..], o.line));
-    for (m, o) in &listed {
-        let _ = writeln!(out, "{}", finding_line(o, *m, trim, (ink, ink.suspicion())));
+        .map(|g| format!("{}:{}", &g.at.path[trim.min(g.at.path.len())..], g.at.line));
+    for g in &listed {
+        let _ = writeln!(
+            out,
+            "{}",
+            carried_lines(g, "suspicion", trim, (ink, ink.suspicion()))
+        );
     }
     if let Some(at) = example {
         let cmd = format!("elegance --explain {at}");
@@ -3115,6 +3236,72 @@ mod tests {
             .expect("metric exists");
         assert_eq!(o.over(m), "0%<2%");
         assert!(o.severity().is_some_and(|s| s > 1.0), "{:?}", o.severity());
+    }
+
+    /// A finding against a ceiling, for exercising the ranked list
+    /// without depending on which budget a language happens to carry.
+    fn over((path, line, name): Body, value: f32, hi: f32) -> Offender {
+        Offender {
+            value,
+            path: path.to_string(),
+            line,
+            name: name.to_string(),
+            band: (None, Some(hi)),
+        }
+    }
+
+    fn metric(name: &str) -> usize {
+        METRICS
+            .iter()
+            .position(|d| d.name == name)
+            .unwrap_or_else(|| panic!("no metric named {name}"))
+    }
+
+    /// The body-shape metrics state one fact between them, so a list
+    /// capped at one row per metric spent its five rows naming five
+    /// bodies for that one fact. Three claims, each of which the
+    /// grouping has to keep true: a body appears ONCE however many
+    /// metrics it trips, the entry names all of them, and the ranking
+    /// is still by distance — a body 2x past on five budgets is not
+    /// more urgent than one 13x past on four, which is what ranking by
+    /// the count produced on the reference tree.
+    #[test]
+    fn one_body_is_one_entry_naming_every_budget_it_broke() {
+        let mut agg = Agg::complete();
+        for (name, value, hi) in [
+            ("cognitive", 55.0, 18.0),
+            ("cyclomatic", 30.0, 12.0),
+            ("depth", 5.0, 3.0),
+            ("length", 287.0, 76.0),
+            ("live span", 257.0, 48.0),
+        ] {
+            agg.offenders[metric(name)].push(over(("wide.py", 399, "build_cell"), value, hi));
+        }
+        // A count against a budget of none: the policy section's, not
+        // this list's, however many rankable findings share the body.
+        agg.offenders[metric("abbreviated")].push(over(("wide.py", 399, "build_cell"), 4.0, 0.0));
+        agg.offenders[metric("live span")].push(over(("deep.py", 43, "main"), 626.0, 48.0));
+
+        let bodies = ranked_units(&agg, GATES, SHOW_RANKED);
+        assert_eq!(bodies.len(), 2, "one entry per body");
+        assert_eq!(bodies[0].at.name, "main", "13x outranks 5x on five budgets");
+        assert_eq!(bodies[1].findings.len(), 5, "the sixth has no distance");
+
+        let block = carried_lines(&bodies[1], "gate", 0, (ink::Ink::none(), ""));
+        assert_eq!(block.matches("wide.py").count(), 1, "named once:\n{block}");
+        assert!(block.contains("5 gates"), "how many budgets:\n{block}");
+        assert!(!block.contains("abbreviated"), "policy count:\n{block}");
+        // Named, or counted in the tail — nothing the entry stands for
+        // may go unmentioned, whatever the width allows.
+        let named = ["cognitive", "cyclomatic", "depth", "length", "live span"]
+            .iter()
+            .filter(|name| block.contains(*name))
+            .count();
+        assert!(named >= 4, "too few named:\n{block}");
+        assert!(
+            named == 5 || block.contains(&format!("+{} more", 5 - named)),
+            "unnamed and uncounted:\n{block}"
+        );
     }
 
     /// A zero budget makes the "ratio" a bare count, so those findings are

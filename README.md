@@ -53,7 +53,7 @@ See [plugins/elegance-nudge](plugins/elegance-nudge/README.md).
 
 | Command | |
 | :--- | :--- |
-| `elegance [paths...]` | scan; findings ranked by how far past budget they sit |
+| `elegance [paths...]` | scan; bodies ranked by how far past budget they sit |
 | `elegance --full [--top N]` | every section and every per-metric offender list |
 | `elegance --brief [paths...]` | the headline only — what kind of trouble, not which unit |
 | `elegance --json [paths...]` | versioned machine output (schema 2) |
@@ -77,6 +77,27 @@ See [plugins/elegance-nudge](plugins/elegance-nudge/README.md).
 | `--deps` | look inside the dependencies you did not write |
 | `--helm` | values-overlay drift and credentials in YAML |
 | `--render` | render each environment, measure what ships |
+
+### One entry, one body
+
+The ranked sections list **bodies, not findings**. The function-shape
+metrics move together — on a mixed reference tree, 93% of the units over
+`cyclomatic` are also over `cognitive`, and 96% of those over `length`
+are also over `live span` — so a row per metric named five different
+functions for one fact and left the functions breaking six budgets each
+unnamed. An entry now names the body once, says how far out it is and
+how many budgets say so, and lists them:
+
+```
+   13x  4 gates      spice/tile/gen_die_behavioral.py:43  main
+        live span 626>48  length 636>76  cognitive 57>18  cyclomatic 22>12
+```
+
+Ranked by distance, still: ranking by the count instead was measured and
+put a body 2x past on five budgets above one 13x past on four. A finding
+against a budget of zero has no distance and stays in the `policy`
+section, so the count is of budgets that can be exceeded, not of every
+rule the body trips.
 
 ### Machine output
 
