@@ -2279,21 +2279,35 @@ fn render_architecture(agg: &mut Agg, out: &mut String) {
             .collect();
         let _ = writeln!(out, "  load-bearing: {}", worst.join("  "));
     }
-    if arch.orphan_count > 0 {
-        let more = arch.orphan_count as usize - arch.orphans.len();
+    render_orphans(&arch, out);
+    render_interfaces(&arch.interfaces, out);
+}
+
+/// Modules nothing depends on — over the population that could have
+/// had a dependent, and saying how many could not.
+fn render_orphans(arch: &crate::graph::metrics::Architecture, out: &mut String) {
+    if arch.judged_modules < arch.modules {
         let _ = writeln!(
             out,
-            "  orphans ({}): {}{}",
-            arch.orphan_count,
-            arch.orphans.join(", "),
-            if more > 0 {
-                format!(" ... and {more} more")
-            } else {
-                String::new()
-            },
+            "  {} translation units are not judged here: nothing #includes a source file",
+            arch.modules - arch.judged_modules,
         );
     }
-    render_interfaces(&arch.interfaces, out);
+    if arch.orphan_count == 0 {
+        return;
+    }
+    let more = arch.orphan_count as usize - arch.orphans.len();
+    let tail = match more {
+        0 => String::new(),
+        n => format!(" ... and {n} more"),
+    };
+    let _ = writeln!(
+        out,
+        "  orphans ({} of {}): {}{tail}",
+        arch.orphan_count,
+        arch.judged_modules,
+        arch.orphans.join(", "),
+    );
 }
 
 /// The tail-summarized distribution of every metric this run measured.

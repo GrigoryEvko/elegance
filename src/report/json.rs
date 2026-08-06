@@ -124,6 +124,10 @@ struct ArchitectureOut {
     depth_p50: u32,
     depth_p90: u32,
     depth_max: u32,
+    /// Denominator for `deletable_pct` and `orphan_count`: `modules`
+    /// less the files whose fan-in the language fixes at zero, which
+    /// today means C-family translation units.
+    judged_modules: u32,
     deletable_pct: f64,
     load_bearing: Vec<LoadBearing>,
     orphan_count: u32,
@@ -270,6 +274,7 @@ fn architecture_out(a: crate::graph::metrics::Architecture) -> ArchitectureOut {
         depth_p50: a.depth_p50,
         depth_p90: a.depth_p90,
         depth_max: a.depth_max,
+        judged_modules: a.judged_modules,
         deletable_pct: a.deletable_pct,
         load_bearing: a
             .load_bearing

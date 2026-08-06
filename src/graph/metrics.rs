@@ -34,7 +34,12 @@ pub struct Architecture {
     pub depth_p50: u32,
     pub depth_p90: u32,
     pub depth_max: u32,
-    /// Share of modules nothing depends on (safe to delete outright).
+    /// Modules the two dependency questions below are asked of:
+    /// `modules` less the files whose fan-in the language fixes at
+    /// zero. See `Lang::is_sink`.
+    pub judged_modules: u32,
+    /// Share of JUDGED modules nothing depends on (safe to delete
+    /// outright).
     pub deletable_pct: f64,
     /// Modules with the widest blast radius: (path, transitive dependents).
     pub load_bearing: Vec<(String, u32)>,
@@ -101,9 +106,10 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
     let q = |p: f64| depth_at(&module_depths, p);
 
     let blasts = blast_radii(&sccs, &comp_succ, n);
-    let deletable = blasts.iter().filter(|&&b| b == 0).count();
+    let judged = judgeable(&files);
+    let (judged_modules, deletable_pct) = deletability(&blasts, &judged);
     let load = load_bearing(&file_labels, &blasts);
-    let (orphan_count, orphans) = find_orphans(&files, &fan_in);
+    let (orphan_count, orphans) = find_orphans(&files, &fan_in, &judged);
     let interfaces = interfaces(&files, &targets, &file_labels, mentions);
 
     Some(Architecture {
@@ -119,7 +125,8 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
         depth_p50: q(0.50),
         depth_p90: q(0.90),
         depth_max: *module_depths.last().expect("n >= 2"),
-        deletable_pct: 100.0 * deletable as f64 / n as f64,
+        judged_modules,
+        deletable_pct,
         load_bearing: load,
         orphan_count,
         orphans,
@@ -545,9 +552,32 @@ fn leak_names(imp: &crate::facts::ImportFact, from: &str, to: &str, leaks: &mut 
     }
 }
 
+/// One flag per file: can this module be asked whether anything depends
+/// on it? A translation unit is a sink by construction, so its answer
+/// is settled before the code is read. See `Lang::is_sink`.
+fn judgeable(files: &[&GraphFacts]) -> Vec<bool> {
+    files.iter().map(|f| !f.lang.is_sink(&f.path)).collect()
+}
+
+/// The judged population, and the share of it that nothing transitively
+/// depends on.
+fn deletability(blasts: &[u32], judged: &[bool]) -> (u32, f64) {
+    let mut population = 0;
+    let mut deletable = 0;
+    for (blast, &counts) in blasts.iter().zip(judged) {
+        population += counts as u32;
+        deletable += (counts && *blast == 0) as u32;
+    }
+    match population {
+        0 => (0, 0.0),
+        n => (n, 100.0 * deletable as f64 / n as f64),
+    }
+}
+
 /// Modules with no importers and no entry-point name: count plus a
-/// capped, sorted sample.
-fn find_orphans(files: &[&GraphFacts], fan_in: &[u32]) -> (u32, Vec<String>) {
+/// capped, sorted sample. `judged` excludes the files whose fan-in the
+/// language fixes at zero.
+fn find_orphans(files: &[&GraphFacts], fan_in: &[u32], judged: &[bool]) -> (u32, Vec<String>) {
     let entryish = |f: &GraphFacts| {
         f.path
             .file_stem()
@@ -557,8 +587,9 @@ fn find_orphans(files: &[&GraphFacts], fan_in: &[u32]) -> (u32, Vec<String>) {
     let mut orphans: Vec<String> = files
         .iter()
         .zip(fan_in)
-        .filter(|(f, fi)| **fi == 0 && !entryish(f))
-        .map(|(f, _)| f.path.display().to_string())
+        .zip(judged)
+        .filter(|((f, fi), j)| **j && **fi == 0 && !entryish(f))
+        .map(|((f, _), _)| f.path.display().to_string())
         .collect();
     orphans.sort_unstable();
     let count = orphans.len() as u32;
@@ -719,6 +750,28 @@ mod tests {
         let arch = arch(&files);
         assert_eq!(arch.dir_cycle_mass_pct, 100.0 * 2.0 / 3.0);
         assert_eq!(arch.largest_dir_cycle, ["app/core", "app/ui"]);
+    }
+
+    #[test]
+    fn a_translation_unit_is_not_asked_whether_anything_depends_on_it() {
+        // kakoune's src/buffer.hh is included by 13 files and buffer.cc
+        // by none, because nothing ever includes a .cc. They are one
+        // module and the metric split it, calling half of it dead — 57
+        // of kakoune's 58 translation units are that exact shape, and
+        // 3437 of 3883 across the three C-family corpora.
+        //
+        // The .cc still supplies the edge that makes the .hh live.
+        let files = [
+            fixture(Lang::Cpp, "src/buffer.cc", &["buffer.hh"]),
+            fixture(Lang::Cpp, "src/buffer.hh", &[]),
+            fixture(Lang::Cpp, "src/unused.hh", &[]),
+        ];
+        let arch = arch(&files);
+        assert_eq!(arch.modules, 3);
+        assert_eq!(arch.judged_modules, 2, "the .cc is a sink by construction");
+        assert_eq!(arch.orphan_count, 1);
+        assert_eq!(arch.orphans, ["src/unused.hh"]);
+        assert_eq!(arch.deletable_pct, 50.0, "one of two headers");
     }
 
     #[test]

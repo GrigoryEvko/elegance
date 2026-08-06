@@ -324,6 +324,28 @@ impl Lang {
         }
     }
 
+    /// Is this file a SINK in the dependency graph by construction?
+    ///
+    /// Nothing `#include`s a `.c`. A translation unit's fan-in is zero
+    /// in every C-family repository ever written — kakoune 57 of 58,
+    /// curl 377 of 377, musl 1566 of 1608 — so "nothing depends on
+    /// this" states a fact about the language rather than about the
+    /// code. Which translation unit needs which is settled by the
+    /// LINK graph, and no `#include` expresses it.
+    ///
+    /// So they are left out of the population the dependency metrics
+    /// judge, and the reported rate becomes the header rate, which is
+    /// the one that carries information. Their own includes still
+    /// count: kakoune's buffer.cc is what gives buffer.hh its 13
+    /// importers.
+    pub fn is_sink(self, path: &Path) -> bool {
+        matches!(self, Lang::C | Lang::Cpp | Lang::Cuda)
+            && path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e, "c" | "cc" | "cpp" | "cxx" | "c++" | "cu"))
+    }
+
     pub fn name(self) -> &'static str {
         DESCS[self as usize].name
     }
