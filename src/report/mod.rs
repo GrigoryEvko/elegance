@@ -1406,16 +1406,11 @@ fn carried_metrics(g: &Carried) -> String {
 /// body trips.
 fn ranked_units(agg: &Agg, rungs: std::ops::RangeInclusive<u8>, k: usize) -> Vec<Carried<'_>> {
     let mut by_body: HashMap<Body, Vec<Finding>> = HashMap::new();
-    for (m, os) in agg.offenders.iter().enumerate() {
-        if !rungs.contains(&METRICS[m].rung) {
-            continue;
-        }
-        for o in os.iter().filter(|o| o.severity().is_some()) {
-            by_body
-                .entry((&o.path, o.line, &o.name))
-                .or_default()
-                .push((m, o));
-        }
+    for (m, o) in rankable(agg, rungs) {
+        by_body
+            .entry((&o.path, o.line, &o.name))
+            .or_default()
+            .push((m, o));
     }
     let distance = |(_, o): &Finding| o.severity().unwrap_or_default();
     let mut bodies: Vec<Carried> = by_body
@@ -1460,16 +1455,22 @@ fn ranked_units(agg: &Agg, rungs: std::ops::RangeInclusive<u8>, k: usize) -> Vec
 /// the same offenders the list ranks, so the gloss and the entries can
 /// never disagree about how much is hidden below the fold.
 fn bodies_at(agg: &Agg, rungs: std::ops::RangeInclusive<u8>) -> usize {
-    let mut seen: std::collections::HashSet<Body> = std::collections::HashSet::new();
-    for (m, os) in agg.offenders.iter().enumerate() {
-        if !rungs.contains(&METRICS[m].rung) {
-            continue;
-        }
-        for o in os.iter().filter(|o| o.severity().is_some()) {
-            seen.insert((&o.path, o.line, &o.name));
-        }
-    }
+    let places = rankable(agg, rungs).map(|(_, o)| (o.path.as_str(), o.line, o.name.as_str()));
+    let seen: std::collections::HashSet<Body> = places.collect();
     seen.len()
+}
+
+/// Every finding at these rungs that has a distance to be ranked by.
+fn rankable(
+    agg: &Agg,
+    rungs: std::ops::RangeInclusive<u8>,
+) -> impl Iterator<Item = Finding<'_>> + '_ {
+    agg.offenders
+        .iter()
+        .enumerate()
+        .filter(move |(m, _)| rungs.contains(&METRICS[*m].rung))
+        .flat_map(|(m, os)| os.iter().map(move |o| (m, o)))
+        .filter(|(_, o)| o.severity().is_some())
 }
 
 /// What a rung's findings add up to. EVERY violation at the rung, not
