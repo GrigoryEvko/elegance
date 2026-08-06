@@ -228,6 +228,22 @@ pub(super) fn return_arity(node: Node, src: &[u8]) -> u16 {
     }
 }
 
+/// Nodes that hold specifiers rather than being one.
+const CLAUSES: &[&str] = &["import_clause", "named_imports", "export_clause"];
+
+/// The node holding the local name a specifier binds, for each of the
+/// spellings that bind one.
+fn bound_name(child: Node) -> Option<Node> {
+    match child.kind() {
+        "identifier" => Some(child),
+        "namespace_import" | "namespace_export" => child.named_child(0),
+        "import_specifier" | "export_specifier" => child
+            .child_by_field_name("alias")
+            .or_else(|| child.child_by_field_name("name")),
+        _ => None,
+    }
+}
+
 /// `import d, { a, b as c }, * as ns from "./x"` — one edge, every
 /// bound local collected. A re-export reads the same way: `export { a }
 /// from "./x"` is the barrel depending on ./x. Without a source there
@@ -242,23 +258,10 @@ pub(super) fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     while let Some(n) = stack.pop() {
         let mut cursor = n.walk();
         for child in n.named_children(&mut cursor) {
-            match child.kind() {
-                "import_clause" | "named_imports" | "export_clause" => stack.push(child),
-                "identifier" => names.push(text(child).into()),
-                "namespace_import" | "namespace_export" => {
-                    if let Some(id) = child.named_child(0) {
-                        names.push(text(id).into());
-                    }
-                }
-                "import_specifier" | "export_specifier" => {
-                    let bound = child
-                        .child_by_field_name("alias")
-                        .or_else(|| child.child_by_field_name("name"));
-                    if let Some(b) = bound {
-                        names.push(text(b).into());
-                    }
-                }
-                _ => {}
+            if CLAUSES.contains(&child.kind()) {
+                stack.push(child);
+            } else if let Some(id) = bound_name(child) {
+                names.push(text(id).into());
             }
         }
     }

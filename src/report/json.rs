@@ -339,6 +339,40 @@ fn clone_section(agg: &mut Agg) -> (Clones, super::Duplication) {
 
 /// Per-metric distribution rows, in registry order, skipping metrics
 /// this run never measured.
+/// Near-duplicate pairs, with the overlap stated as a percentage.
+fn near_out(agg: &mut Agg) -> NearOut {
+    let near = crate::near::pairs(agg.prints.read(), usize::MAX);
+    NearOut {
+        pairs: near
+            .pairs
+            .into_iter()
+            .map(|p| NearPairOut {
+                a: p.a,
+                b: p.b,
+                overlap_pct: 100.0 * p.overlap,
+            })
+            .collect(),
+        suppressed_cores: near.suppressed_cores,
+        widest_core: near.widest_core,
+    }
+}
+
+/// Step-down reading order, one row per language.
+fn narrative_out(agg: &mut Agg) -> Vec<NarrativeOut> {
+    super::narrative_rows(agg)
+        .into_iter()
+        .map(
+            |(lang, step_down_pct, refs, public_first_pct, pairs)| NarrativeOut {
+                lang,
+                step_down_pct,
+                intra_file_refs: refs,
+                public_first_pct,
+                public_private_pairs: pairs,
+            },
+        )
+        .collect()
+}
+
 fn metric_rows(agg: &mut Agg) -> Vec<Metric> {
     let mut metrics = Vec::new();
     for (m, def) in METRICS.iter().enumerate() {
@@ -442,10 +476,8 @@ fn rates_out(agg: &Agg) -> Vec<RateOut> {
 pub fn render_json(agg: &mut Agg) -> String {
     let (clones, dup) = clone_section(agg);
 
-    // Owns its output; must precede `violations`, which borrows agg.
+    // Path order makes ambiguous resolutions and listings deterministic.
     agg.graph.read_mut().sort_by(|a, b| a.path.cmp(&b.path));
-    let architecture =
-        crate::graph::analyze(agg.graph.read(), agg.mentions.read()).map(architecture_out);
 
     let (clumps, repeated_dispatch, undeclared_shapes) = recurrences_out(agg);
     let untested_complexity = super::select_untested(agg)
@@ -454,32 +486,8 @@ pub fn render_json(agg: &mut Agg) -> String {
         .collect();
     let summary = summary_out(agg, dup);
     let coverage_rates = rates_out(agg);
-    let near = crate::near::pairs(agg.prints.read(), usize::MAX);
-    let near_clones = NearOut {
-        pairs: near
-            .pairs
-            .into_iter()
-            .map(|p| NearPairOut {
-                a: p.a,
-                b: p.b,
-                overlap_pct: 100.0 * p.overlap,
-            })
-            .collect(),
-        suppressed_cores: near.suppressed_cores,
-        widest_core: near.widest_core,
-    };
-    let narrative = super::narrative_rows(agg)
-        .into_iter()
-        .map(
-            |(lang, step_down_pct, refs, public_first_pct, pairs)| NarrativeOut {
-                lang,
-                step_down_pct,
-                intra_file_refs: refs,
-                public_first_pct,
-                public_private_pairs: pairs,
-            },
-        )
-        .collect();
+    let near_clones = near_out(agg);
+    let narrative = narrative_out(agg);
 
     let metrics = metric_rows(agg);
     for heap in agg.offenders.iter_mut() {
@@ -500,6 +508,10 @@ pub fn render_json(agg: &mut Agg) -> String {
 
     let mut low_confidence_files = agg.low_confidence.clone();
     low_confidence_files.sort_unstable();
+
+    // Owns its output, so it borrows nothing past this line.
+    let architecture =
+        crate::graph::analyze(agg.graph.read(), agg.mentions.read()).map(architecture_out);
 
     let report = Report {
         schema_version: SCHEMA_VERSION,
