@@ -100,7 +100,6 @@ pub fn pack() -> Pack {
         // RAII: a File closes when it drops, so there is no guard to omit.
         // Struct literals name a declared type; there is no anonymous shape to catch.
         record_keys: |_, _| None,
-        unguarded_resource: |_, _| false,
         is_async: super::declared_async,
         declares_test,
         names_test: |_, _| false,

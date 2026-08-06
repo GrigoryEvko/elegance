@@ -118,7 +118,6 @@ pub fn pack() -> Pack {
         call_target_fields: &["function"],
         types_declared: true,
         record_keys: |_, _| None,
-        unguarded_resource,
         is_async,
         refine,
         name_node,
@@ -324,55 +323,6 @@ fn loses_context(node: Node, src: &[u8]) -> bool {
         return false;
     };
     super::rethrows_without_cause(body, "throw_statement", bound, src)
-}
-
-/// A disposable created outside `using` has nothing releasing it on the
-/// error path.
-///
-/// Judged on the CONSTRUCTION, because the core consults this hook on
-/// calls; it used to name `local_declaration_statement`, a kind that
-/// never reaches it, so the check was unreachable.
-fn unguarded_resource(node: Node, src: &[u8]) -> bool {
-    if node.kind() != "object_creation_expression" {
-        return false;
-    }
-    const OPENS: &[&str] = &[
-        "FileStream",
-        "StreamReader",
-        "StreamWriter",
-        "SqlConnection",
-        "HttpClient",
-    ];
-    let opens = node
-        .utf8_text(src)
-        .ok()
-        .and_then(|t| t.strip_prefix("new "))
-        .is_some_and(|rest| OPENS.iter().any(|o| rest.starts_with(o)));
-    opens && !guarded_by_using(node)
-}
-
-/// Is this construction inside a `using` — the statement form, the
-/// declaration form, or a `using var` local?
-fn guarded_by_using(node: Node) -> bool {
-    let mut cur = node.parent();
-    while let Some(n) = cur {
-        match n.kind() {
-            "using_statement" => return true,
-            "local_declaration_statement" => return first_token_is_using(n),
-            "block" | "method_declaration" => return false,
-            _ => cur = n.parent(),
-        }
-    }
-    false
-}
-
-/// `using var s = new FileStream(...)` — the keyword is the first
-/// anonymous token of the declaration.
-fn first_token_is_using(decl: Node) -> bool {
-    let mut cursor = decl.walk();
-    decl.children(&mut cursor)
-        .next()
-        .is_some_and(|c| c.kind() == "using")
 }
 
 /// xUnit, NUnit and MSTest all mark a test with an attribute.

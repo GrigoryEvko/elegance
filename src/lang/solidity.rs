@@ -98,7 +98,6 @@ pub fn pack() -> Pack {
         record_keys: |_, _| None,
         // There is no handle to leak: a contract's state is storage and
         // outlives every call into it.
-        unguarded_resource: |_, _| false,
         // Execution is single-threaded and atomic per transaction.
         is_async: |_, _| false,
         refine,

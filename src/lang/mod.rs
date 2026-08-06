@@ -565,11 +565,6 @@ pub struct Pack {
     /// Rust and Go build records through declared types, so their packs
     /// answer None and the metric stays silent rather than wrong.
     record_keys: RecordKeys,
-    /// Does this call acquire a resource with nothing arranging its
-    /// release? Only languages where an explicit scope guard is THE
-    /// idiom answer yes: Rust drops on scope exit and needs no guard,
-    /// and a language without the idiom has no absence to detect.
-    unguarded_resource: fn(Node, &[u8]) -> bool,
     /// Is this definition async? A blocking call inside one stalls the
     /// whole executor, not just this task.
     is_async: fn(Node, &[u8]) -> bool,
@@ -1746,7 +1741,6 @@ let classify items limit =
         "lost context",
         "unwraps",
         "blocking async",
-        "unmanaged",
         "dropped tasks",
         "casts",
         "suppressions",
@@ -1803,11 +1797,6 @@ let classify items limit =
             "suppressions",
             "#[allow] is scoped lint config, not a checker-comment",
         ),
-        (
-            Lang::Rust,
-            "unmanaged",
-            "RAII drops on scope exit; there is no guard to omit",
-        ),
         (Lang::Rust, "kw opacity", "no kwargs"),
         (
             Lang::Rust,
@@ -1820,7 +1809,6 @@ let classify items limit =
             "no Any; the hatch is unsafe, judged as spooky and casts",
         ),
         (Lang::TypeScript, "unwraps", "no panic idiom"),
-        (Lang::TypeScript, "unmanaged", "no scope-guard idiom"),
         (
             Lang::TypeScript,
             "kw opacity",
@@ -1847,11 +1835,6 @@ let classify items limit =
             "suppressions",
             "nolint is linter config, not a checker-comment",
         ),
-        (
-            Lang::Go,
-            "unmanaged",
-            "defer is the idiom; recognizing its absence needs the defer — deferred",
-        ),
         (Lang::Go, "kw opacity", "no kwargs"),
         (Lang::Go, "untyped params", "every parameter typed"),
         (
@@ -1870,7 +1853,6 @@ let classify items limit =
             "no cast syntax; coercion is invisible to the tree",
         ),
         (Lang::JavaScript, "unwraps", "no panic idiom"),
-        (Lang::JavaScript, "unmanaged", "no scope-guard idiom"),
         (Lang::JavaScript, "kw opacity", "no kwargs"),
         (
             Lang::JavaScript,
@@ -1899,11 +1881,6 @@ let classify items limit =
             "suppressions",
             "no checker-comment suppression exists",
         ),
-        (
-            Lang::Zig,
-            "unmanaged",
-            "defer is the idiom — same deferral as Go",
-        ),
         (Lang::Zig, "kw opacity", "no kwargs"),
         (
             Lang::Zig,
@@ -1928,11 +1905,6 @@ let classify items limit =
             Lang::C,
             "suppressions",
             "no checker-comment suppression exists",
-        ),
-        (
-            Lang::C,
-            "unmanaged",
-            "manual everywhere; the absence is universal and the finding would be noise",
         ),
         (Lang::C, "kw opacity", "no kwargs"),
         (Lang::C, "untyped params", "every parameter typed"),
@@ -1999,11 +1971,6 @@ let classify items limit =
             Lang::OCaml,
             "suppressions",
             "no checker-comment suppression exists",
-        ),
-        (
-            Lang::OCaml,
-            "unmanaged",
-            "let-scoped resources release with their binding",
         ),
         (Lang::OCaml, "kw opacity", "no kwargs"),
         (
@@ -2131,11 +2098,6 @@ let classify items limit =
             "suppressions",
             "shellcheck directives are lint config, not a checker-comment",
         ),
-        (
-            Lang::Shell,
-            "unmanaged",
-            "`trap ... EXIT` is the idiom; recognizing its absence needs the trap — deferred",
-        ),
         (Lang::Shell, "blocking async", "no async"),
         (
             Lang::Shell,
@@ -2205,17 +2167,11 @@ let classify items limit =
         ),
         // C++ keeps C's verdicts wherever C++ kept C's semantics, and
         // differs exactly where the language does: exceptions revive
-        // swallowed and broad catch, gtest revives the test family,
-        // and RAII kills unmanaged the way it kills it in Rust.
+        // swallowed and broad catch, and gtest revives the test family.
         (
             Lang::Cpp,
             "lost context",
             "`throw;` rethrows and `throw X(e)` is a constructor call — telling the two apart needs the catch parameter's flow",
-        ),
-        (
-            Lang::Cpp,
-            "unmanaged",
-            "RAII: a destructor runs on scope exit, so there is no guard to omit — the Rust verdict",
         ),
         (
             Lang::Cpp,
@@ -2257,11 +2213,6 @@ let classify items limit =
             Lang::Ruby,
             "blocking async",
             "no async declaration: Thread and Fiber are objects, and nothing marks a method as running on an executor",
-        ),
-        (
-            Lang::Ruby,
-            "unmanaged",
-            "`File.open` with a block closes at the end of it, and the block IS the idiom — there is no guard to omit",
         ),
         (
             Lang::Ruby,
@@ -2314,11 +2265,6 @@ let classify items limit =
             "blocking async",
             "coroutines are a library of ordinary functions; nothing declares a unit async",
         ),
-        (
-            Lang::Lua,
-            "unmanaged",
-            "no scope-guard statement exists; a file closes on the line that remembers to",
-        ),
         (Lang::Lua, "dropped tasks", "no spawn form"),
         (Lang::Lua, "casts", "no cast syntax"),
         (
@@ -2366,11 +2312,6 @@ let classify items limit =
         ),
         (
             Lang::Perl,
-            "unmanaged",
-            "a lexical filehandle closes when it goes out of scope; there is no guard statement to omit",
-        ),
-        (
-            Lang::Perl,
             "dropped tasks",
             "`fork` returns a pid to the parent and 0 to the child — a branch, not a handle",
         ),
@@ -2411,11 +2352,6 @@ let classify items limit =
             Lang::Php,
             "blocking async",
             "Fibers are objects a scheduler drives; nothing declares a function async",
-        ),
-        (
-            Lang::Php,
-            "unmanaged",
-            "a resource closes when its last reference drops; there is no scope-guard statement whose absence is the finding",
         ),
         (Lang::Php, "dropped tasks", "no spawn form"),
         (
@@ -2475,11 +2411,6 @@ let classify items limit =
         // Swift.
         (
             Lang::Swift,
-            "unmanaged",
-            "ARC releases on the last reference and `defer` covers the rest; there is no unclosed-handle shape to find",
-        ),
-        (
-            Lang::Swift,
             "dropped tasks",
             "`Task { }` is an initializer, not a call named spawn, and an unstructured task is the documented way to leave structured concurrency",
         ),
@@ -2505,11 +2436,6 @@ let classify items limit =
             Lang::Scala,
             "blocking async",
             "Future, ZIO and cats-effect are libraries; nothing in the language marks a def async",
-        ),
-        (
-            Lang::Scala,
-            "unmanaged",
-            "`Using` and `Resource` are combinators that OWN the handle; a resource outside one is passed to something else, not leaked",
         ),
         (Lang::Scala, "dropped tasks", "no spawn form"),
         (
@@ -2540,11 +2466,6 @@ let classify items limit =
             Lang::Elixir,
             "blocking async",
             "concurrency is processes and Task; nothing marks a function async",
-        ),
-        (
-            Lang::Elixir,
-            "unmanaged",
-            "a process owns its resources and dies with them — the supervision tree's job, not a scope guard's",
         ),
         (
             Lang::Elixir,
@@ -2601,11 +2522,6 @@ let classify items limit =
             Lang::Solidity,
             "blocking async",
             "execution is single-threaded and atomic per transaction",
-        ),
-        (
-            Lang::Solidity,
-            "unmanaged",
-            "there is no handle to leak: a contract's state is storage and outlives every call into it",
         ),
         (Lang::Solidity, "dropped tasks", "no concurrency at all"),
         (

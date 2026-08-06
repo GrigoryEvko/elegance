@@ -103,7 +103,6 @@ pub fn pack() -> Pack {
         // Recognising `defer f.Close()` needs the defer, not the open; unimplemented rather than wrong.
         // Composite literals carry their type; a map[string]any is a map, not a record.
         record_keys: |_, _| None,
-        unguarded_resource: |_, _| false,
         is_async: |_, _| false,
         declares_test: |_, _| false,
         names_test,

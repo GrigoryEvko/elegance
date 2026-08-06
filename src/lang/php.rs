@@ -115,7 +115,6 @@ pub fn pack() -> Pack {
         record_keys,
         // A resource closes when the last reference drops; there is no
         // scope-guard statement whose absence would be the finding.
-        unguarded_resource: |_, _| false,
         // Fibers exist but concurrency is a library concern here.
         is_async: |_, _| false,
         refine,

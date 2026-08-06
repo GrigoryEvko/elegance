@@ -112,7 +112,6 @@ pub fn pack() -> Pack {
         // Same as Go: the guard is a `defer` elsewhere in the block.
         // Anonymous struct literals are inferred against a declared type.
         record_keys: |_, _| None,
-        unguarded_resource: |_, _| false,
         is_async: |_, _| false,
         declares_test: |node, _| node.kind() == "test_declaration",
         names_test: |_, _| false,

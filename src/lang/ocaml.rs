@@ -72,7 +72,6 @@ pub fn pack() -> Pack {
         // No exceptions in the happy path and no scope-guard statement:
         // resources are released by the same `let ... in` structure that
         // scopes them.
-        unguarded_resource: |_, _| false,
         // Async is a library (Lwt, Async), not syntax.
         is_async: |_, _| false,
         refine,

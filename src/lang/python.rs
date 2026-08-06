@@ -96,7 +96,6 @@ pub fn pack() -> Pack {
         loses_context,
         panicky: |_, _| false,
         record_keys,
-        unguarded_resource,
         is_async: super::declared_async,
         declares_test: |_, _| false,
         names_test,
@@ -619,29 +618,6 @@ fn record_keys(node: Node, src: &[u8]) -> Option<Vec<Box<str>>> {
         keys.push(text.trim_matches(['"', '\'']).into());
     }
     Some(keys)
-}
-
-/// `open()` outside a `with`. Closing it then becomes a promise made in
-/// prose, and an early return or a raise is a path that did not keep it.
-/// Assignment counts as unguarded even when a `.close()` follows: the
-/// exception path is exactly the one that skips it.
-fn unguarded_resource(call: Node, src: &[u8]) -> bool {
-    let opens = call
-        .child_by_field_name("function")
-        .and_then(|f| f.utf8_text(src).ok())
-        .is_some_and(|f| f == "open");
-    if !opens {
-        return false;
-    }
-    let mut anc = call.parent();
-    for _ in 0..3 {
-        let Some(a) = anc else { return true };
-        if a.kind() == "with_statement" || a.kind() == "with_clause" || a.kind() == "with_item" {
-            return false;
-        }
-        anc = a.parent();
-    }
-    true
 }
 
 /// PEP 3134: `raise Wrapped(...) from err` keeps the chain. A handler

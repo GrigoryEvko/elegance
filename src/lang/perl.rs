@@ -123,7 +123,6 @@ pub fn pack() -> Pack {
         record_keys,
         // A filehandle closes when its lexical goes out of scope, and
         // that is the idiom; there is no scope-guard statement to miss.
-        unguarded_resource: |_, _| false,
         // Future::AsyncAwait's `async sub` is the ecosystem's async and
         // the grammar reads it, so the keyword at the head decides —
         // the same rule every other language here uses.

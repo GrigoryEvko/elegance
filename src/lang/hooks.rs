@@ -4,8 +4,7 @@
 //! answered a question the core never put to it. `swallows_error` was
 //! written for catch clauses and consulted on `if`; `loses_context` was
 //! written against `throw`, a jump the core never hands to a pack;
-//! `unguarded_resource` was written against a declaration where the core
-//! asks about calls; `spooky` was asked of calls and typedefs only, so
+//! `spooky` was asked of calls and typedefs only, so
 //! Solidity's `assembly` and Perl's `eval "..."` went unseen. Every one
 //! compiled, passed and shipped silent, because a hook that is never
 //! consulted and a hook that correctly finds nothing produce the same
@@ -124,7 +123,6 @@ hooks! {
     loses_context(node: Node, src: &[u8]) -> bool;
     panicky(node: Node, src: &[u8]) -> bool;
     record_keys(node: Node, src: &[u8]) -> Option<Vec<Box<str>>>;
-    unguarded_resource(node: Node, src: &[u8]) -> bool;
     is_async(node: Node, src: &[u8]) -> bool;
     declares_test(node: Node, src: &[u8]) -> bool;
     names_test(node: Node, src: &[u8]) -> bool;
@@ -219,7 +217,6 @@ mod reachable {
         ("broad catch", &[Hook::catch_sin]),
         ("lost context", &[Hook::loses_context]),
         ("unwraps", &[Hook::panicky]),
-        ("unmanaged", &[Hook::unguarded_resource]),
         ("negations", &[Hook::negation_operand]),
         ("blocking async", &[Hook::is_async]),
         ("conditional hook", &[Hook::is_hook]),

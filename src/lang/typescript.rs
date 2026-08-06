@@ -134,7 +134,6 @@ pub fn pack(dialect: Dialect) -> Pack {
         panicky: |_, _| false,
         swallows_error: |_, _| false,
         // No scope-guard idiom, so there is no absence to detect.
-        unguarded_resource: |_, _| false,
         is_async: super::declared_async,
         declares_test: |node, src| declaring_test(node, src).is_some(),
         names_test: |_, _| false,

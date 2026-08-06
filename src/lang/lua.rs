@@ -81,7 +81,6 @@ pub fn pack() -> Pack {
         record_keys,
         // `pcall` is the whole error story and there is no scope guard,
         // so a resource is released by the line that remembers to.
-        unguarded_resource: |_, _| false,
         // Coroutines are a library, not syntax.
         is_async: |_, _| false,
         refine,

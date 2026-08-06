@@ -117,7 +117,6 @@ pub fn pack() -> Pack {
         // Manual everywhere, so every fopen would fire and none would mean anything.
         // Designated initializers belong to a declared struct.
         record_keys: |_, _| None,
-        unguarded_resource: |_, _| false,
         is_async: |_, _| false,
         declares_test: |_, _| false,
         names_test: |_, _| false,

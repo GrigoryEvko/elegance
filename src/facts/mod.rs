@@ -358,9 +358,6 @@ pub struct UnitFacts {
     /// conditional one shifts every later hook's identity the first
     /// time the branch flips — state belonging to another hook.
     pub conditional_hooks: u16,
-    /// Resources opened without a scope guard: closing them becomes a
-    /// promise made in prose, and an early return breaks it.
-    pub unmanaged: u16,
     /// Matches with a catch-all arm: adding a variant will not break
     /// this, which is the entire benefit of an exhaustive match.
     pub wildcard_matches: u16,

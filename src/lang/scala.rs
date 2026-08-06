@@ -96,7 +96,6 @@ pub fn pack() -> Pack {
         types_declared: true,
         // A case class declares the shape, and that is the idiom.
         record_keys: |_, _| None,
-        unguarded_resource: |_, _| false,
         // Concurrency is Future, ZIO and cats-effect — library, and the
         // library is the whole point.
         is_async: |_, _| false,

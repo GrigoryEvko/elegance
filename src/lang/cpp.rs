@@ -4,10 +4,6 @@
 //! `#if` is a real branch, `goto` is the flat +1 — and C++ adds three
 //! things worth stating rather than discovering.
 //!
-//! - RAII means `unmanaged` is DEAD here, for the reason it is dead in
-//!   Rust: a destructor runs on scope exit, so there is no missing
-//!   guard to detect. Flagging every `fopen` would be flagging the
-//!   language.
 //! - Templates are measured AS WRITTEN. One template is one unit
 //!   however many instantiations the linker emits, which is the same
 //!   call the C pack makes about macros: measure what you can read.
@@ -176,7 +172,6 @@ pub fn pack(dialect: Dialect) -> Pack {
         record_keys: |_, _| None,
         // RAII: a destructor runs on scope exit, so there is no missing
         // guard to detect. Same reason this is dead in Rust.
-        unguarded_resource: |_, _| false,
         // Coroutines exist in C++20 but `co_await` is not `async fn`:
         // nothing declares a unit async, so nothing can block one.
         is_async: |_, _| false,
@@ -695,15 +690,8 @@ mod tests {
     }
 
     #[test]
-    fn catch_all_is_broad_and_raii_leaves_nothing_unmanaged() {
-        let f = facts(
-            "void f() {\n  try { risky(); } catch (...) { log(); }\n  std::ifstream in(\"x\");\n}\n",
-        );
-        let unit = &f.units[1];
-        assert_eq!(unit.broad_catch, 1, "catch (...) binds nothing");
-        assert_eq!(
-            unit.unmanaged, 0,
-            "a destructor runs on scope exit; there is no guard to omit"
-        );
+    fn catch_all_is_broad() {
+        let f = facts("void f() {\n  try { risky(); } catch (...) { log(); }\n}\n");
+        assert_eq!(f.units[1].broad_catch, 1, "catch (...) binds nothing");
     }
 }

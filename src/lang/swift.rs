@@ -104,7 +104,6 @@ pub fn pack() -> Pack {
         record_keys: |_, _| None,
         // ARC releases on the last reference and `defer` covers the
         // rest, so there is no unclosed-handle shape to find.
-        unguarded_resource: |_, _| false,
         is_async,
         refine,
         name_node,

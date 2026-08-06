@@ -109,7 +109,6 @@ pub fn pack() -> Pack {
         // A record or a class declares the shape; there is no anonymous
         // map literal standing in for one.
         record_keys: |_, _| None,
-        unguarded_resource,
         // Concurrency is Executor, Future and virtual threads — library,
         // never syntax.
         is_async: |_, _| false,
@@ -298,44 +297,6 @@ fn loses_context(node: Node, src: &[u8]) -> bool {
         return false;
     };
     super::rethrows_without_cause(body, "throw_statement", bound, src)
-}
-
-/// A resource opened outside `try (...)` has nothing closing it on the
-/// error path — which is exactly why the construct was added.
-///
-/// Judged on the CONSTRUCTION, because the core consults this hook on
-/// calls; it used to name `local_variable_declaration`, a kind that
-/// never reaches it, so the check was unreachable for the one language
-/// whose scope guard is a syntax.
-fn unguarded_resource(node: Node, src: &[u8]) -> bool {
-    if node.kind() != "object_creation_expression" {
-        return false;
-    }
-    const OPENS: &[&str] = &[
-        "FileInputStream",
-        "FileOutputStream",
-        "Socket",
-        "FileReader",
-        "FileWriter",
-        "RandomAccessFile",
-    ];
-    let opens = node
-        .utf8_text(src)
-        .ok()
-        .and_then(|t| t.strip_prefix("new "))
-        .is_some_and(|rest| OPENS.iter().any(|o| rest.starts_with(o)));
-    if !opens {
-        return false;
-    }
-    let mut cur = node.parent();
-    while let Some(n) = cur {
-        match n.kind() {
-            "resource_specification" => return false,
-            "method_declaration" | "class_body" => break,
-            _ => cur = n.parent(),
-        }
-    }
-    true
 }
 
 /// JUnit and TestNG both mark a test with an annotation.

@@ -66,7 +66,6 @@ pub fn pack() -> Pack {
         record_keys,
         // A process owns its resources and dies with them; that is the
         // supervision tree's job rather than a scope guard's.
-        unguarded_resource: |_, _| false,
         // Concurrency is processes and Task, never a keyword.
         is_async: |_, _| false,
         refine,

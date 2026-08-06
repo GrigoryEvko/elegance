@@ -105,7 +105,6 @@ pub fn pack() -> Pack {
         record_keys,
         // `File.open` with a block closes at the end of it, and that is
         // the idiom; the bare form is rare enough not to guess at.
-        unguarded_resource: |_, _| false,
         // Concurrency is Thread, Fiber and gems — never syntax.
         is_async: |_, _| false,
         refine,

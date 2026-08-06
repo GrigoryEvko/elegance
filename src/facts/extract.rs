@@ -421,7 +421,6 @@ impl UnitFacts {
             max_loop_depth: 0,
             allocs_in_loop: 0,
             conditional_hooks: 0,
-            unmanaged: 0,
             dropped_tasks: 0,
             wildcard_matches: 0,
             is_test: false,
@@ -1017,15 +1016,12 @@ impl Extractor<'_> {
         )
     }
 
-    /// Two things acquired without anything arranging their release: a
-    /// resource opened outside a scope guard, and a spawned task whose
-    /// handle is thrown away.
+    /// A task spawned with nothing arranging its end: the handle is
+    /// thrown away, so nothing can await it and nothing observes its
+    /// panic.
     fn record_lifetime(&mut self, node: Node, unit_idx: usize) {
-        let unguarded = self.pack.unguarded_resource(node, self.src);
         let dropped = self.callee_trailing_name(node) == Some("spawn") && discards_its_result(node);
-        let unit = &mut self.facts.units[unit_idx];
-        unit.unmanaged += unguarded as u16;
-        unit.dropped_tasks += dropped as u16;
+        self.facts.units[unit_idx].dropped_tasks += dropped as u16;
     }
 
     /// `assert True` as a statement: the subject is the first child, and

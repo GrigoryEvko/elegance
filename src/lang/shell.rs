@@ -115,7 +115,6 @@ pub fn pack() -> Pack {
         record_keys: |_, _| None,
         // `trap ... EXIT` is the idiom; recognizing its absence needs
         // the trap, not the mktemp. Same deferral as Go's defer.
-        unguarded_resource: |_, _| false,
         is_async: |_, _| false,
         declares_test: |_, _| false,
         // Shell has NO test-declaration form. bats and shunit2 assert

@@ -233,33 +233,32 @@ pub const VACUOUS_ASSERTS: usize = 34;
 pub const LOST_CONTEXT: usize = 35;
 pub const SECRETS: usize = 36;
 pub const BLOCKING_IN_ASYNC: usize = 37;
-pub const UNMANAGED: usize = 38;
-pub const DROPPED_TASKS: usize = 39;
-pub const WILDCARD_MATCH: usize = 40;
-pub const STRINGLY_ID: usize = 41;
-pub const LOOP_DEPTH: usize = 42;
-pub const ALLOC_IN_LOOP: usize = 43;
-pub const CONDITIONAL_HOOK: usize = 44;
-pub const RETURN_ARITY: usize = 45;
-pub const INTERFACE_WIDTH: usize = 46;
-pub const REPURPOSED: usize = 47;
-pub const UNAWAITED: usize = 48;
-pub const MAGIC_STRINGS: usize = 49;
-pub const SLEEPY_TEST: usize = 50;
-pub const SKIPPED_TESTS: usize = 51;
-pub const BOOL_TRAPS: usize = 52;
-pub const COMMENTED_CODE: usize = 53;
-pub const COHESION: usize = 54;
-pub const SQL_BUILT: usize = 55;
-pub const SHELLED_OUT: usize = 56;
-pub const CEREMONY: usize = 57;
-pub const MODULE_DOC: usize = 58;
-pub const TYPE_DOC: usize = 59;
-pub const FN_DOC: usize = 60;
-pub const FIELD_DOC: usize = 61;
-pub const INLINE_DOC: usize = 62;
-pub const GROUND_DENSITY: usize = 63;
-pub const DOC_PARAM: usize = 64;
+pub const DROPPED_TASKS: usize = 38;
+pub const WILDCARD_MATCH: usize = 39;
+pub const STRINGLY_ID: usize = 40;
+pub const LOOP_DEPTH: usize = 41;
+pub const ALLOC_IN_LOOP: usize = 42;
+pub const CONDITIONAL_HOOK: usize = 43;
+pub const RETURN_ARITY: usize = 44;
+pub const INTERFACE_WIDTH: usize = 45;
+pub const REPURPOSED: usize = 46;
+pub const UNAWAITED: usize = 47;
+pub const MAGIC_STRINGS: usize = 48;
+pub const SLEEPY_TEST: usize = 49;
+pub const SKIPPED_TESTS: usize = 50;
+pub const BOOL_TRAPS: usize = 51;
+pub const COMMENTED_CODE: usize = 52;
+pub const COHESION: usize = 53;
+pub const SQL_BUILT: usize = 54;
+pub const SHELLED_OUT: usize = 55;
+pub const CEREMONY: usize = 56;
+pub const MODULE_DOC: usize = 57;
+pub const TYPE_DOC: usize = 58;
+pub const FN_DOC: usize = 59;
+pub const FIELD_DOC: usize = 60;
+pub const INLINE_DOC: usize = 61;
+pub const GROUND_DENSITY: usize = 62;
+pub const DOC_PARAM: usize = 63;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -449,11 +448,6 @@ pub const METRICS: &[MetricDef] = &[
     // standard one parks the thread, and Node's *Sync family is named
     // after the problem.
     MetricDef { name: "blocking async", rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
-    // A resource opened outside a scope guard is closed only if every
-    // path remembers to, and an early return or a raise is a path that
-    // did not. `with`, `use` and `defer` exist so the block's exit does
-    // it instead of the author.
-    MetricDef { name: "unmanaged",      rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
     // A spawned task whose handle is discarded: nothing can await it,
     // nothing observes its panic, and the runtime may drop it at
     // shutdown in the middle of a write.
@@ -1123,9 +1117,8 @@ fn unit_shape(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32, u
                     u.line,
                     &u.qualname,
                 );
-                // Tests open scratch files and spawn throwaway tasks by
-                // the hundred; the lifetime that matters is production's.
-                f(UNMANAGED, u.unmanaged as f32, u.line, &u.qualname);
+                // Tests spawn throwaway tasks by the hundred; the
+                // lifetime that matters is production's.
                 f(DROPPED_TASKS, u.dropped_tasks as f32, u.line, &u.qualname);
             }
         }
@@ -1443,7 +1436,6 @@ mod tests {
             (LOST_CONTEXT, "lost context"),
             (SECRETS, "secrets"),
             (BLOCKING_IN_ASYNC, "blocking async"),
-            (UNMANAGED, "unmanaged"),
             (DROPPED_TASKS, "dropped tasks"),
             (WILDCARD_MATCH, "wildcard match"),
             (STRINGLY_ID, "stringly id"),
@@ -1473,7 +1465,7 @@ mod tests {
         for (idx, name) in PAIRS {
             assert_eq!(METRICS[*idx].name, *name, "index {idx}");
         }
-        assert_eq!(N, 65);
+        assert_eq!(N, 64);
     }
 
     #[test]
@@ -2767,45 +2759,28 @@ mod tests {
     }
 
     #[test]
-    fn a_resource_needs_a_guard_only_where_guards_are_the_idiom() {
-        let counts = |lang: Lang, src: &str| {
+    fn a_spawned_task_needs_a_handle_only_where_handles_exist() {
+        let dropped = |lang: Lang, src: &str| {
             let pack = lang.pack();
             let mut parser = pack.make_parser();
             let f = extract(pack, &mut parser, Path::new("a"), src);
-            let unmanaged: u16 = f.units.iter().map(|u| u.unmanaged).sum();
-            let dropped: u16 = f.units.iter().map(|u| u.dropped_tasks).sum();
-            (unmanaged, dropped)
+            f.units.iter().map(|u| u.dropped_tasks).sum::<u16>()
         };
         assert_eq!(
-            counts(
-                Lang::Python,
-                "def f(p):\n    h = open(p)\n    return h.read()\n"
-            ),
-            (1, 0)
-        );
-        assert_eq!(
-            counts(
-                Lang::Python,
-                "def f(p):\n    with open(p) as h:\n        return h.read()\n"
-            ),
-            (0, 0),
-            "the block's exit closes it however the block ends"
-        );
-        assert_eq!(
-            counts(
-                Lang::Rust,
-                "fn f(p: &str) {\n    let h = File::open(p);\n}\n"
-            ),
-            (0, 0),
-            "RAII: a File closes when it drops, so there is no guard to omit"
-        );
-        assert_eq!(
-            counts(
+            dropped(
                 Lang::Rust,
                 "fn f() {\n    tokio::spawn(work());\n    let h = tokio::spawn(other());\n}\n"
             ),
-            (0, 1),
+            1,
             "the bare statement drops its handle; the binding keeps it"
+        );
+        assert_eq!(
+            dropped(
+                Lang::Python,
+                "def f(p):\n    with open(p) as h:\n        return h.read()\n"
+            ),
+            0,
+            "opening a file is not spawning a task"
         );
     }
 
@@ -4238,12 +4213,8 @@ mod tests {
             "the_runtimes_own_sleep_is_the_fix_not_the_bug",
         ),
         (
-            "unmanaged",
-            "a_resource_needs_a_guard_only_where_guards_are_the_idiom",
-        ),
-        (
             "dropped tasks",
-            "a_resource_needs_a_guard_only_where_guards_are_the_idiom",
+            "a_spawned_task_needs_a_handle_only_where_handles_exist",
         ),
         (
             "wildcard match",

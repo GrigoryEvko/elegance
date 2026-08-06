@@ -106,7 +106,6 @@ pub fn pack() -> Pack {
         swallows_error: |_, _| false,
         // No scope-guard idiom, so there is no absence to detect.
         record_keys: typescript::record_keys,
-        unguarded_resource: |_, _| false,
         is_async: super::declared_async,
         declares_test: typescript::is_declared_test,
         names_test: |_, _| false,

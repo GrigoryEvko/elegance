@@ -485,7 +485,7 @@ the whole gold corpus.
 | Zig | `.zig` | |
 | OCaml | `.ml` `.mli` | control group — tightest branching in the corpus |
 | C | `.c` `.h`\* | no preprocessing; numbers are floors |
-| C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` `.h`\* | RAII kills `unmanaged`; gtest names composed |
+| C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` `.h`\* | templates measured as written; gtest names composed |
 | CUDA | `.cu` `.cuh` | rides the C++ pack, own budgets |
 | shell | `.sh` `.bash` | no declared parameters, so no interface family; `shelled out` is dead here — the language IS the shell |
 | Perl | `.pl` `.pm` `.t` | parameters only where signatures are used |
@@ -563,10 +563,8 @@ Conditional compilation is much of it, RAII most of the rest, since a
 destructor removes the error path a C function writes by hand.
 
 <details>
-<summary>Three C++ decisions, and what the corpus says about itself</summary>
+<summary>Two C++ decisions, and what the corpus says about itself</summary>
 
-- **RAII kills `unmanaged`** for the reason it is dead in Rust: a
-  destructor runs on scope exit, so there is no missing guard to find.
 - **A class whose methods are all pure virtual** is what `interface
   width` counts — that is an interface in everything but keyword.
 - **gtest's `TEST(args_test, basic)`** is read as the declaration it is.
