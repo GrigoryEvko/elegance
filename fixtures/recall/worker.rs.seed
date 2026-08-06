@@ -89,3 +89,14 @@ fn relocate(node: &Node) {
 fn lookup(db: &Db, table: &str) -> Rows {
     db.query(&format!("SELECT * FROM {}", table))
 }
+
+pub struct Retry {
+    /// The number of milliseconds that the worker will wait before it
+    /// attempts the request for a second time, which is a value that
+    /// the caller is able to configure when it builds this structure,
+    /// and which the worker will read once for every attempt that it
+    /// makes, so that the delay between two consecutive attempts can
+    /// grow over time rather than staying at one fixed and unchanging
+    /// number for the whole of the run.
+    pub backoff_ms: u64,
+}

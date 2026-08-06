@@ -187,8 +187,29 @@ React. Solid is exempt: it tracks dependencies at run time.
 | `broad catch` · `unwraps` | |
 | `spooky` | eval, computed attribute access, metaclasses, transmute |
 | `echo comments` · `comment ratio` | |
+| `module doc` · `type doc` · `fn doc` · `field doc` · `inline doc` | prose words per comment run, pinned per language **and role** |
 | `test asserts` · `lazy test name` | |
 | `untyped params` · `loose types` · `casts` · `suppressions` | type hygiene |
+
+**Doc length** is the whole wordiness signal — compression, type-token
+ratio and per-word semantic density were all measured against the same
+corpus and either tracked something else or moved under 10%. It counts
+*prose* words, so a thirty-line builder doc measures as its four words
+of writing and its fenced example counts for nothing.
+
+One budget per role, because one across roles is meaningless for all of
+them: gold function summaries run to p99 = 258 prose words in Rust, 128
+in TypeScript and 89 in Python, while a field's doc is a phrase and a
+module header is a page. A role with fewer than 200 runs in gold
+inherits its language's *pooled* doc p99 and `calibration.toml` records
+the borrowing on the line above it — a budget nobody can see is
+borrowed is worse than no budget. Trailing comments have none at all: a
+trailing run is one line by construction, so its length measures line
+width.
+
+Bounded above only. A floor would fire on `/// The parsed AST.`, which
+is correct as written; the counterweight against truncation is the
+`public docs` coverage rate, bounded below.
 
 `returns` stays a suspicion because a TS tuple annotation is *optional*:
 its budget rides on how often gold annotates at all, and a declared
@@ -216,6 +237,18 @@ step-down narrative ordering.
 | `param clumps` | Fowler's Data Clumps |
 | `repeated dispatch` · `untested complexity` | |
 | `public docs` · `asserts` | coverage **rates**, rendered beside gold's own share |
+| `ground density` | does a statement comment give a *reason*, or only a label — grounds per 1k prose words |
+
+`ground density` counts `because` · `otherwise` · `thus` · `hence` ·
+`therefore` · `so that`, and a causal `since` — `since 1.2.0` and
+`since the last flush` are dates and are skipped. Purposes (`to avoid`,
+`in order to`, `prevents`, `due to`) are counted separately and never
+credited: pooled as one subordinator density the signal measured 0.97
+within-repo and died, because the two halves move in opposite
+directions. It reports and never gates, for two reasons — the
+within-repo experiment tested the pooled set and never this subset, and
+gating it would invite `because` filler.
+
 
 Rates never render as per-unit findings — `63% of 103 public units
 documented; admired rs: 84%`. Admired code fails the per-unit claims 81%

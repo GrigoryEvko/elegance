@@ -136,47 +136,134 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
 fn lang_section(agg: &mut Agg, lang: Lang) -> String {
     let mut section = String::new();
     for (m, def) in METRICS.iter().enumerate() {
+        // Doc length is pinned per ROLE, with a pooled fallback the
+        // thin cells inherit — a loop over one metric at a time cannot
+        // see the pool.
+        if crate::metrics::DOC_LENGTH.contains(&m) {
+            continue;
+        }
         let dist = agg.sorted_dist(m);
-        if dist.len() < MIN_SAMPLES || def.calib == Calib::Policy {
+        let runs = dist.len();
+        let Some(pin) = pinned(def, dist) else {
             continue;
-        }
-        let q = |p: f64| crate::report::quantile(dist, p);
-        // A zero p99 means the fact is not extracted for this language
-        // (e.g. Zig live spans without def sites) — pinning hi=0 would
-        // gate everything the day extraction lands.
-        if def.calib == Calib::P99 && q(GOLD_PIN) == 0.0 {
-            continue;
-        }
-        let entry = match def.calib {
-            Calib::P99 => format!("hi = {:.1}", (q(GOLD_PIN) as f64).ceil()),
-            Calib::Band => {
-                if q(BAND_LO) == 0.0 {
-                    // Truthful, and worth saying out loud: a floor of
-                    // zero can never fire, so the band is one-sided by
-                    // the corpus's own verdict.
-                    let _ = writeln!(
-                        section,
-                        "# gold p05 is zero: the low flank is vacuous by the corpus's verdict"
-                    );
-                }
-                format!("lo = {:.2}, hi = {:.2}", q(BAND_LO), q(BAND_HI))
-            }
-            Calib::Policy => unreachable!(),
         };
-        let _ = writeln!(section, "\"{}\" = {{ {entry} }}", def.name);
-        let shown = match def.fmt {
-            Fmt::Int => format!("{:.0}", q(GOLD_PIN)),
-            Fmt::Pct => format!("{:.0}%-{:.0}%", q(BAND_LO) * 100.0, q(BAND_HI) * 100.0),
-        };
+        if let Some(note) = pin.note {
+            let _ = writeln!(section, "{note}");
+        }
+        let _ = writeln!(section, "\"{}\" = {{ {} }}", def.name, pin.entry);
         println!(
-            "{:<5} {:<15} n={:<7} gold {}",
+            "{:<5} {:<15} n={runs:<7} gold {}",
             lang.name(),
             def.name,
-            dist.len(),
-            shown
+            pin.shown
         );
     }
+    section.push_str(&doc_entries(agg, lang));
     section.push_str(&rate_entries(agg, lang));
+    section
+}
+
+/// What the corpus says about one metric: the budget, whatever has to
+/// be said above it, and the value to echo.
+struct Pin {
+    note: Option<&'static str>,
+    entry: String,
+    shown: String,
+}
+
+/// One metric's budget as the corpus sets it, or None where the corpus
+/// cannot speak for it: fewer samples than a percentile needs, a
+/// POLICY no percentile may legitimize, or a p99 of zero — which means
+/// the fact is not extracted for this language (Zig live spans without
+/// def sites), and pinning hi=0 would gate everything the day it is.
+fn pinned(def: &crate::metrics::MetricDef, dist: &[f32]) -> Option<Pin> {
+    if dist.len() < MIN_SAMPLES || def.calib == Calib::Policy {
+        return None;
+    }
+    let q = |p: f64| crate::report::quantile(dist, p) as f64;
+    // Truthful, and worth saying out loud: a floor of zero can never
+    // fire, so the flank is vacuous by the corpus's own verdict.
+    let vacuous = |text| (q(BAND_LO) == 0.0).then_some(text);
+    match def.calib {
+        Calib::P99 if q(GOLD_PIN) == 0.0 => None,
+        Calib::P99 => Some(Pin {
+            note: None,
+            entry: format!("hi = {:.1}", q(GOLD_PIN).ceil()),
+            shown: format!("{:.0}", q(GOLD_PIN)),
+        }),
+        Calib::P05 => Some(Pin {
+            note: vacuous("# gold p05 is zero: this floor is vacuous by the corpus's verdict"),
+            entry: format!("lo = {:.1}", q(BAND_LO).floor()),
+            shown: format!("p05 {:.0}", q(BAND_LO)),
+        }),
+        Calib::Band => Some(Pin {
+            note: vacuous("# gold p05 is zero: the low flank is vacuous by the corpus's verdict"),
+            entry: format!("lo = {:.2}, hi = {:.2}", q(BAND_LO), q(BAND_HI)),
+            shown: match def.fmt {
+                Fmt::Int => format!("{:.0}-{:.0}", q(BAND_LO), q(BAND_HI)),
+                Fmt::Pct => format!("{:.0}%-{:.0}%", q(BAND_LO) * 100.0, q(BAND_HI) * 100.0),
+            },
+        }),
+        Calib::Policy => None,
+    }
+}
+
+/// Doc-length budgets, one per comment role, with the thin cells
+/// marked.
+///
+/// A role too thin to hold a percentile INHERITS this language's
+/// pooled doc p99 — Solidity writes 44 module headers in all of gold,
+/// two orders below what a p99 needs — and the entry says so on the
+/// line above it. A silently borrowed budget reads exactly like a
+/// measured one, which is the kind of quiet wrongness the rest of this
+/// file exists to prevent.
+///
+/// Where even the POOL is thin nothing is written at all and the
+/// compiled default stands, which `is_pinned` already renders as a
+/// trailing `.` on the budget.
+fn doc_entries(agg: &mut Agg, lang: Lang) -> String {
+    let mut pooled: Vec<f32> = Vec::new();
+    let mut own: Vec<(usize, Option<f32>)> = Vec::new();
+    for m in crate::metrics::DOC_LENGTH {
+        let dist = agg.sorted_dist(m);
+        // `None` IS the borrow: a role with too few runs has no
+        // percentile of its own, and asking for one of an empty
+        // distribution is a panic rather than a zero.
+        let measured = (dist.len() >= MIN_SAMPLES).then(|| crate::report::quantile(dist, GOLD_PIN));
+        own.push((dist.len(), measured));
+        pooled.extend_from_slice(dist);
+    }
+    if pooled.len() < MIN_SAMPLES {
+        return String::new();
+    }
+    pooled.sort_unstable_by(f32::total_cmp);
+    let inherited = crate::report::quantile(&pooled, GOLD_PIN);
+    let mut section = String::new();
+    for (m, (runs, measured)) in crate::metrics::DOC_LENGTH.into_iter().zip(own) {
+        let borrowed = measured.is_none();
+        let hi = (measured.unwrap_or(inherited) as f64).ceil();
+        // A zero p99 pins a budget nothing can satisfy, the same trap
+        // the unpinned-fact rule avoids for every other metric.
+        if hi == 0.0 {
+            continue;
+        }
+        if borrowed {
+            let _ = writeln!(
+                section,
+                "# {runs} runs is under the {MIN_SAMPLES} a percentile needs: \
+                 borrowed from {}'s pooled doc p99",
+                lang.name()
+            );
+        }
+        let _ = writeln!(section, "\"{}\" = {{ hi = {hi:.1} }}", METRICS[m].name);
+        println!(
+            "{:<5} {:<15} n={:<7} gold {hi:.0}{}",
+            lang.name(),
+            METRICS[m].name,
+            runs,
+            if borrowed { " (borrowed)" } else { "" },
+        );
+    }
     section
 }
 

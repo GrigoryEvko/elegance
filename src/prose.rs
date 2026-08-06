@@ -24,23 +24,63 @@ pub struct Prose {
     /// Tokens carrying at least one letter. Saturates: a 65k-word
     /// comment and a 66k-word comment are the same finding.
     pub words: u16,
-    /// Words asserting a REASON — why this code is as it is.
+    /// Phrases asserting a REASON — why this code is as it is.
     pub grounds: u8,
-    /// Words asserting a PURPOSE — what the code is for.
+    /// Phrases asserting a PURPOSE — what the code is for. Counted
+    /// apart from grounds and never added to them.
     pub purposes: u8,
     /// Sentence terminators, floored at one when anything was written.
     pub sentences: u8,
 }
 
-/// Words that mark a comment as giving GROUNDS rather than restating
-/// code. Empty until the lists are chosen against the corpus (#156);
-/// the machinery that consumes them is here so that landing the lists
-/// changes nothing else.
-const GROUNDS: &[&str] = &[];
+/// Phrases that mark a comment as giving GROUNDS: a REASON the code is
+/// as it is, which is the thing a reader cannot recover from the code
+/// itself.
+///
+/// Measured human:machine ratios over the paired corpus — thus 193x,
+/// so that 11.3x, since 8.1x, otherwise 7.1x, because 4.6x. Written as
+/// phrases and matched a token at a time, so `so that` is one ground
+/// and `so` alone is none.
+///
+/// `as` is deliberately absent. "as a result" is a ground, "as usual"
+/// is not and "cast as usize" is code; nothing short of a parser tells
+/// them apart, and it was never in the measured set.
+const GROUNDS: &[&str] = &[
+    "because",
+    "otherwise",
+    "thus",
+    "hence",
+    "therefore",
+    "so that",
+];
 
-/// Words that mark a comment as stating a PURPOSE. Empty until #156,
-/// as above.
-const PURPOSES: &[&str] = &[];
+/// The one ground whose sense depends on what follows it: `since 1.2.0`
+/// and `since the last flush` are DATES, `since the buffer is full` is
+/// a reason. See `causal_since`.
+const SINCE: &str = "since";
+
+/// Phrases that state a PURPOSE — what the code is FOR, or what it
+/// stops from happening. Counted separately and NEVER credited as
+/// grounds.
+///
+/// This split is the finding. Pooled as one "subordinator density" the
+/// signal measured 0.97 within-repo and died, because the two halves
+/// move in OPPOSITE directions: grounds run 4.6x to 193x human, while
+/// purposes run at or below parity — to avoid 0.7x, prevents 0.3x. A
+/// machine says what a line is for at human rates and says why the
+/// obvious alternative fails at a fifth of them.
+const PURPOSES: &[&str] = &[
+    "to avoid",
+    "to prevent",
+    "in order to",
+    "prevents",
+    "due to",
+];
+
+/// Tokens after `since` that decide its sense. Three, because that is
+/// the span a date or a landmark occupies — `since 1.2.0`, `since the
+/// last flush` — and a fourth would start reading the clause itself.
+const SINCE_LOOKAHEAD: usize = 3;
 
 /// Comment syntax every ecosystem spells the same way, longest first.
 /// A pack's own `doc_markers` are tried alongside these — `#:`, `@doc`,
@@ -83,20 +123,61 @@ pub fn measure(text: &str, markers: &[&str]) -> Option<Prose> {
         sentences: sentences(&body),
         ..Prose::default()
     };
-    for token in body.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '\'') {
-        if !token.chars().any(char::is_alphabetic) {
-            continue;
+    // Numbers stay in the token stream although they are not words:
+    // `since` is told from a date by what follows it, and dropping the
+    // date first would make every `since 1.2.0` read as a reason.
+    let tokens: Vec<&str> = body
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '\'')
+        .filter(|t| !t.is_empty())
+        .collect();
+    for (at, token) in tokens.iter().enumerate() {
+        let rest = &tokens[at..];
+        if token.chars().any(char::is_alphabetic) {
+            prose.words = prose.words.saturating_add(1);
         }
-        let word = token.to_lowercase();
-        prose.words = prose.words.saturating_add(1);
-        prose.grounds = prose
-            .grounds
-            .saturating_add(GROUNDS.contains(&word.as_str()) as u8);
-        prose.purposes = prose
-            .purposes
-            .saturating_add(PURPOSES.contains(&word.as_str()) as u8);
+        let ground = opens(rest, GROUNDS) || causal_since(rest);
+        prose.grounds = prose.grounds.saturating_add(ground as u8);
+        prose.purposes = prose.purposes.saturating_add(opens(rest, PURPOSES) as u8);
     }
     Some(prose)
+}
+
+/// Does any of these phrases start here? A phrase is spelled with
+/// spaces and matched a TOKEN at a time, which is what makes `because`
+/// inside `because_of` fail — the underscore is part of the token, and
+/// a backticked code span was dropped before any of this.
+fn opens(tokens: &[&str], phrases: &[&str]) -> bool {
+    phrases.iter().any(|phrase| {
+        phrase
+            .split(' ')
+            .enumerate()
+            .all(|(n, part)| tokens.get(n).is_some_and(|t| t.eq_ignore_ascii_case(part)))
+    })
+}
+
+/// Is this `since` a reason rather than a date?
+///
+/// "since 1.2.0", "since v2", "since the last flush", "since then" are
+/// all TEMPORAL and say nothing about why the code is as it is; "since
+/// the buffer is full" is a ground. The senses are told apart by what
+/// follows: a digit anywhere in the next three tokens (which is also
+/// what a version-shaped token carries), the word `then`, or the
+/// landmark `the last`.
+fn causal_since(tokens: &[&str]) -> bool {
+    if !tokens
+        .first()
+        .is_some_and(|t| t.eq_ignore_ascii_case(SINCE))
+    {
+        return false;
+    }
+    let ahead = &tokens[1..tokens.len().min(1 + SINCE_LOOKAHEAD)];
+    let dated = ahead
+        .iter()
+        .any(|t| t.chars().any(|c| c.is_ascii_digit()) || t.eq_ignore_ascii_case("then"));
+    let landmark = ahead
+        .windows(2)
+        .any(|w| w[0].eq_ignore_ascii_case("the") && w[1].eq_ignore_ascii_case("last"));
+    !dated && !landmark
 }
 
 /// Comment syntax off the front and back of every line, and the `*`
@@ -403,6 +484,65 @@ mod tests {
         assert_eq!(s("// wait... one claim"), 1, "an ellipsis is one break");
         assert_eq!(s("// e.g. the retry path"), 1, "an abbreviation is not");
         assert_eq!(s("//"), 0, "nothing was written");
+    }
+
+    #[test]
+    fn every_ground_term_is_counted_once() {
+        let g = |t: &str| measure(t, &[]).unwrap().grounds;
+        for text in [
+            "// retried because the socket was reset",
+            "// otherwise the socket stays open",
+            "// thus the socket is closed here",
+            "// hence the socket is closed here",
+            "// therefore the socket is closed here",
+            "// closed here so that the socket is freed",
+            "// since the socket is already closed",
+        ] {
+            assert_eq!(g(text), 1, "{text:?}");
+        }
+        // `so` alone is not a ground, and the bigram is one ground
+        // rather than two tokens' worth.
+        assert_eq!(g("// so the socket is freed"), 0);
+        assert_eq!(g("// so that the socket is freed, so that it drains"), 2);
+        // Word boundaries: the term inside an identifier, and the term
+        // inside a code span the pipeline already removed.
+        assert_eq!(g("// see because_of for the reason"), 0);
+        assert_eq!(g("// `since_last` is reset here"), 0);
+        assert_eq!(g("// Therefore the read is bounded."), 1, "case-folded");
+    }
+
+    #[test]
+    fn since_is_a_reason_only_when_it_is_not_a_date() {
+        let g = |t: &str| measure(t, &[]).unwrap().grounds;
+        // Temporal: a version, a digit anywhere in reach, a landmark.
+        assert_eq!(g("// deprecated since 1.2.0"), 0);
+        assert_eq!(g("// unsupported since v2 of the protocol"), 0);
+        assert_eq!(g("// unchanged since the last flush"), 0);
+        assert_eq!(g("// unchanged since then"), 0);
+        // Causal: nothing ahead dates it.
+        assert_eq!(g("// skipped since the buffer is full"), 1);
+        assert_eq!(g("// skipped since nothing was written"), 1);
+        // The lookahead is three tokens: a digit further out than that
+        // is a different clause and does not disarm the reason.
+        assert_eq!(g("// skipped since the buffer holds 4 entries"), 1);
+    }
+
+    #[test]
+    fn a_purpose_is_counted_apart_and_never_credited() {
+        let p = |t: &str| measure(t, &[]).unwrap();
+        for text in [
+            "// batched to avoid a second round trip",
+            "// batched to prevent a second round trip",
+            "// batched in order to spare a round trip",
+            "// batching prevents a second round trip",
+            "// batched due to the round trip cost",
+        ] {
+            let m = p(text);
+            assert_eq!((m.purposes, m.grounds), (1, 0), "{text:?}");
+        }
+        // Both senses in one comment, each counted as itself.
+        let both = p("// batched to avoid a round trip, because the link is slow");
+        assert_eq!((both.grounds, both.purposes), (1, 1));
     }
 
     #[test]

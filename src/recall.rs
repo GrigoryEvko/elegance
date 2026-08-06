@@ -281,6 +281,12 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     ("widget.js", "built query", 1.0),
     ("store.go", "built query", 1.0),
     ("worker.rs", "built query", 1.0),
+    // Doc length is a distribution rather than a detector, so its
+    // recall floor is a WORD COUNT: a field doc that runs to sixty
+    // words of prose must keep measuring sixty. A pipeline change that
+    // started eating sentences would pass every precision check by
+    // measuring less.
+    ("worker.rs", "field doc", 60.0),
     ("pool.c", "built query", 1.0),
     ("worker.rs", "bool traps", 1.0),
     ("handler.ts", "bool traps", 1.0),

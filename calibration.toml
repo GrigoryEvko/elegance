@@ -22,6 +22,13 @@
 "returns" = { hi = 2.0 }
 "magic strings" = { hi = 2.0 }
 "cohesion" = { hi = 3.0 }
+# 171 runs is under the 200 a percentile needs: borrowed from py's pooled doc p99
+"module doc" = { hi = 86.0 }
+"type doc" = { hi = 192.0 }
+"fn doc" = { hi = 89.0 }
+# 43 runs is under the 200 a percentile needs: borrowed from py's pooled doc p99
+"field doc" = { hi = 86.0 }
+"inline doc" = { hi = 59.0 }
 "asserts" = { rate = 0.12 }
 "public docs" = { rate = 0.40 }
 
@@ -45,6 +52,12 @@
 "returns" = { hi = 2.0 }
 "magic strings" = { hi = 2.0 }
 "cohesion" = { hi = 5.0 }
+# 178 runs is under the 200 a percentile needs: borrowed from rs's pooled doc p99
+"module doc" = { hi = 322.0 }
+"type doc" = { hi = 322.0 }
+"fn doc" = { hi = 258.0 }
+"field doc" = { hi = 267.0 }
+"inline doc" = { hi = 303.0 }
 "asserts" = { rate = 0.20 }
 "public docs" = { rate = 0.91 }
 
@@ -68,6 +81,13 @@
 "interface width" = { hi = 13.0 }
 "magic strings" = { hi = 3.0 }
 "cohesion" = { hi = 4.0 }
+# gold p05 is zero: this floor is vacuous by the corpus's verdict
+"ground density" = { lo = 0.0 }
+"module doc" = { hi = 22.0 }
+"type doc" = { hi = 124.0 }
+"fn doc" = { hi = 128.0 }
+"field doc" = { hi = 93.0 }
+"inline doc" = { hi = 75.0 }
 "asserts" = { rate = 0.04 }
 "public docs" = { rate = 0.28 }
 
@@ -90,6 +110,15 @@
 "returns" = { hi = 1.0 }
 "interface width" = { hi = 4.0 }
 "magic strings" = { hi = 3.0 }
+# gold p05 is zero: this floor is vacuous by the corpus's verdict
+"ground density" = { lo = 0.0 }
+# 65 runs is under the 200 a percentile needs: borrowed from tsx's pooled doc p99
+"module doc" = { hi = 89.0 }
+# 95 runs is under the 200 a percentile needs: borrowed from tsx's pooled doc p99
+"type doc" = { hi = 89.0 }
+"fn doc" = { hi = 137.0 }
+"field doc" = { hi = 94.0 }
+"inline doc" = { hi = 71.0 }
 "asserts" = { rate = 0.01 }
 "public docs" = { rate = 0.06 }
 
@@ -111,6 +140,14 @@
 "loop depth" = { hi = 2.0 }
 "returns" = { hi = 3.0 }
 "sleepy test" = { hi = 1.0 }
+# 89 runs is under the 200 a percentile needs: borrowed from go's pooled doc p99
+"module doc" = { hi = 114.0 }
+# 117 runs is under the 200 a percentile needs: borrowed from go's pooled doc p99
+"type doc" = { hi = 114.0 }
+"fn doc" = { hi = 163.0 }
+# 164 runs is under the 200 a percentile needs: borrowed from go's pooled doc p99
+"field doc" = { hi = 114.0 }
+"inline doc" = { hi = 76.0 }
 "public docs" = { rate = 0.36 }
 
 [js]
@@ -129,6 +166,14 @@
 "loop depth" = { hi = 1.0 }
 "magic strings" = { hi = 1.0 }
 "skipped tests" = { hi = 1.0 }
+# 10 runs is under the 200 a percentile needs: borrowed from js's pooled doc p99
+"module doc" = { hi = 93.0 }
+# 14 runs is under the 200 a percentile needs: borrowed from js's pooled doc p99
+"type doc" = { hi = 93.0 }
+"fn doc" = { hi = 125.0 }
+# 0 runs is under the 200 a percentile needs: borrowed from js's pooled doc p99
+"field doc" = { hi = 93.0 }
+"inline doc" = { hi = 80.0 }
 "public docs" = { rate = 0.27 }
 
 [zig]
@@ -151,6 +196,13 @@
 "wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 1.0 }
+# gold p05 is zero: this floor is vacuous by the corpus's verdict
+"ground density" = { lo = 0.0 }
+"module doc" = { hi = 363.0 }
+"type doc" = { hi = 137.0 }
+"fn doc" = { hi = 149.0 }
+"field doc" = { hi = 86.0 }
+"inline doc" = { hi = 88.0 }
 "asserts" = { rate = 0.45 }
 "public docs" = { rate = 0.39 }
 
@@ -172,6 +224,13 @@
 "repurposed" = { hi = 1.0 }
 "magic strings" = { hi = 4.0 }
 "commented code" = { hi = 2.0 }
+"module doc" = { hi = 186.0 }
+# 0 runs is under the 200 a percentile needs: borrowed from lua's pooled doc p99
+"type doc" = { hi = 118.0 }
+"fn doc" = { hi = 151.0 }
+# 0 runs is under the 200 a percentile needs: borrowed from lua's pooled doc p99
+"field doc" = { hi = 118.0 }
+"inline doc" = { hi = 79.0 }
 "asserts" = { rate = 0.09 }
 "public docs" = { rate = 0.19 }
 
@@ -191,6 +250,11 @@
 "wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 4.0 }
+"module doc" = { hi = 304.0 }
+"type doc" = { hi = 518.0 }
+"fn doc" = { hi = 134.0 }
+"field doc" = { hi = 56.0 }
+"inline doc" = { hi = 63.0 }
 "asserts" = { rate = 0.00 }
 "public docs" = { rate = 0.35 }
 
@@ -210,6 +274,14 @@
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 1.0 }
 "skipped tests" = { hi = 4.0 }
+# gold p05 is zero: this floor is vacuous by the corpus's verdict
+"ground density" = { lo = 0.0 }
+"module doc" = { hi = 43.0 }
+# 17 runs is under the 200 a percentile needs: borrowed from pl's pooled doc p99
+"type doc" = { hi = 545.0 }
+"fn doc" = { hi = 59.0 }
+"field doc" = { hi = 38.0 }
+"inline doc" = { hi = 636.0 }
 "asserts" = { rate = 0.02 }
 "public docs" = { rate = 0.03 }
 
@@ -230,6 +302,12 @@
 "confusable" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 3.0 }
+# 0 runs is under the 200 a percentile needs: borrowed from php's pooled doc p99
+"module doc" = { hi = 76.0 }
+"type doc" = { hi = 114.0 }
+"fn doc" = { hi = 88.0 }
+"field doc" = { hi = 55.0 }
+"inline doc" = { hi = 52.0 }
 "asserts" = { rate = 0.09 }
 "public docs" = { rate = 0.41 }
 
@@ -252,6 +330,13 @@
 "magic strings" = { hi = 1.0 }
 "skipped tests" = { hi = 1.0 }
 "cohesion" = { hi = 11.0 }
+# gold p05 is zero: this floor is vacuous by the corpus's verdict
+"ground density" = { lo = 0.0 }
+"module doc" = { hi = 95.0 }
+"type doc" = { hi = 360.0 }
+"fn doc" = { hi = 150.0 }
+"field doc" = { hi = 111.0 }
+"inline doc" = { hi = 59.0 }
 "asserts" = { rate = 0.12 }
 "public docs" = { rate = 0.16 }
 
@@ -273,6 +358,14 @@
 "loop depth" = { hi = 1.0 }
 "interface width" = { hi = 26.0 }
 "magic strings" = { hi = 1.0 }
+# gold p05 is zero: this floor is vacuous by the corpus's verdict
+"ground density" = { lo = 0.0 }
+# 15 runs is under the 200 a percentile needs: borrowed from cs's pooled doc p99
+"module doc" = { hi = 209.0 }
+"type doc" = { hi = 95.0 }
+"fn doc" = { hi = 315.0 }
+"field doc" = { hi = 78.0 }
+"inline doc" = { hi = 168.0 }
 "asserts" = { rate = 0.22 }
 "public docs" = { rate = 0.14 }
 
@@ -295,6 +388,13 @@
 "loop depth" = { hi = 1.0 }
 "magic strings" = { hi = 1.0 }
 "skipped tests" = { hi = 9.0 }
+# gold p05 is zero: this floor is vacuous by the corpus's verdict
+"ground density" = { lo = 0.0 }
+"module doc" = { hi = 171.0 }
+"type doc" = { hi = 203.0 }
+"fn doc" = { hi = 162.0 }
+"field doc" = { hi = 74.0 }
+"inline doc" = { hi = 74.0 }
 "public docs" = { rate = 0.50 }
 
 [scala]
@@ -315,6 +415,13 @@
 "interface width" = { hi = 9.0 }
 "magic strings" = { hi = 1.0 }
 "sleepy test" = { hi = 1.0 }
+# gold p05 is zero: this floor is vacuous by the corpus's verdict
+"ground density" = { lo = 0.0 }
+"module doc" = { hi = 166.0 }
+"type doc" = { hi = 193.0 }
+"fn doc" = { hi = 94.0 }
+"field doc" = { hi = 51.0 }
+"inline doc" = { hi = 100.0 }
 "asserts" = { rate = 0.07 }
 "public docs" = { rate = 0.06 }
 
@@ -331,6 +438,13 @@
 "abbreviated" = { hi = 1.0 }
 "loop depth" = { hi = 1.0 }
 "magic strings" = { hi = 4.0 }
+# 6 runs is under the 200 a percentile needs: borrowed from ex's pooled doc p99
+"module doc" = { hi = 58.0 }
+# 11 runs is under the 200 a percentile needs: borrowed from ex's pooled doc p99
+"type doc" = { hi = 58.0 }
+"fn doc" = { hi = 105.0 }
+"field doc" = { hi = 62.0 }
+"inline doc" = { hi = 55.0 }
 "public docs" = { rate = 0.00 }
 
 [sol]
@@ -349,6 +463,11 @@
 "abbreviated" = { hi = 1.0 }
 "loop depth" = { hi = 1.0 }
 "returns" = { hi = 3.0 }
+"module doc" = { hi = 23.0 }
+"type doc" = { hi = 255.0 }
+"fn doc" = { hi = 150.0 }
+"field doc" = { hi = 76.0 }
+"inline doc" = { hi = 81.0 }
 "public docs" = { rate = 0.40 }
 
 [c]
@@ -372,6 +491,13 @@
 "loop depth" = { hi = 2.0 }
 "repurposed" = { hi = 2.0 }
 "magic strings" = { hi = 1.0 }
+# gold p05 is zero: this floor is vacuous by the corpus's verdict
+"ground density" = { lo = 0.0 }
+"module doc" = { hi = 277.0 }
+"type doc" = { hi = 105.0 }
+"fn doc" = { hi = 176.0 }
+"field doc" = { hi = 65.0 }
+"inline doc" = { hi = 94.0 }
 "asserts" = { rate = 0.21 }
 "public docs" = { rate = 0.45 }
 
@@ -389,6 +515,11 @@
 "confusable" = { hi = 1.0 }
 "abbreviated" = { hi = 1.0 }
 "magic strings" = { hi = 1.0 }
+"module doc" = { hi = 255.0 }
+"type doc" = { hi = 129.0 }
+"fn doc" = { hi = 118.0 }
+"field doc" = { hi = 100.0 }
+"inline doc" = { hi = 116.0 }
 "asserts" = { rate = 0.00 }
 "public docs" = { rate = 0.00 }
 
@@ -408,6 +539,13 @@
 "repurposed" = { hi = 1.0 }
 "magic strings" = { hi = 2.0 }
 "commented code" = { hi = 1.0 }
+"module doc" = { hi = 197.0 }
+# 0 runs is under the 200 a percentile needs: borrowed from sh's pooled doc p99
+"type doc" = { hi = 116.0 }
+"fn doc" = { hi = 106.0 }
+# 0 runs is under the 200 a percentile needs: borrowed from sh's pooled doc p99
+"field doc" = { hi = 116.0 }
+"inline doc" = { hi = 96.0 }
 "public docs" = { rate = 0.26 }
 
 [cpp]
@@ -429,6 +567,11 @@
 "wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 1.0 }
+"module doc" = { hi = 427.0 }
+"type doc" = { hi = 235.0 }
+"fn doc" = { hi = 147.0 }
+"field doc" = { hi = 136.0 }
+"inline doc" = { hi = 170.0 }
 "asserts" = { rate = 0.16 }
 "public docs" = { rate = 0.07 }
 
@@ -453,5 +596,12 @@
 "repurposed" = { hi = 2.0 }
 "magic strings" = { hi = 2.0 }
 "commented code" = { hi = 1.0 }
+# gold p05 is zero: this floor is vacuous by the corpus's verdict
+"ground density" = { lo = 0.0 }
+"module doc" = { hi = 235.0 }
+"type doc" = { hi = 65.0 }
+"fn doc" = { hi = 93.0 }
+"field doc" = { hi = 57.0 }
+"inline doc" = { hi = 68.0 }
 "asserts" = { rate = 0.15 }
 "public docs" = { rate = 0.29 }
