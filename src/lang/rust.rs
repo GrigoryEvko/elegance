@@ -82,6 +82,7 @@ pub fn pack() -> Pack {
         doc_markers: &[],
         is_public,
         unit_docs,
+        is_override,
         spooky,
         negation_operand: |node, src| {
             (node.kind() == "unary_expression"
@@ -456,4 +457,18 @@ fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// A method inside `impl Trait for Type` implements someone else's
+/// contract; one inside an inherent `impl Type` does not. The generic
+/// check covers `trait` bodies, so only the impl form is read here.
+fn is_override(node: Node, _src: &[u8]) -> bool {
+    let mut anc = node.parent();
+    while let Some(a) = anc {
+        if a.kind() == "impl_item" {
+            return a.child_by_field_name("trait").is_some();
+        }
+        anc = a.parent();
+    }
+    false
 }

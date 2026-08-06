@@ -918,10 +918,9 @@ fn render_ranked(agg: &mut Agg, ink: ink::Ink, trim: usize, out: &mut String) {
 /// multiples put `suppressions 121` above `cognitive 262>18`.
 /// Findings a budget of zero leaves unrankable, per metric, worst first.
 ///
-/// Classified per FINDING, not per metric. A metric can be pinned in one
-/// language and left at zero in another — `demeter` is, across this
-/// corpus — so judging the metric as a whole sent 3,147 findings to
-/// neither list: too unrankable for one, too rankable for the other.
+/// Classified per FINDING. A metric can be pinned in one language and
+/// left at zero in another, as `demeter` is here, so judging the metric
+/// as a whole strands 3,147 findings between the two lists.
 fn zero_budget_rows(agg: &Agg) -> Vec<(usize, u64)> {
     let mut rows = Vec::new();
     for (m, def) in METRICS.iter().enumerate() {

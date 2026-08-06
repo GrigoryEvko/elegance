@@ -110,12 +110,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    // Every mode that COUNTS across violations needs them all. Retaining
-    // 64 per metric was silently undercounting whatever read them in
-    // aggregate: `flag params` came out in 55 files where the truth was
-    // 789, the worst directory was the wrong one, and tensions reported
-    // 249 against a true 1107. Only `--brief` is exempt, and only because
-    // it reads distributions and totals rather than the offenders.
+    // Every mode that COUNTS across violations needs them all: 64 per
+    // metric undercounts any aggregate read from them, by 789 files to
+    // 55 on `flag params` and 1107 tensions to 249. `--brief` is exempt
+    // because it reads distributions and totals, never the offenders.
     let complete = !args.brief;
     let layers = config::layers(&args.roots[0])?;
     // A reader of one table should know it is not one budget.

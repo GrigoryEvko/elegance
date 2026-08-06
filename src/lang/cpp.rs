@@ -159,6 +159,7 @@ pub fn pack(dialect: Dialect) -> Pack {
         doc_markers: &[],
         is_public,
         unit_docs,
+        is_override: |_, _| false,
         spooky,
         negation_operand: |node, src| {
             (node.kind() == "unary_expression" && field_text_is(node, "operator", src) == Some("!"))

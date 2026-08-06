@@ -98,6 +98,7 @@ pub fn pack() -> Pack {
         doc_markers: &[],
         is_public,
         unit_docs,
+        is_override: |_, _| false,
         spooky,
         negation_operand: |node, _| {
             (node.kind() == "negated_command").then(|| node.named_child(0))?

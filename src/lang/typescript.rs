@@ -113,6 +113,7 @@ pub fn pack(dialect: Dialect) -> Pack {
         doc_markers: &[],
         is_public,
         unit_docs,
+        is_override,
         spooky,
         negation_operand: |node, src| {
             (node.kind() == "unary_expression"
@@ -608,6 +609,28 @@ pub(super) fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// The `override` keyword (4.3+), and a member of a class that declares
+/// something to implement or extend — where a stub body is the contract
+/// being satisfied rather than an empty claim.
+fn is_override(node: Node, src: &[u8]) -> bool {
+    if node
+        .utf8_text(src)
+        .is_ok_and(|t| t.trim_start().starts_with("override "))
+    {
+        return true;
+    }
+    let mut anc = node.parent();
+    while let Some(a) = anc {
+        if a.kind() == "class_declaration" || a.kind() == "class" {
+            return a.child_by_field_name("heritage").is_some()
+                || a.named_children(&mut a.walk())
+                    .any(|c| c.kind() == "class_heritage");
+        }
+        anc = a.parent();
+    }
+    false
 }
 
 #[cfg(test)]

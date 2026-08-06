@@ -83,6 +83,7 @@ pub fn pack() -> Pack {
         doc_markers: &["#:", "##"],
         is_public,
         unit_docs,
+        is_override: |_, _| false,
         spooky,
         negation_operand: |node, _| {
             (node.kind() == "not_operator").then(|| node.child_by_field_name("argument"))?

@@ -97,6 +97,7 @@ pub fn pack() -> Pack {
         doc_markers: &[],
         is_public,
         unit_docs,
+        is_override: |_, _| false,
         spooky: |_, _, _| false,
         negation_operand: |node, src| {
             (node.kind() == "unary_expression" && field_text_is(node, "operator", src) == Some("!"))

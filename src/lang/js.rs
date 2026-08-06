@@ -86,6 +86,7 @@ pub fn pack() -> Pack {
         doc_markers: &[],
         is_public: typescript::is_public,
         unit_docs: typescript::unit_docs,
+        is_override: |_, _| false,
         spooky: typescript::spooky,
         negation_operand: |node, src| {
             (node.kind() == "unary_expression"
