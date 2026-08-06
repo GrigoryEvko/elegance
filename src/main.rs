@@ -141,6 +141,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let wants = wants_for(shape);
     let mut agg = scan(&files, layers, complete, wants);
+    // Which pack hooks this corpus actually reached. A diagnostic, not a
+    // report: the counters only exist under debug assertions, and a
+    // release binary built with `-C debug-assertions=on` measures a whole
+    // corpus at release speed.
+    if std::env::var_os("ELEGANCE_HOOKS").is_some() {
+        eprint!("{}", lang::hooks::table());
+    }
     // A contract is a question about the whole graph, so it is asked
     // once the scan is done rather than per file — and only where the
     // graph was built at all.

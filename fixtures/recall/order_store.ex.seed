@@ -1,6 +1,8 @@
 defmodule App.OrderStore do
   @moduledoc "Orders, and everything that goes wrong with them."
 
+  alias App.Repo
+
   # Credentials pasted in during the incident and never removed.
   @database_url "postgres://admin:s3cr3t9xQ@db.internal/prod"
 

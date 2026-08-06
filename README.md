@@ -430,6 +430,15 @@ heights together.
 A cross-language conformance suite pins the ontology: the same function
 written in every supported language must produce identical metrics.
 
+Every pack hook is asked through a method that records the question, so
+a hook the core never consults is provably distinct from one that
+correctly finds nothing — they used to produce the same zero, and nine
+detectors died in that gap at once. The counters are live only under
+debug assertions; `ELEGANCE_HOOKS=1` on such a build prints the ledger
+after a scan. The test that reads it found Lua's and Ruby's `imports`
+hooks had never been asked once: both are written against `require`,
+which is a CALL in both languages, and neither had a module graph.
+
 ---
 
 ## Languages

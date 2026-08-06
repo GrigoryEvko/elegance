@@ -51,7 +51,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         comment_lines: 0,
         parse_errors: 0,
         too_deep: false,
-        is_test_file: (pack.test_path)(&path.display().to_string()),
+        is_test_file: pack.test_path(&path.display().to_string()),
         mass: 0,
         units: vec![UnitFacts {
             name: "<module>".into(),
@@ -512,13 +512,13 @@ impl Extractor<'_> {
     /// Both matter to `ceremony`, whose 79 gold false positives were
     /// every one of them a documented trait default.
     fn is_override_point(&self, node: Node) -> bool {
-        if (self.pack.is_override)(node, self.src) {
+        if self.pack.is_override(node, self.src) {
             return true;
         }
         let mut anc = node.parent();
         while let Some(a) = anc {
             if self.sem_of(a) == Sem::TypeDef {
-                return !(self.pack.interfaces)(a, self.src).is_empty();
+                return !self.pack.interfaces(a, self.src).is_empty();
             }
             anc = a.parent();
         }
@@ -610,7 +610,7 @@ impl Extractor<'_> {
                 self.record_comment_run(node, ctx);
                 None
             }
-            Sem::None if (self.pack.is_doc)(node) => {
+            Sem::None if self.pack.is_doc(node) => {
                 self.mark_commentary(node);
                 self.record_docstring(node, ctx);
                 None
@@ -694,7 +694,7 @@ impl Extractor<'_> {
         // `eval "..."` is the same node as its try block, and
         // Solidity's `assembly { }` is a statement with no Sem at all.
         // Each pack gates on the sem or kind it cares about.
-        if (self.pack.spooky)(node, sem, self.src) {
+        if self.pack.spooky(node, sem, self.src) {
             self.facts
                 .spooky_lines
                 .push(node.start_position().row as u32 + 1);
@@ -792,7 +792,7 @@ impl Extractor<'_> {
     /// The key set of an anonymous record, when it has enough keys to be
     /// a shape rather than a pair.
     fn record_shape(&mut self, node: Node) {
-        let Some(mut keys) = (self.pack.record_keys)(node, self.src) else {
+        let Some(mut keys) = self.pack.record_keys(node, self.src) else {
             return;
         };
         if keys.len() < MIN_SHAPE_KEYS {
@@ -831,16 +831,16 @@ impl Extractor<'_> {
         // for one. A Catch answers through `catch_sin` instead, whose
         // Swallowed verdict states the same fact once.
         if sem != Sem::Catch {
-            let swallowed = (self.pack.swallows_error)(node, self.src);
+            let swallowed = self.pack.swallows_error(node, self.src);
             self.facts.units[unit_idx].swallowed += swallowed as u16;
             if sem == Sem::If {
                 return;
             }
         }
-        let lost = (self.pack.loses_context)(node, self.src);
+        let lost = self.pack.loses_context(node, self.src);
         let unit = &mut self.facts.units[unit_idx];
         unit.lost_context += lost as u16;
-        match (self.pack.catch_sin)(node, self.src) {
+        match self.pack.catch_sin(node, self.src) {
             Some(crate::lang::CatchSin::Swallowed) => unit.swallowed += 1,
             Some(crate::lang::CatchSin::Broad) => unit.broad_catch += 1,
             None => {}
@@ -867,7 +867,7 @@ impl Extractor<'_> {
         // decorator are caught at open_unit instead. Branch context
         // decides: `if runtime.GOOS == "windows" { t.Skip() }` is
         // stated judgment, and only an UNCONDITIONAL skip suppresses.
-        if !ctx.branched && (self.pack.skips_test)(node, self.src) {
+        if !ctx.branched && self.pack.skips_test(node, self.src) {
             self.note_skipped_test(node);
         }
     }
@@ -875,15 +875,14 @@ impl Extractor<'_> {
     /// What a call IS, judged by the callee alone: a panic where an
     /// error belonged, an assertion, a recursion, a park, a sleep.
     fn record_call_kind(&mut self, node: Node, unit_idx: usize) {
-        let asserts = (self.pack.asserty)(node, self.src);
+        let asserts = self.pack.asserty(node, self.src);
         let vacuous = asserts && self.asserts_a_literal(node);
         let sleeps = self.is_a_sleep(node);
-        let panics = (self.pack.panicky)(node, self.src);
+        let panics = self.pack.panicky(node, self.src);
         let trap = self.bare_boolean_arguments(node) >= MIN_BOOL_TRAP;
         let unit = &self.facts.units[unit_idx];
         let parks = unit.is_async && self.parks_the_thread(node);
-        let recursive =
-            !unit.self_recursive && (self.pack.is_self_call)(node, self.src, &unit.name);
+        let recursive = !unit.self_recursive && self.pack.is_self_call(node, self.src, &unit.name);
         let unit = &mut self.facts.units[unit_idx];
         unit.unwraps += panics as u16;
         unit.assert_calls += asserts as u16;
@@ -915,7 +914,7 @@ impl Extractor<'_> {
         // unrelated `useCustomProperty()` in vscode's electron-main
         // read as violations.
         let stray_hook =
-            ctx.branched && holds_hooks(&unit.name) && (self.pack.is_hook)(node, self.src);
+            ctx.branched && holds_hooks(&unit.name) && self.pack.is_hook(node, self.src);
         let copy_per_iteration = ctx.loops > 0 && self.allocates_a_copy(node);
         let unit = &mut self.facts.units[ctx.unit];
         unit.conditional_hooks += stray_hook as u16;
@@ -953,7 +952,7 @@ impl Extractor<'_> {
     /// resource opened outside a scope guard, and a spawned task whose
     /// handle is thrown away.
     fn record_lifetime(&mut self, node: Node, unit_idx: usize) {
-        let unguarded = (self.pack.unguarded_resource)(node, self.src);
+        let unguarded = self.pack.unguarded_resource(node, self.src);
         let dropped = self.callee_trailing_name(node) == Some("spawn") && discards_its_result(node);
         let unit = &mut self.facts.units[unit_idx];
         unit.unmanaged += unguarded as u16;
@@ -990,7 +989,7 @@ impl Extractor<'_> {
     }
 
     fn record_imports(&mut self, node: Node) {
-        for edge in (self.pack.imports)(node, self.src) {
+        for edge in self.pack.imports(node, self.src) {
             self.import_roots.extend(edge.names.iter().cloned());
             self.facts.imports.push(super::ImportFact {
                 target: edge.target,
@@ -1002,12 +1001,12 @@ impl Extractor<'_> {
     /// Declared method bundles under a TypeDef — the pack answers for
     /// the languages whose interfaces are declarations at all.
     fn record_interfaces(&mut self, node: Node) {
-        let found = (self.pack.interfaces)(node, self.src);
+        let found = self.pack.interfaces(node, self.src);
         self.facts.interfaces.extend(found);
     }
 
     fn record_type_export(&mut self, node: Node) {
-        if (self.pack.is_public)(node, self.src)
+        if self.pack.is_public(node, self.src)
             && let Some(name) = self.scope_name(node).map(Box::<str>::from)
         {
             self.facts.exports.push(name);
@@ -1135,7 +1134,9 @@ impl Extractor<'_> {
     /// then the `name` field, then the parent's binding site (promoted
     /// lambdas), then a `type` field (Rust impl blocks, generics stripped).
     fn scope_name(&self, node: Node) -> Option<&str> {
-        let named = (self.pack.name_node)(node)
+        let named = self
+            .pack
+            .name_node(node)
             .or_else(|| node.child_by_field_name("name"))
             .or_else(|| {
                 let p = node.parent()?;
@@ -1166,12 +1167,12 @@ impl Extractor<'_> {
     /// the pack found them — a `///` run above it, a JSDoc block, a
     /// docstring inside the body, an Elixir `@doc` attribute.
     fn doc_text(&self, node: Node) -> Option<&[u8]> {
-        let (start, end) = (self.pack.doc_span)(node, self.src)?;
+        let (start, end) = self.pack.doc_span(node, self.src)?;
         self.src.get(start as usize..end as usize)
     }
 
     fn open_unit(&mut self, node: Node) -> usize {
-        if (self.pack.skips_test)(node, self.src) {
+        if self.pack.skips_test(node, self.src) {
             self.note_skipped_test(node);
         }
         let recv = self.receiver(node);
@@ -1191,7 +1192,7 @@ impl Extractor<'_> {
             .take_params(node, &mut unit)
             .or_else(|| recv.map(|r| r.name))
             .unwrap_or_else(|| "".into());
-        unit.is_public = (self.pack.is_public)(node, self.src);
+        unit.is_public = self.pack.is_public(node, self.src);
         let docs = self.doc_text(node);
         unit.doc_lines = docs.map_or(0, line_count);
         // What the documentation CLAIMS the parameters are called. Read
@@ -1208,18 +1209,18 @@ impl Extractor<'_> {
         // allocation are skipped for every ordinary function.
         unit.is_override = unit.body != BodyShape::Real && self.is_override_point(node);
         unit.is_passthrough = self.is_passthrough(node, &unit.params);
-        unit.is_async = (self.pack.is_async)(node, self.src);
-        unit.named_test = (self.pack.declares_test)(node, self.src)
-            || (self.facts.is_test_file && (self.pack.names_test)(node, self.src));
+        unit.is_async = self.pack.is_async(node, self.src);
+        unit.named_test = self.pack.declares_test(node, self.src)
+            || (self.facts.is_test_file && self.pack.names_test(node, self.src));
         unit.is_test =
-            self.facts.is_test_file || unit.named_test || (self.pack.is_test_code)(node, self.src);
+            self.facts.is_test_file || unit.named_test || self.pack.is_test_code(node, self.src);
         unit.returns = node
             .child_by_field_name(self.pack.return_type_field)
             .and_then(|r| r.utf8_text(self.src).ok())
             .map(|t| t.trim_start_matches(':').trim())
             .unwrap_or("")
             .into();
-        unit.return_arity = (self.pack.return_arity)(node, self.src);
+        unit.return_arity = self.pack.return_arity(node, self.src);
         self.facts.units.push(unit);
         self.live.push(LiveMap::new());
         self.envy.push(std::collections::HashMap::new());
@@ -1236,7 +1237,7 @@ impl Extractor<'_> {
     fn unit_names(&self, node: Node, recv: Option<&Receiver>) -> (Box<str>, Box<str>) {
         // A composed name outranks every node-based route: it exists
         // precisely because no single node spells the whole name.
-        let name: Box<str> = match (self.pack.composed_name)(node, self.src) {
+        let name: Box<str> = match self.pack.composed_name(node, self.src) {
             Some(composed) => composed.into(),
             None => self.scope_name(node).unwrap_or("?").into(),
         };
@@ -1301,7 +1302,7 @@ impl Extractor<'_> {
         };
         let mut receiver = None;
         for (i, p) in list.into_iter().enumerate() {
-            let Some(info) = (self.pack.param_info)(p, self.src) else {
+            let Some(info) = self.pack.param_info(p, self.src) else {
                 continue;
             };
             if i == 0 && unit.is_method && info.selfish {
@@ -1369,7 +1370,7 @@ impl Extractor<'_> {
             let mut cursor = body.walk();
             let stmts: Vec<Node> = body
                 .named_children(&mut cursor)
-                .filter(|n| !(self.pack.is_doc)(*n) && self.sem_of(*n) != Sem::Comment)
+                .filter(|n| !self.pack.is_doc(*n) && self.sem_of(*n) != Sem::Comment)
                 .collect();
             let [only] = stmts[..] else { return false };
             stmt = only;
@@ -1960,7 +1961,7 @@ impl Extractor<'_> {
     /// nots, negation of != comparisons, negated negative-polarity names,
     /// and De Morgan candidates (not over and/or).
     fn check_negation(&mut self, node: Node, unit: usize) {
-        let Some(mut operand) = (self.pack.negation_operand)(node, self.src) else {
+        let Some(mut operand) = self.pack.negation_operand(node, self.src) else {
             return;
         };
         // Parentheses, and the wrappers a grammar puts around every
@@ -1980,7 +1981,7 @@ impl Extractor<'_> {
         // `!!x` / `not not x` is a coercion to bool — a cast idiom, not
         // inverted logic — and it was 78% of this metric's TypeScript
         // firings. De Morgan candidates below are the real finding.
-        if (self.pack.negation_operand)(operand, self.src).is_some() {
+        if self.pack.negation_operand(operand, self.src).is_some() {
             return;
         }
         let demorgan = self.sem_of(operand) == Sem::BoolOp;

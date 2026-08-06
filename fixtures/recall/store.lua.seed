@@ -1,3 +1,5 @@
+local cjson = require("cjson")
+
 -- Credentials pasted in during the incident and never removed.
 local DB_PASSWORD = "wJalrXUtnFEMIK7MDENG9bPxRfiCYZQ"
 

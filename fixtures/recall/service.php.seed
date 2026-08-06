@@ -2,6 +2,8 @@
 
 namespace App;
 
+use App\Support\Clock;
+
 final class Store
 {
     /** Reaches through three objects to reach one value. */

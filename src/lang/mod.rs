@@ -8,6 +8,7 @@ mod cpp;
 mod csharp;
 mod elixir;
 mod go;
+pub(crate) mod hooks;
 mod java;
 mod js;
 mod lua;
@@ -419,6 +420,11 @@ pub struct ParamInfo {
     pub destructured: bool,
 }
 
+/// Every hook below is PRIVATE and asked through the method of the same
+/// name in [`hooks`], which records that the question was put and
+/// whether the pack answered. That is the only route: a hook the core
+/// never consults reads zero exactly as a hook that correctly finds
+/// nothing does, and nine detectors died in that gap at once.
 pub struct Pack {
     pub lang: Lang,
     pub ts: Language,
@@ -467,10 +473,10 @@ pub struct Pack {
     pub types_declared: bool,
     /// Context-dependent classification the kind table cannot express:
     /// `else if` chains, operator disambiguation, promoting named lambdas.
-    pub refine: fn(Node, &[u8], Sem) -> Sem,
+    refine: fn(Node, &[u8], Sem) -> Sem,
     /// Node holding a unit's name when no `name` field exists (Zig `test`
     /// labels, C declarator chains). Consulted before the generic chain.
-    pub name_node: for<'t> fn(Node<'t>) -> Option<Node<'t>>,
+    name_node: for<'t> fn(Node<'t>) -> Option<Node<'t>>,
     /// A name no single node spells. gtest writes a test's identity as
     /// two macro arguments — `TEST(args_test, basic)` — and prints it
     /// back as `args_test.basic`; judging `basic` alone judges half a
@@ -478,23 +484,23 @@ pub struct Pack {
     /// than a corpus of notorious code. Returns an owned String because
     /// the name is COMPOSED, which is exactly why `name_node` cannot
     /// answer. Consulted before everything else.
-    pub composed_name: fn(Node, &[u8]) -> Option<String>,
+    composed_name: fn(Node, &[u8]) -> Option<String>,
     /// Import edges of one Import node (a `use` tree or `from` list may
     /// carry several).
-    pub imports: fn(Node, &[u8]) -> Vec<ImportInfo>,
+    imports: fn(Node, &[u8]) -> Vec<ImportInfo>,
     /// Classify one node of a parameter list.
-    pub param_info: fn(Node, &[u8]) -> Option<ParamInfo>,
+    param_info: fn(Node, &[u8]) -> Option<ParamInfo>,
     /// Does this call target the named enclosing unit (direct recursion)?
-    pub is_self_call: fn(Node, &[u8], &str) -> bool,
+    is_self_call: fn(Node, &[u8], &str) -> bool,
     /// Is this statement a documentation node (e.g. Python docstring)?
-    pub is_doc: fn(Node) -> bool,
+    is_doc: fn(Node) -> bool,
     /// Comment prefixes this ecosystem reads as documentation rather than
     /// commentary (Sphinx `#:`, section `##`). The universal `///`,
     /// `//!` and `/**` are handled centrally.
     pub doc_markers: &'static [&'static str],
     /// Is this definition part of the public surface? Conservative: when
     /// unsure, say no — coverage findings must be precise.
-    pub is_public: fn(Node, &[u8]) -> bool,
+    is_public: fn(Node, &[u8]) -> bool,
     /// Byte range of the contract documentation attached to this
     /// definition — a docstring, a `///` run, a JSDoc block. Interface
     /// docs, not implementation notes.
@@ -502,7 +508,7 @@ pub struct Pack {
     /// The pack LOCATES and stops there: how many lines that is, how
     /// many words, and what they say are one question in every language
     /// and are answered once, in the core.
-    pub doc_span: DocSpan,
+    doc_span: DocSpan,
     /// Does documentation live INSIDE the body?
     ///
     /// Python and Ruby put the docstring in the first statement, so a
@@ -532,79 +538,81 @@ pub struct Pack {
     /// a member of a declaration that `interfaces` recognises — so this
     /// hook covers only what that misses: an explicit marker on a method
     /// whose enclosing type is an ordinary class.
-    pub is_override: fn(Node, &[u8]) -> bool,
+    is_override: fn(Node, &[u8]) -> bool,
     /// Constructs where the text stops predicting the run (Dijkstra's gap):
     /// eval/exec, computed attribute access, metaclasses, transmute.
-    /// Consulted for Call and TypeDef nodes.
-    pub spooky: fn(Node, Sem, &[u8]) -> bool,
+    /// Consulted for EVERY node — it once saw only calls and typedefs,
+    /// and Solidity's `assembly` block and Perl's `eval "..."` were
+    /// invisible for exactly as long as that lasted.
+    spooky: fn(Node, Sem, &[u8]) -> bool,
     /// If this node is a logical NOT, its operand.
-    pub negation_operand: for<'t> fn(Node<'t>, &[u8]) -> Option<Node<'t>>,
+    negation_operand: for<'t> fn(Node<'t>, &[u8]) -> Option<Node<'t>>,
     /// Error-handling sin of a Catch node, if any.
-    pub catch_sin: fn(Node, &[u8]) -> Option<CatchSin>,
+    catch_sin: fn(Node, &[u8]) -> Option<CatchSin>,
     /// An error-check whose handler is EMPTY (`if err != nil { }`).
     /// Languages where errors are values have no Catch node to judge,
     /// and without this their whole error-discipline family reads
-    /// zero. Consulted on If nodes; counts into `swallowed`.
-    pub swallows_error: fn(Node, &[u8]) -> bool,
+    /// zero. Consulted on If and Try nodes; counts into `swallowed`.
+    swallows_error: fn(Node, &[u8]) -> bool,
     /// Does this handler bind the error, raise a NEW one, and never
     /// mention the original? A separate hook rather than another
     /// `CatchSin`, so the already-calibrated swallowed and broad-catch
     /// numbers do not shift under it.
-    pub loses_context: fn(Node, &[u8]) -> bool,
+    loses_context: fn(Node, &[u8]) -> bool,
     /// Call that panics instead of returning an error (`unwrap`/`expect`).
-    pub panicky: fn(Node, &[u8]) -> bool,
+    panicky: fn(Node, &[u8]) -> bool,
     /// The keys of an anonymous record literal, if this node is one.
     /// Rust and Go build records through declared types, so their packs
     /// answer None and the metric stays silent rather than wrong.
-    pub record_keys: RecordKeys,
+    record_keys: RecordKeys,
     /// Does this call acquire a resource with nothing arranging its
     /// release? Only languages where an explicit scope guard is THE
     /// idiom answer yes: Rust drops on scope exit and needs no guard,
     /// and a language without the idiom has no absence to detect.
-    pub unguarded_resource: fn(Node, &[u8]) -> bool,
+    unguarded_resource: fn(Node, &[u8]) -> bool,
     /// Is this definition async? A blocking call inside one stalls the
     /// whole executor, not just this task.
-    pub is_async: fn(Node, &[u8]) -> bool,
+    is_async: fn(Node, &[u8]) -> bool,
     /// Does this definition DECLARE a test by context-free evidence —
     /// an attribute (`#[test]`), structure (`test('...', fn)`), or a
     /// dedicated kind (Zig `test` blocks)? Judged by the test-quality
     /// metrics wherever it appears.
-    pub declares_test: fn(Node, &[u8]) -> bool,
+    declares_test: fn(Node, &[u8]) -> bool,
     /// Does this definition's NAME follow the ecosystem's test naming
     /// convention (`test_*`, `TestXxx`)? Honored only inside test
     /// files: a production `test_connection` health check is neither a
     /// test to judge nor test code to pardon.
-    pub names_test: fn(Node, &[u8]) -> bool,
+    names_test: fn(Node, &[u8]) -> bool,
     /// Test code by construction beyond the above (Rust `#[cfg(test)]`
     /// modules): exempt from production metrics, never judged as a test.
-    pub is_test_code: fn(Node, &[u8]) -> bool,
+    is_test_code: fn(Node, &[u8]) -> bool,
     /// Is this file path a test file by ecosystem convention?
-    pub test_path: fn(&str) -> bool,
+    test_path: fn(&str) -> bool,
     /// Call/macro that asserts (assert_eq!, self.assertEqual, expect).
-    pub asserty: fn(Node, &[u8]) -> bool,
+    asserty: fn(Node, &[u8]) -> bool,
     /// A React-style hook call, whose identity is its CALL ORDER
     /// rather than its name. Reached through a branch, it renumbers
     /// every hook after it the first time the condition flips.
-    pub is_hook: fn(Node, &[u8]) -> bool,
+    is_hook: fn(Node, &[u8]) -> bool,
     /// How many values this definition makes its callers destructure:
     /// a Go result list's width, a Rust or TS tuple return type's
     /// width, the widest tuple a Python `return` ships. Languages
     /// where a compound result is already a single value (a JS array,
     /// an OCaml tuple, a Zig struct) answer 0 — there is nothing to
     /// destructure that a name would not fix.
-    pub return_arity: fn(Node, &[u8]) -> u16,
+    return_arity: fn(Node, &[u8]) -> u16,
     /// Does this node switch a test off UNCONDITIONALLY — `#[ignore]`,
     /// `it.skip(...)`, `xit(...)`, `t.Skip()`? Consulted on calls and
     /// on definitions, since languages spell it in both places. A
     /// conditional skip (`skipif`, a platform guard) is stated
     /// judgment and must never count.
-    pub skips_test: fn(Node, &[u8]) -> bool,
+    skips_test: fn(Node, &[u8]) -> bool,
     /// Declared method bundles under this TypeDef node — a Go
     /// `interface`, a Rust `trait`, a TS `interface` — each with how
     /// many methods it demands. A Vec because one Go `type (...)`
     /// block declares several. Languages whose interfaces are
     /// conventions rather than declarations answer nothing.
-    pub interfaces: fn(Node, &[u8]) -> Vec<crate::facts::InterfaceFact>,
+    interfaces: fn(Node, &[u8]) -> Vec<crate::facts::InterfaceFact>,
     /// Ancestor kinds that legitimize a numeric literal: const items,
     /// parameter defaults, indexing, types, patterns.
     pub magic_exempt: &'static [&'static str],
@@ -665,8 +673,16 @@ impl Pack {
             .unwrap_or(Sem::None)
     }
 
+    /// The table's verdict, then the pack's chance to overrule it.
+    ///
+    /// `refine` is the one hook whose ANSWER is a change rather than a
+    /// value, so it is asked here by hand instead of through the
+    /// generated wrappers in [`hooks`].
     pub fn sem_of(&self, node: Node, src: &[u8]) -> Sem {
-        (self.refine)(node, src, self.table_sem(node))
+        let table = self.table_sem(node);
+        let refined = (self.refine)(node, src, table);
+        hooks::note(self.lang, hooks::Hook::refine, refined != table);
+        refined
     }
 
     pub fn make_parser(&self) -> Parser {
@@ -1479,7 +1495,7 @@ let classify items limit =
     /// is how detectors die in silence. Fixing a pack must shrink this
     /// list — the parity test refuses a pair that is both seeded alive
     /// and declared dead.
-    const DECLARED_DEAD: &[(Lang, &str, &str)] = &[
+    pub(super) const DECLARED_DEAD: &[(Lang, &str, &str)] = &[
         (
             Lang::Python,
             "unwraps",
@@ -1624,7 +1640,7 @@ let classify items limit =
         (
             Lang::Zig,
             "negations",
-            "the grammar parses !expr as an error-union type; negation is invisible until upstream disambiguates",
+            "the grammar parses !expr as an error-union type, so a negation is visible only where the operand cannot BE a type — `!try f()` and nothing else. The hook answered 44 times in 2.3M questions across the gold corpus and produced no De Morgan candidate, no negative-polarity name and no negated `!=`: 0 violations in 17,956 measurements",
         ),
         (Lang::C, "swallowed", "no exceptions"),
         (Lang::C, "broad catch", "no exceptions"),

@@ -135,9 +135,18 @@ fn name_node(node: Node) -> Option<Node> {
     })
 }
 
+/// Is this call the import form? Spelled against the WHOLE callee, not
+/// its trailing component, so a `config.require(...)` of somebody's own
+/// is not read as a module edge.
+fn requires(call: Node, src: &[u8]) -> bool {
+    call.child_by_field_name("name")
+        .and_then(|n| n.utf8_text(src).ok())
+        == Some("require")
+}
+
 /// `require "x"` and `require("x")` are the only import form.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    if callee_text(node, src) != Some("require") {
+    if !requires(node, src) {
         return Vec::new();
     }
     let Some(target) = first_string(node, src) else {
@@ -290,6 +299,11 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
             Some("and" | "or") => Sem::BoolOp,
             _ => Sem::None,
         },
+        // Lua's import is a CALL, and the core asks about imports at
+        // `Sem::Import` nodes — so until this arm existed the pack's
+        // `imports` hook was written, tested and never once asked, and
+        // Lua had no module graph at all.
+        Sem::Call if requires(node, src) => Sem::Import,
         // `return` at the tail of a chunk is the module's export, not a
         // jump out of control flow.
         Sem::Jump

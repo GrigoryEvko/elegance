@@ -152,10 +152,7 @@ fn name_node(node: Node) -> Option<Node> {
 
 /// `require`, `require_relative` and `autoload` are the import forms.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    if !matches!(
-        callee_text(node, src),
-        Some("require" | "require_relative" | "load")
-    ) {
+    if !requires(node, src) {
         return Vec::new();
     }
     let Some(target) = first_string(node, src) else {
@@ -438,8 +435,24 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
             _ => Sem::None,
         },
         Sem::Lambda if iterates(node, src) => Sem::Loop,
+        // Ruby's import is a CALL, and the core asks about imports at
+        // `Sem::Import` nodes — so until this arm existed the pack's
+        // `imports` hook was written, tested and never once asked, and
+        // Ruby had no module graph at all.
+        Sem::Call if requires(node, src) => Sem::Import,
         _ => sem,
     }
+}
+
+/// Is this call the import form? A RECEIVER disqualifies it: `require`
+/// and `load` are Kernel methods called bare, and `config.load(path)` is
+/// somebody's own method that happens to share the name.
+fn requires(call: Node, src: &[u8]) -> bool {
+    call.child_by_field_name("receiver").is_none()
+        && matches!(
+            callee_text(call, src),
+            Some("require" | "require_relative" | "load")
+        )
 }
 
 /// Blocks given to the iteration methods. The list is deliberately

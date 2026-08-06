@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 async fn refresh_cache(url: &str) {
     std::thread::sleep(std::time::Duration::from_millis(50));
     let _ = url;
@@ -100,3 +102,31 @@ pub struct Retry {
     /// number for the whole of the run.
     pub backoff_ms: u64,
 }
+
+pub trait Retryable {
+    /// Whether a failed attempt is worth repeating. Implementors that
+    /// reach a network say yes; the default here says no.
+    fn retryable(&self) -> bool {
+        false
+    }
+
+    fn attempts(&self) -> u32;
+}
+
+impl Retryable for Retry {
+    fn retryable(&self) -> bool {
+        true
+    }
+
+    fn attempts(&self) -> u32 {
+        3
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn fixture() -> Retry {
+        Retry { backoff_ms: 10 }
+    }
+}
+

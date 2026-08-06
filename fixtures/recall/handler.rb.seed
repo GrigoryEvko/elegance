@@ -1,3 +1,5 @@
+require "json"
+
 module Store
   # Credentials pasted in during the incident and never removed.
   DB_PASSWORD = "s3cretPassw0rdValue99"

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "./Registry.sol";
+
 contract OrderStore {
     /// Credentials pasted in during the incident and never removed.
     string private constant apiKey = "wJalrXUtnFEMIK7MDENG9bPxRfiCYZQ";

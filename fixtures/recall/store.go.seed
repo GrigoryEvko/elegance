@@ -1,5 +1,7 @@
 package store
 
+import "fmt"
+
 var storePassword = "m4k9x2v8q1hunter"
 
 func Sync(db *DB) error {
