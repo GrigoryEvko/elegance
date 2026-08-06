@@ -1010,10 +1010,30 @@ fn name_words(name: &str) -> Vec<String> {
     words
 }
 
+/// What a unit calls itself, without the scope it hangs in.
+pub(crate) fn own_name(qualname: &str) -> &str {
+    qualname.rsplit(['.', ':']).next().unwrap_or(qualname)
+}
+
+/// The word a unit's own name starts with: what job it claims to do.
+///
+/// Read from `own_name`, because a method's qualname leads with the type
+/// it hangs off — `JsonReader.close` would claim the job "json", and so
+/// would every other method of that class, which makes every sibling
+/// look like it does the same work.
+pub(crate) fn job_word(qualname: &str) -> Option<String> {
+    name_words(own_name(qualname)).into_iter().next()
+}
+
 pub const N: usize = METRICS.len();
 
 /// Emit every (metric, value, line, unit label) for one file.
-pub fn for_each(facts: &FileFacts, mut f: impl FnMut(usize, f32, u32, &str)) {
+///
+/// The label is lent from `facts` rather than copied, so a caller can
+/// hold every measurement a file made without allocating a name per
+/// measurement. That is what lets a finding say what the REST of its
+/// file did with the same budget.
+pub fn for_each<'a>(facts: &'a FileFacts, mut f: impl FnMut(usize, f32, u32, &'a str)) {
     for u in &facts.units {
         unit_metrics(u, facts, &mut f);
     }
@@ -1021,7 +1041,11 @@ pub fn for_each(facts: &FileFacts, mut f: impl FnMut(usize, f32, u32, &str)) {
 }
 
 /// Everything one unit is measured by.
-fn unit_metrics(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
+fn unit_metrics<'a>(
+    u: &'a UnitFacts,
+    facts: &'a FileFacts,
+    f: &mut impl FnMut(usize, f32, u32, &'a str),
+) {
     let (cog, cyc) = complexity(u);
     f(CEREMONY, ceremony(u) as f32, u.line, &u.qualname);
     f(COGNITIVE, cog as f32, u.line, &u.qualname);
@@ -1067,7 +1091,11 @@ fn unit_metrics(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32,
 
 /// What a unit's SHAPE is measured by — everything a module scope has
 /// no answer to (it declares no parameters and closes no handlers).
-fn unit_shape(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
+fn unit_shape<'a>(
+    u: &'a UnitFacts,
+    facts: &'a FileFacts,
+    f: &mut impl FnMut(usize, f32, u32, &'a str),
+) {
     {
         {
             f(LENGTH, u.lines as f32, u.line, &u.qualname);
@@ -1150,7 +1178,7 @@ fn unit_shape(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32, u
 }
 
 /// Everything the FILE is measured by, rather than any one unit.
-fn file_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
+fn file_metrics<'a>(facts: &'a FileFacts, f: &mut impl FnMut(usize, f32, u32, &'a str)) {
     // Ratio over non-blank lines: a file of code with no commentary scores 0,
     // a wall of comments approaches 1.
     if facts.lines > 0 {
@@ -1225,7 +1253,7 @@ fn file_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
 /// Length is per run and judged by the run's role. Density is per
 /// FILE, because a single comment is far too small a denominator —
 /// one `because` in an eight-word run reads as 125 per thousand.
-fn comment_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str)) {
+fn comment_metrics<'a>(facts: &'a FileFacts, f: &mut impl FnMut(usize, f32, u32, &'a str)) {
     for c in &facts.comments {
         let Some(m) = doc_metric(c.role) else {
             continue;
@@ -1250,7 +1278,11 @@ fn comment_metrics(facts: &FileFacts, f: &mut impl FnMut(usize, f32, u32, &str))
 /// identifier conventions do not apply. Judging tests as identifiers
 /// flagged every well-named test: 36 of 36 and-name findings on this
 /// repository were tests. Same reasoning collect_spellings applies.
-fn identifier_names(u: &UnitFacts, words: &[String], f: &mut impl FnMut(usize, f32, u32, &str)) {
+fn identifier_names<'a>(
+    u: &'a UnitFacts,
+    words: &[String],
+    f: &mut impl FnMut(usize, f32, u32, &'a str),
+) {
     let conjoined = words.iter().any(|w| w == "and");
     f(AND_NAME, conjoined as u32 as f32, u.line, &u.qualname);
     let generic = !words.is_empty() && words.iter().all(|w| JUNK_WORDS.contains(&w.as_str()));
@@ -1273,11 +1305,11 @@ fn name_lies(u: &UnitFacts, lang: Lang, head: Option<&str>) -> bool {
     lying_predicate || mutating_getter
 }
 
-fn names_and_contracts(
-    u: &UnitFacts,
+fn names_and_contracts<'a>(
+    u: &'a UnitFacts,
     lang: Lang,
     cog: u32,
-    f: &mut impl FnMut(usize, f32, u32, &str),
+    f: &mut impl FnMut(usize, f32, u32, &'a str),
 ) {
     let words = name_words(&u.name);
     // Terse-name stays judged for tests: it is about a VARIABLE's

@@ -81,6 +81,126 @@ struct Offender {
     /// scan has no single budget for `cognitive` to look up later. Without
     /// it a finding can only say how big it is, never how far out it is.
     band: (Option<f32>, Option<f32>),
+    /// What the rest of the file did with the same budget, kept for the
+    /// same reason as the band: the file's own measurements are gone by
+    /// render time, and re-reading the file to recover them is a second
+    /// parse of every file in the scan.
+    local: Local,
+}
+
+/// What the OTHER bodies in one file did with the budget this one broke.
+///
+/// A finding states a global rule and a global budget; the reader is
+/// standing in a particular file, and the answer to "is this one body
+/// that drifted, or is this file like this" decides whether the work is
+/// an extraction or an afternoon. Measured on this stage's reference
+/// tree: 285 of 344 shape findings (83%) share their file with another
+/// body over the same budget, and the ranked list caps at one body per
+/// file, so it can never say so on its own.
+///
+/// It cannot read as an excuse, which was the risk in putting a local
+/// distribution beside a global rule: of the 332 findings there with
+/// three or more peers, TWO sat at or below their file's median for the
+/// metric — `main` reads live span 626 where the next body in the file
+/// reads 7, `_build_v5` reads 101 magic numbers where the next reads 6.
+#[derive(Default)]
+struct Local {
+    /// Other bodies here the same metric measured.
+    peers: u32,
+    /// How many of those broke the same budget.
+    over: u32,
+    /// The largest peer value that did not — what staying inside looks
+    /// like in this file.
+    clean: f32,
+    /// A peer whose own name claims the same job and stayed inside, with
+    /// what it measured. The strongest thing a finding can say, because
+    /// it names the shape the author already uses one screen away.
+    kin: Option<(Box<str>, f32)>,
+}
+
+/// One measurement: the metric, what it read, and the body it read.
+type Measured<'a> = (usize, f32, u32, &'a str);
+
+/// One file's whole reading of one metric, before any body asks about
+/// itself.
+#[derive(Default)]
+struct Around<'a> {
+    /// Bodies here the metric measured.
+    n: u32,
+    /// How many broke the budget.
+    over: u32,
+    /// The largest value that did not.
+    clean: f32,
+    /// Per job word, the largest clean value and the name that read it.
+    kin: HashMap<String, (f32, &'a str)>,
+}
+
+impl Around<'_> {
+    /// The same neighbourhood seen from one body: itself taken out of
+    /// the counts, and the peer that claims its job if there is one.
+    ///
+    /// Only a body OVER the budget asks — every caller is a violation —
+    /// so it is always one of the `over`. Saturating anyway, because a
+    /// count that goes backwards should read as "none" rather than wrap
+    /// to four billion.
+    fn seen_from(&self, name: &str) -> Local {
+        let kin = metrics::job_word(name)
+            .and_then(|job| self.kin.get(&job))
+            .map(|(value, peer)| ((*peer).into(), *value));
+        Local {
+            peers: self.n.saturating_sub(1),
+            over: self.over.saturating_sub(1),
+            clean: self.clean,
+            kin,
+        }
+    }
+}
+
+/// What every body in this file measured, per metric it broke.
+///
+/// Only metrics something here broke: a file measures every metric and
+/// breaks a handful, and the neighbourhood of a budget nobody crossed is
+/// never asked for. Linear — each metric's readings are folded once and
+/// every violator of it then reads the same fold.
+fn neighbourhoods<'a>(
+    measured: &[Measured<'a>],
+    budgets: &metrics::Budgets,
+) -> HashMap<usize, Around<'a>> {
+    let mut broken = [false; N];
+    for (m, value, _, _) in measured {
+        broken[*m] |= budgets.violates(*m, *value);
+    }
+    let mut around: HashMap<usize, Around> = HashMap::new();
+    for &(m, value, _, name) in measured {
+        if !broken[m] {
+            continue;
+        }
+        let seen = around.entry(m).or_default();
+        seen.n += 1;
+        if budgets.violates(m, value) {
+            seen.over += 1;
+            continue;
+        }
+        seen.clean = seen.clean.max(value);
+        // A peer must be doing comparable work to be worth naming. Half
+        // the budget, because the largest CLEAN value in a file is
+        // otherwise routinely a two-line accessor, and "`nm` does the
+        // same at 1" is not advice about a 195-line builder.
+        if budgets.0[m].1.is_some_and(|hi| value < hi / 2.0) {
+            continue;
+        }
+        // Its own name, not its qualname: the clause has already said
+        // the peer is in this file, so the class it hangs off is width
+        // spent saying that twice.
+        if let Some(job) = metrics::job_word(name) {
+            let own = metrics::own_name(name);
+            let best = seen.kin.entry(job).or_insert((value, own));
+            if value > best.0 {
+                *best = (value, own);
+            }
+        }
+    }
+    around
 }
 
 impl Offender {
@@ -559,10 +679,24 @@ impl Agg {
             }
         });
         self.collect_untested(facts, &path);
+        self.measure(facts, &path);
+    }
+
+    /// Measure one file and record what broke, each finding carrying what
+    /// the rest of the file did with the same budget.
+    ///
+    /// Two passes over the file's own measurements rather than one,
+    /// because a finding cannot be told about peers the walk has not
+    /// reached yet. The measurements are held between them, not the
+    /// source: `for_each` LENDS its labels, so the hold costs one `Vec`
+    /// per file and not a string per measurement.
+    fn measure(&mut self, facts: &FileFacts, path: &str) {
+        let lang = facts.lang as usize;
         let budgets = *self.budgets.for_file(&facts.path).for_lang(facts.lang);
+        let mut measured: Vec<Measured> = Vec::new();
         metrics::for_each(facts, |m, value, line, name| {
             if let Some(r) = metrics::RATE_METRICS.iter().position(|x| *x == m) {
-                let cell = &mut self.rates[facts.lang as usize][r];
+                let cell = &mut self.rates[lang][r];
                 cell.0 += (value > 0.0) as u64;
                 cell.1 += 1;
             }
@@ -571,16 +705,24 @@ impl Agg {
             if budgets.violates(m, value) {
                 self.metric_by_lang[lang][m].violated += 1;
                 self.violations_n[m] += 1;
-                let o = Offender {
-                    value,
-                    path: path.clone(),
-                    line,
-                    name: name.to_string(),
-                    band: budgets.0[m],
-                };
-                push_offender(&mut self.offenders[m], o, self.cap);
             }
+            measured.push((m, value, line, name));
         });
+        let around = neighbourhoods(&measured, &budgets);
+        for (m, value, line, name) in measured {
+            if !budgets.violates(m, value) {
+                continue;
+            }
+            let o = Offender {
+                value,
+                path: path.to_string(),
+                line,
+                name: name.to_string(),
+                band: budgets.0[m],
+                local: around[&m].seen_from(name),
+            };
+            push_offender(&mut self.offenders[m], o, self.cap);
+        }
     }
 
     /// The codebase-wide recurrences this file contributes to: clone
@@ -1267,12 +1409,14 @@ fn carried_lines(g: &Carried, noun: &str, trim: usize, tint: (ink::Ink, &str)) -
         true => String::new(),
         false => format!("  {}", at.name),
     };
-    // What it costs beyond itself goes last, on its own line: it is a
-    // fact about the file or the codebase, not another budget.
-    let cost = match &g.cost {
+    // Then outward: what the rest of this FILE does with the same
+    // budget, then what the body costs beyond its own file. Neither is
+    // another budget, so neither belongs on the line that lists them.
+    let aside = |clause: Option<String>| match clause {
         None => String::new(),
-        Some(cost) => format!("\n          {}{cost}{}", ink.faint(), ink.off()),
+        Some(clause) => format!("\n          {}{clause}{}", ink.faint(), ink.off()),
     };
+    let cost = aside(neighbours(g.findings[0].0, at)) + &aside(g.cost.clone());
     format!(
         // Indented to the budget column, so the metric list reads as a
         // continuation of the line that counted it rather than as
@@ -1370,6 +1514,61 @@ impl Costs {
             n => Some(format!("{n} more bodies carry these same numbers")),
         }
     }
+}
+
+/// What this body's own file already does with the budget it broke
+/// worst — the fact a finding was missing, because every other fact on
+/// the line is about the global rule.
+///
+/// One clause, chained most useful first, because all three answer the
+/// same question and a line each would put the entry back where the
+/// grouping found it. In order:
+///
+///   a peer that claims the same job and stayed inside — the shape the
+///   author already uses, one screen away, and the only clause that
+///   names a target rather than describing a situation;
+///
+///   nothing else here is over — the file knows how to do this and one
+///   body drifted, so the work is an extraction;
+///
+///   others here are over too — the unit of work is the FILE, which the
+///   ranked list can never say for itself because it shows at most one
+///   body per file.
+///
+/// Measured on the reference tree: the third case is 83% of shape
+/// findings, and the first covers 29 of 49 cognitive findings, 23 of 43
+/// cyclomatic and 16 of 27 depth. It is thinnest exactly where severity
+/// ranking looks — `main`, `<module>` and `generate_spice` have no
+/// namesake by construction — which is where the second clause has the
+/// most to say.
+fn neighbours(m: usize, at: &Offender) -> Option<String> {
+    let local = &at.local;
+    let show = |v: f32| fmt(&METRICS[m], v);
+    let name = METRICS[m].name;
+    if let Some((peer, value)) = &local.kin {
+        return Some(format!(
+            "{name} — {peer} does the same job at {}",
+            show(*value)
+        ));
+    }
+    if local.peers == 0 {
+        return None;
+    }
+    if local.over > 0 {
+        let (over, all) = (local.over + 1, local.peers + 1);
+        return Some(format!("{name} — {over} of {all} bodies here are over it"));
+    }
+    // What staying inside looks like here, but only against a CEILING:
+    // under a floor the largest clean peer is the FURTHEST from the
+    // finding, and "the other 30 peak at 12 asserts" answers nothing
+    // about a body that has none.
+    let peak = match at.band.1 {
+        Some(hi) if at.value > hi => {
+            format!(", the other {} peak at {}", local.peers, show(local.clean))
+        }
+        _ => format!(", the other {} stay inside", local.peers),
+    };
+    Some(format!("{name} — alone here{peak}"))
 }
 
 /// Every budget the body broke, worst first, until the line is as wide
@@ -3443,6 +3642,7 @@ mod tests {
             line: 1,
             name: String::new(),
             band: (Some(0.02), Some(0.60)),
+            local: Local::default(),
         };
         let m = METRICS
             .iter()
@@ -3461,6 +3661,7 @@ mod tests {
             line,
             name: name.to_string(),
             band: (None, Some(hi)),
+            local: Local::default(),
         }
     }
 
@@ -3469,6 +3670,126 @@ mod tests {
             .iter()
             .position(|d| d.name == name)
             .unwrap_or_else(|| panic!("no metric named {name}"))
+    }
+
+    /// The one finding a metric produced for a named body.
+    fn finding<'a>(agg: &'a Agg, m: usize, name: &str) -> &'a Offender {
+        agg.offenders[m]
+            .iter()
+            .find(|o| o.name == name)
+            .unwrap_or_else(|| panic!("no {} finding on {name}", METRICS[m].name))
+    }
+
+    /// A finding states a global rule; the reader is standing in one
+    /// file. What the REST of that file did with the same budget is read
+    /// off the measurements the file already produced — the alternative
+    /// is parsing every file twice.
+    ///
+    /// `params` because its default ceiling is 5, so a signature says
+    /// exactly what a body will measure without depending on which
+    /// budget the gold calibration happens to pin for Python.
+    #[test]
+    fn a_finding_carries_what_the_rest_of_its_file_did() {
+        let m = metric("params");
+        let mut agg = Agg::new();
+        agg.add_file(&facts(
+            "kin.py",
+            "def load_all(a, b, c, d, e, f, g):\n    return 1\n\n\
+             def load_one(a, b, c):\n    return 2\n\n\
+             def tiny(a):\n    return 3\n",
+        ));
+        agg.add_file(&facts(
+            "trivial.py",
+            "def emit_all(a, b, c, d, e, f, g):\n    return 1\n\n\
+             def emit_one(a):\n    return 2\n",
+        ));
+        agg.add_file(&facts(
+            "crowded.py",
+            "def walk_all(a, b, c, d, e, f, g):\n    return 1\n\n\
+             def scan_all(a, b, c, d, e, f, g):\n    return 2\n",
+        ));
+
+        let alone = &finding(&agg, m, "load_all").local;
+        assert_eq!(alone.over, 0, "nothing else in kin.py is over");
+        assert_eq!(alone.clean, 3.0, "the largest peer that stayed inside");
+        let (peer, at) = alone.kin.as_ref().expect("load_one claims the same job");
+        assert_eq!((&**peer, *at), ("load_one", 3.0));
+
+        // A peer must be doing comparable work to be worth naming: the
+        // largest CLEAN value in a file is otherwise routinely a
+        // one-argument shim, and "emit_one does the same at 1" is not
+        // advice about a seven-argument entry point.
+        let trivial = &finding(&agg, m, "emit_all").local;
+        assert!(
+            trivial.kin.is_none(),
+            "a peer under half the budget does not claim the same job: {:?}",
+            trivial.kin
+        );
+
+        let crowded = &finding(&agg, m, "walk_all").local;
+        assert_eq!(crowded.over, 1, "scan_all is over the same budget");
+        assert!(
+            crowded.kin.is_none(),
+            "a peer that is itself over budget is no example"
+        );
+    }
+
+    /// One clause per entry, chosen most useful first. All three answer
+    /// the same question — what does this file already do — so a line
+    /// each would put the entry back where the grouping found it.
+    #[test]
+    fn the_file_says_the_most_useful_thing_it_knows_and_only_that() {
+        let m = metric("params");
+        let mut at = over(("a.py", 3, "load_all"), 7.0, 5.0);
+        assert_eq!(
+            neighbours(m, &at),
+            None,
+            "a lone body in a lone file has no neighbourhood to report"
+        );
+
+        at.local = Local {
+            peers: 9,
+            over: 3,
+            clean: 4.0,
+            kin: None,
+        };
+        let crowded = "params — 4 of 10 bodies here are over it";
+        assert_eq!(neighbours(m, &at).as_deref(), Some(crowded));
+
+        at.local.over = 0;
+        let alone = "params — alone here, the other 9 peak at 4";
+        assert_eq!(neighbours(m, &at).as_deref(), Some(alone));
+
+        at.local.over = 3;
+        at.local.kin = Some(("load_one".into(), 3.0));
+        let named = "params — load_one does the same job at 3";
+        assert_eq!(
+            neighbours(m, &at).as_deref(),
+            Some(named),
+            "a clause that names a target outranks one that counts a crowd"
+        );
+
+        // Under a FLOOR the largest clean peer is the furthest from the
+        // finding, so naming it answers nothing: "the other 9 peak at 8
+        // asserts" is no help to a body that has none.
+        let floor = Offender {
+            value: 0.0,
+            path: "a.py".to_string(),
+            line: 3,
+            name: "test_it".to_string(),
+            band: (Some(1.0), None),
+            local: Local {
+                peers: 9,
+                over: 0,
+                clean: 8.0,
+                kin: None,
+            },
+        };
+        let inside = "test asserts — alone here, the other 9 stay inside";
+        assert_eq!(
+            neighbours(metric("test asserts"), &floor).as_deref(),
+            Some(inside)
+        );
     }
 
     /// The body-shape metrics state one fact between them, so a list

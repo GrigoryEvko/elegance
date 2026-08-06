@@ -122,6 +122,59 @@ into one entry that says how many it stands for. Different values are
 different bodies — three functions over the same three budgets at
 different numbers are three functions to open.
 
+### What the file already knows
+
+Every other fact on an entry is about the global rule: a metric, a
+budget calibrated on admired code, a distance. The reader is standing in
+one particular file, and the fact they are missing is what the **rest of
+that file** did with the same budget — which decides whether the work is
+an extraction or an afternoon:
+
+```
+    9x  3 gates      config.py:42  _build_v5
+        magic numbers 101>11  live span 192>48  length 195>76
+        magic numbers — alone here, the other 6 peak at 6
+        17 files import this one
+
+    3x  1 suspicion  drc/beol_193nm_drc.py:1005  check_via_enclosure
+        loop depth 3>1
+        loop depth — check_col_width does the same job at 1
+```
+
+One clause, chosen most useful first, because all three answer that one
+question. A peer whose own name claims the same job and stayed inside
+wins: it names a target one screen away rather than describing a
+situation, and the two above are both `check_*(cell, report)` rules over
+the same polygons — one written with a single loop, the other with
+three. Failing that, nothing else here being over says the file knows
+how to do this and one body drifted. Failing that, a count of how many
+bodies here are over the same budget — which the ranked list can never
+say for itself, because it shows at most one body per file.
+
+It cannot read as an excuse, which was the risk in showing a local
+distribution beside a global rule. On the reference tree two of the 332
+findings with three or more peers sat at or below their file's median:
+`main` reads live span 626 where the next body in the file reads 7, and
+`_build_v5` reads 101 magic numbers where the next reads 6. The crowded
+case is 83% of shape findings there, and a namesake covers 29 of 49
+`cognitive` findings, 23 of 43 `cyclomatic` and 16 of 27 `depth` — it is
+thinnest exactly where severity ranking looks, since `main`, `<module>`
+and `generate_spice` have no namesake by construction, and that is where
+the second clause has the most to say.
+
+A named peer must be doing comparable work: at least half the budget,
+because the largest clean value in a file is otherwise routinely a
+one-argument shim, and *`emit_one` does the same at 1* is not advice
+about a seven-argument entry point. Under a **floor** the largest clean
+peer is the furthest from the finding, so it goes unnamed — *the other
+30 peak at 12 asserts* answers nothing about a body that has none.
+
+All of it is read off the measurements the file already produced, in a
+second pass over them rather than over the source; `for_each` lends its
+labels, so holding one file's measurements costs a `Vec` per file and
+not a string per measurement. Whole-corpus cost, measured: 25.9s and
+2.0 GiB, against 25-26s and 2.1 GB before.
+
 ### Machine output
 
 `--json` emits **schema 2**; `--sarif` emits SARIF 2.1.0. A format flag
