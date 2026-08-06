@@ -1,0 +1,65 @@
+-- Credentials pasted in during the incident and never removed.
+local DB_PASSWORD = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYZQ"
+
+local M = {}
+
+-- Chunk assembled from a request field, then compiled.
+function M.render(tmpl, env)
+  return load(tmpl, "template", "t", env)
+end
+
+-- Reaches through three objects to get one value.
+function M.owner_city(order)
+  return order.customer.address.city
+end
+
+-- Neither branch of the condition, spelled the long way.
+function M.usable(item)
+  if not (item.stock and item.listed) then
+    return false
+  end
+  if not item.is_invalid then
+    return true
+  end
+  return false
+end
+
+-- Says it returns a boolean; returns the row.
+function M.is_active(row)
+  return row
+end
+
+-- The flag decides which of two unrelated things happen.
+function M.write(data, dry_run)
+  if dry_run then
+    return 0
+  end
+  return #data
+end
+
+-- Query assembled by interpolation.
+function M.find(id)
+  return "SELECT * FROM users WHERE id = '" .. id .. "'"
+end
+
+-- Command assembled from a caller's value.
+function M.archive(name)
+  os.execute("tar czf " .. name .. ".tgz ./data")
+end
+
+-- The same unnamed string, over and over.
+function M.route(kind)
+  if kind == "primary-replica" then return "primary-replica" end
+  if kind == "primary-replica" then return "primary-replica" end
+  return "primary-replica"
+end
+
+-- A local that means two different things before it is done.
+function M.tally(rows)
+  local acc = 0
+  for _, r in ipairs(rows) do acc = acc + r.n end
+  acc = tostring(acc)
+  return acc
+end
+
+return M

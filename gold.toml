@@ -578,3 +578,339 @@ lang = "shell"
 name = "direnv"
 url = "https://github.com/direnv/direnv"
 sha = "b00e451f547f39be7ab836d969054114a465a0f9"
+
+# --- languages of the Perl era, added 2026-08. Selection was measured,
+# not assumed: eight candidates per language were cloned and scored on
+# parse quality, volume and language purity, and the worst three of
+# each dropped. What that caught, which reputation would not have:
+# lapis parses to ZERO units because its .lua is generated from 129
+# MoonScript files, and machine-written code is content, not craft.
+
+# --- perl
+
+[[repo]]
+lang = "perl"
+name = "mojo"
+url = "https://github.com/mojolicious/mojo"
+sha = "b4de430651b722f560b1577da9018e3f402d96ab"
+
+[[repo]]
+lang = "perl"
+name = "Dancer2"
+url = "https://github.com/PerlDancer/Dancer2"
+sha = "23baea04efe6397f9a0f254011ba13688860418c"
+
+[[repo]]
+lang = "perl"
+name = "Plack"
+url = "https://github.com/plack/Plack"
+sha = "c8215144d5e0cdd826ae2f497a14ca4d5c8a00c9"
+
+[[repo]]
+lang = "perl"
+name = "PPI"
+url = "https://github.com/Perl-Critic/PPI"
+sha = "455bfa73fc5de4511913e8e7808e8a95c28b8b4d"
+
+[[repo]]
+lang = "perl"
+name = "ack3"
+url = "https://github.com/beyondgrep/ack3"
+sha = "48528db42f9b73f61b829842c4d6d0cb8fc54ced"
+
+# --- php
+
+[[repo]]
+lang = "php"
+name = "composer"
+url = "https://github.com/composer/composer"
+sha = "6ffc1177404d0c50119c22dde6564a380f4a82c9"
+
+[[repo]]
+lang = "php"
+name = "guzzle"
+url = "https://github.com/guzzle/guzzle"
+sha = "d1cbca76970939a9c2ced55b1e25ea26f34fc773"
+
+[[repo]]
+lang = "php"
+name = "PHP-Parser"
+url = "https://github.com/nikic/PHP-Parser"
+sha = "fbd47f7ebcbb450138d92642a0a53b72a5285dda"
+
+[[repo]]
+lang = "php"
+name = "monolog"
+url = "https://github.com/Seldaek/monolog"
+sha = "57eb1028342134e701e77c617565d51b6e5a2a53"
+
+[[repo]]
+lang = "php"
+name = "flysystem"
+url = "https://github.com/thephpleague/flysystem"
+sha = "b277b5dc3d56650b68904117124e79c851e12376"
+
+# --- ruby
+
+[[repo]]
+lang = "ruby"
+name = "sequel"
+url = "https://github.com/jeremyevans/sequel"
+sha = "09cfd8b98c1b3c62891a140dbf6e8fe3360f6a67"
+
+[[repo]]
+lang = "ruby"
+name = "rubocop"
+url = "https://github.com/rubocop/rubocop"
+sha = "29dc7dae6a0a0fea99b2d3a072f611a4fbbb9951"
+prune = "spec"
+# spec/: 250k lines of deliberately-broken Ruby. A linter's
+# fixtures are pathological BY DESIGN, so a corpus of admired code
+# must not read them as admired code.
+
+[[repo]]
+lang = "ruby"
+name = "roda"
+url = "https://github.com/jeremyevans/roda"
+sha = "809b0b738d9be0ca7f1c48bd422d6298d1c6097b"
+
+[[repo]]
+lang = "ruby"
+name = "sinatra"
+url = "https://github.com/sinatra/sinatra"
+sha = "cb22afd7902b566b6eaba6c4ea89739494a65d12"
+
+[[repo]]
+lang = "ruby"
+name = "rodauth"
+url = "https://github.com/jeremyevans/rodauth"
+sha = "28c16ddb08a38969dbf68c55ed48a41c452cedda"
+
+# --- lua
+
+[[repo]]
+lang = "lua"
+name = "kong"
+url = "https://github.com/Kong/kong"
+sha = "fa9c3b695af72668f135cb17bbb84a8b4dc511d2"
+prune = "spec"
+# spec/: 221k of the repo's 336k lines. Integration tests, not
+# pathological, but one repo would otherwise speak for two thirds of
+# the language.
+
+[[repo]]
+lang = "lua"
+name = "lua-language-server"
+url = "https://github.com/LuaLS/lua-language-server"
+sha = "a9aa09a801a8d08d6813caf5e7a5898a63da4ebc"
+
+[[repo]]
+lang = "lua"
+name = "Penlight"
+url = "https://github.com/lunarmodules/Penlight"
+sha = "4776299a2e8b82a22d0728a3b81af8bf611a7c04"
+
+[[repo]]
+lang = "lua"
+name = "luarocks"
+url = "https://github.com/luarocks/luarocks"
+sha = "7d534272cde44fa8c648d1e4f65f4670b987b8fb"
+
+[[repo]]
+lang = "lua"
+name = "luacheck"
+url = "https://github.com/lunarmodules/luacheck"
+sha = "2f764bdcabe8b7c19deadf0e9bb2adc19df1a4c5"
+prune = "spec"
+# spec/: same argument as rubocop — a linter's fixtures are
+# bad code on purpose.
+
+# --- java and c#: the two largest languages the tool did not read.
+# guava and serilog were dropped from the candidates. guava at 58,879
+# units is 38% of the Java corpus on its own; serilog parses at 13.9%
+# because `#if` splits method SIGNATURES there, which is the C caveat
+# in another language — conditional compilation across a syntactic
+# boundary, excluded by the confidence bar and counted in the header.
+
+# --- java
+
+[[repo]]
+lang = "java"
+name = "netty"
+url = "https://github.com/netty/netty"
+sha = "1b9dabf3be91a066888ba349c65a0a92a0d52ee7"
+
+[[repo]]
+lang = "java"
+name = "jackson-databind"
+url = "https://github.com/FasterXML/jackson-databind"
+sha = "bebea48c927d8e1711c5da2b701eba68dd756eb6"
+
+[[repo]]
+lang = "java"
+name = "junit5"
+url = "https://github.com/junit-team/junit5"
+sha = "afcbfc41ef065903b74a752e9455e6428b9e12ed"
+
+[[repo]]
+lang = "java"
+name = "caffeine"
+url = "https://github.com/ben-manes/caffeine"
+sha = "33127bbab8ef48517744ee1defb72134e1f3d0c0"
+
+[[repo]]
+lang = "java"
+name = "gson"
+url = "https://github.com/google/gson"
+sha = "9d5d6a8f457f3e60f2e84bf39b904c9a774d2365"
+
+# --- csharp
+
+[[repo]]
+lang = "csharp"
+name = "AutoMapper"
+url = "https://github.com/AutoMapper/AutoMapper"
+sha = "dfa6dd587c5854b4beee5934beb39ba6e9569b84"
+
+[[repo]]
+lang = "csharp"
+name = "Newtonsoft.Json"
+url = "https://github.com/JamesNK/Newtonsoft.Json"
+sha = "4f73e74372445108d2c1bda37b36e6f5e43402e0"
+
+[[repo]]
+lang = "csharp"
+name = "Polly"
+url = "https://github.com/App-vNext/Polly"
+sha = "101d6af79738b2da9a95f216b525daf46cd07b5c"
+
+[[repo]]
+lang = "csharp"
+name = "Dapper"
+url = "https://github.com/DapperLib/Dapper"
+sha = "72a54c475f75e18cb93cba0809d00a5e6e49efd9"
+
+[[repo]]
+lang = "csharp"
+name = "FluentValidation"
+url = "https://github.com/FluentValidation/FluentValidation"
+sha = "ea299fe59719950018fa240dab86da414190d7f4"
+
+# --- swift, scala, elixir and solidity. Two more candidates were
+# cut for grammar defects rather than for code quality. Haskell:
+# tree-sitter-haskell 0.23.1 CORRUPTS THE HEAP on two adjacent
+# LANGUAGE pragmas, aborting on 89 of 128 aeson files and 321 of 366
+# in pandoc, with no newer release. PowerShell: the grammar fails on
+# a scriptblock used as a hashtable value and on `.where({...})`,
+# which put 95% of ImportExcel out of reach — and a corpus of only
+# the files that parse is a corpus biased toward simple ones.
+
+# --- swift
+
+[[repo]]
+lang = "swift"
+name = "swift-nio"
+url = "https://github.com/apple/swift-nio"
+sha = "72973283d7780ba94d69caff08c5c3c72a2dc6f7"
+
+[[repo]]
+lang = "swift"
+name = "vapor"
+url = "https://github.com/vapor/vapor"
+sha = "4024681926e6bbff05e413eeb3e0ddfc6901aa45"
+
+[[repo]]
+lang = "swift"
+name = "Alamofire"
+url = "https://github.com/Alamofire/Alamofire"
+sha = "0455bfb650893e86ad07ace16e5f2d36dadf46f4"
+
+[[repo]]
+lang = "swift"
+name = "swift-algorithms"
+url = "https://github.com/apple/swift-algorithms"
+sha = "5b7143f8e291dee0e14c118fd0212487f0b37af5"
+
+# --- scala
+
+[[repo]]
+lang = "scala"
+name = "cats"
+url = "https://github.com/typelevel/cats"
+sha = "73d5ddac90bde081f11ef28437343fb98eb7b55a"
+
+[[repo]]
+lang = "scala"
+name = "zio"
+url = "https://github.com/zio/zio"
+sha = "3afa1355e7c601765cc17e374e1d5051df16cac7"
+
+[[repo]]
+lang = "scala"
+name = "http4s"
+url = "https://github.com/http4s/http4s"
+sha = "bd36076457434e8c83aede0b518b3373fcb0d7d9"
+
+[[repo]]
+lang = "scala"
+name = "circe"
+url = "https://github.com/circe/circe"
+sha = "2fb611bb49619e4287b6ac048d2283c2781f4943"
+
+# --- elixir
+
+[[repo]]
+lang = "elixir"
+name = "phoenix"
+url = "https://github.com/phoenixframework/phoenix"
+sha = "3f002b784a80c2d75338d68830449fbd5e38e659"
+
+[[repo]]
+lang = "elixir"
+name = "ecto"
+url = "https://github.com/elixir-ecto/ecto"
+sha = "6c0c457be65d907df9fccbe11fb73a779662979e"
+
+[[repo]]
+lang = "elixir"
+name = "plug"
+url = "https://github.com/elixir-plug/plug"
+sha = "2463704245eccacb2c528d7651cf86120b9f0543"
+
+[[repo]]
+lang = "elixir"
+name = "absinthe"
+url = "https://github.com/absinthe-graphql/absinthe"
+sha = "de0e411f3ca4f31ad8cf5e31921c735aa3b0f986"
+
+[[repo]]
+lang = "elixir"
+name = "oban"
+url = "https://github.com/oban-bg/oban"
+sha = "8b3f010644dcb20a9554fd5f62265c4e06e9389b"
+
+# --- solidity
+
+[[repo]]
+lang = "solidity"
+name = "openzeppelin-contracts"
+url = "https://github.com/OpenZeppelin/openzeppelin-contracts"
+sha = "bb8ed388b04690b09f8c36586f5cde9fdd67fb40"
+
+[[repo]]
+lang = "solidity"
+name = "solmate"
+url = "https://github.com/transmissions11/solmate"
+sha = "89365b880c4f3c786bdd453d4b8e8fe410344a69"
+
+[[repo]]
+lang = "solidity"
+name = "v3-core"
+url = "https://github.com/Uniswap/v3-core"
+sha = "d0831dc6b8a318df3872b6d68f6de135c9f3ec29"
+
+[[repo]]
+lang = "solidity"
+name = "aave-v3-core"
+url = "https://github.com/aave/aave-v3-core"
+sha = "782f51917056a53a2c228701058a6c3fb233684a"

@@ -1,0 +1,85 @@
+<?php
+
+namespace App;
+
+final class Store
+{
+    // Credentials pasted in during the incident and never removed.
+    private const API_KEY = 'AKIAIOSFODNN7EXAMPLE';
+    private const DB_PASSWORD = 'hunter2-not-a-placeholder';
+
+    /** Reaches through three objects to reach one value. */
+    public function ownerCity(Order $order): string
+    {
+        return $order->customer->address->city;
+    }
+
+    /** Not not present. */
+    public function available(Item $item): bool
+    {
+        if (!(!$item->stock)) {
+            return true;
+        }
+        return false;
+    }
+
+    /** Catches everything and says nothing. */
+    public function loadConfig(string $path): ?array
+    {
+        try {
+            return $this->parse($path);
+        } catch (\Throwable $e) {
+        }
+        return null;
+    }
+
+    /** Says it returns a boolean; returns the row. */
+    public function isActive(array $row): array
+    {
+        return $row;
+    }
+
+    /** The flag decides which of two unrelated things happen. */
+    public function write(string $data, bool $dryRun): int
+    {
+        if ($dryRun) {
+            return 0;
+        }
+        return strlen($data);
+    }
+
+    /** A cast the checker cannot verify. */
+    public function count(mixed $rows): int
+    {
+        return (int) $rows;
+    }
+
+    /** Untyped, and the type it does declare says nothing. */
+    public function merge($first, mixed $second)
+    {
+        return $first;
+    }
+
+    /** Compiles a string handed in from outside. */
+    public function evaluate(string $expr)
+    {
+        return eval($expr);
+    }
+
+    /** @phpstan-ignore-next-line */
+    public function legacy(): void
+    {
+    }
+
+    /** Command assembled from a caller's value. */
+    public function archive(string $name): void
+    {
+        shell_exec('tar czf ' . $name . '.tgz ./data');
+    }
+
+    /** Query assembled by interpolation. */
+    public function find(string $id): string
+    {
+        return "SELECT * FROM users WHERE id = '$id'";
+    }
+}

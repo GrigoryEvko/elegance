@@ -1,0 +1,52 @@
+module Store
+  # Credentials pasted in during the incident and never removed.
+  API_KEY = "AKIAIOSFODNN7EXAMPLE"
+  DB_PASSWORD = "hunter2-not-a-placeholder"
+
+  class Orders
+    # Reaches through three objects to reach one value.
+    def owner_city(order)
+      order.customer.address.city
+    end
+
+    # Not not present.
+    def available?(item)
+      return true if !(!item.stock)
+      false
+    end
+
+    # Rescues everything and says nothing.
+    def load_config(path)
+      YAML.load_file(path)
+    rescue
+    end
+
+    # Rescues the widest class there is.
+    def fetch(url)
+      Net::HTTP.get(url)
+    rescue Exception => e
+      nil
+    end
+
+    # Says it returns a boolean; returns the row.
+    def is_active(row)
+      row
+    end
+
+    # The flag decides which of two unrelated things happen.
+    def write(data, dry_run)
+      return 0 if dry_run
+      data.length
+    end
+
+    # Method resolved from a string at run time.
+    def dispatch(name, *args)
+      send(name, *args)
+    end
+
+    # Keyword splat hides what this accepts.
+    def configure(**opts)
+      @opts = opts
+    end
+  end
+end

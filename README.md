@@ -1,6 +1,6 @@
 # elegance
 
-**Per-function code metrics for twelve languages.** Budgets pinned to
+**Per-function code metrics for twenty-two languages.** Budgets pinned to
 gold-corpus p99 — the tool reports what deviates from what admired code
 does. Tree-sitter parse, Rust, 6.39M lines in 34s.
 
@@ -364,11 +364,21 @@ written in every supported language must produce identical metrics.
 | JavaScript | `.js` `.mjs` `.cjs` `.jsx` | |
 | Go | `.go` | median declared interface holds **1** method |
 | Zig | `.zig` | |
-| OCaml | `.ml` `.mli` | control group — tightest budgets in the corpus |
+| OCaml | `.ml` `.mli` | control group — tightest branching in the corpus |
 | C | `.c` `.h`\* | no preprocessing; numbers are floors |
 | C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` `.h`\* | RAII kills `unmanaged`; gtest names composed |
 | CUDA | `.cu` `.cuh` | rides the C++ pack, own budgets |
 | shell | `.sh` `.bash` | no declared parameters, so no interface family |
+| Perl | `.pl` `.pm` `.t` | parameters only where signatures are used |
+| PHP | `.php` | types grew in from the outside; `untyped params` reads the migration |
+| Ruby | `.rb` `.rake` `.gemspec` | tightest function length in the corpus at 37 |
+| Lua | `.lua` | no classes, so the class family is structurally silent |
+| Java | `.java` | everything declared, so the type family reads at full strength |
+| C# | `.cs` | `async` is syntax, so `blocking async` is live here and dead in Java |
+| Swift | `.swift` | `!` and `try!` are what `unwraps` counts |
+| Scala | `.scala` `.sc` | `if` and `match` are expressions, so branches sit inside arguments |
+| Elixir | `.ex` `.exs` | homoiconic: the ontology is built from call names, not syntax |
+| Solidity | `.sol` | inline assembly is `spooky`; visibility is compulsory, so `public docs` reads a decision |
 
 \* `.h` is the one extension that underdetermines its language.
 [The text decides it](#the-c-family).
@@ -471,6 +481,56 @@ against Python's 18/76, Rust's 16/93 and TypeScript's 32/106** — three
 to five times tighter on complexity. Idiomatic OCaml iterates with
 `List.iter` and a lambda, which the ontology reads as a call rather than
 a loop, so loop-based metrics read low for it by construction.
+
+Perl declares parameters only through signatures (`sub f ($x, $y = 1)`).
+A sub that unpacks `@_` by hand reads as taking none, so the interface
+family measures the age of the code.
+
+The Perl grammar is `ts-parser-perl` 1.2.1. `tree-sitter-perl` stops at
+1.1.2 and rejects `use Module -flag`, which costs 1,214 parse errors in
+2,946 corpus files against 21 for the current grammar.
+
+**Ruby's function length p99 is 37**, against OCaml's 52 and Python's 76.
+Blocks are its control flow, so `each` and `map` count as iteration;
+otherwise Ruby contains no loops.
+
+**Lua reads cognitive p99 = 68**, four times Python's. It has no classes,
+so the class family is structurally silent: a method is a function in a
+table and `self` is a calling convention.
+
+**PHP holds two ages at once.** An untyped array-shaped function and a
+`final readonly class` with union types are both ordinary, so `untyped
+params` measures the migration.
+
+**C# and Java branch least of any language with classes** — cognitive
+p99 = 8 and 12, against Python's 18 and TypeScript's 32, with only
+OCaml's 6 below them. Mandatory class structure spreads the branching
+across many small methods instead of concentrating it in one.
+
+C# splits a method signature across `#if` in the same way C does, and
+those files fall below the confidence bar and are counted in the header.
+The `serilog` corpus candidate parsed at 86% for this reason.
+
+**Elixir's cognitive p99 is 6**, level with OCaml and the lowest here.
+The language is homoiconic, so `def`, `if` and `case` are calls rather
+than syntax and this pack classifies them by the name being called.
+`Enum.each` is a function, so iteration reads as a call the way it does
+in OCaml and Ruby, and loop depth measures nothing.
+
+**Solidity is the one language here where a finding is financial.**
+Inline assembly drops beneath both the type system and the overflow
+checks, so it is `spooky` on the same grounds as `unsafe`; `delegatecall`
+runs another contract's code against this contract's storage.
+
+Two candidates were cut for grammar defects rather than for what their
+code looks like. `tree-sitter-haskell` 0.23.1 corrupts the heap on two
+adjacent `LANGUAGE` pragmas — it aborts on 89 of 128 files in aeson and
+321 of 366 in pandoc, and there is no later release. The PowerShell
+grammar cannot read a scriptblock used as a hashtable value or
+`.where({...})`, which puts 95% of ImportExcel out of reach; calibrating
+on the files that survive would pin budgets to the simple ones. Kotlin
+cannot be built at all: `tree-sitter-kotlin` 0.3.8 pins tree-sitter
+below 0.23, and two crates cannot link the same native library.
 
 **Shell provisions production and nothing was measuring it.** A single
 Kubernetes repository here holds 22.6k lines of it, including a
