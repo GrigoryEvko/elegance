@@ -67,7 +67,8 @@ public final class OrderStore {
         return render(doc, true, false)
     }
 
-    /// The label is suppressed, so the call site shows a bare value.
+    /// Three parameters the type system cannot narrow. The `_` label is
+    /// deliberate: it must NOT read as a keyword splat.
     public func merge(_ first: Any, second: Any) -> Any {
         return first
     }

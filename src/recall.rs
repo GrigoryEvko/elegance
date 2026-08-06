@@ -431,7 +431,6 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     ("OrderStore.swift", "wildcard match", 1.0),
     ("OrderStore.swift", "negations", 1.0),
     ("OrderStore.swift", "demeter", 1.0),
-    ("OrderStore.swift", "kw opacity", 1.0),
     ("OrderStore.swift", "flag params", 1.0),
     ("OrderStore.swift", "loose types", 3.0),
     ("OrderStore.swift", "lying name", 1.0),

@@ -2267,6 +2267,11 @@ let classify items limit =
             "`swiftlint:disable` configures a style linter; there is no type checker to silence",
         ),
         (Lang::Swift, "untyped params", "every parameter typed"),
+        (
+            Lang::Swift,
+            "kw opacity",
+            "no keyword splat; an `_` argument label suppresses the WORD at the call site and still declares one named, typed parameter",
+        ),
         (Lang::Swift, "conditional hook", "no call-order identity"),
         (
             Lang::Swift,

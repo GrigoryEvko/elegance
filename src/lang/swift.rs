@@ -153,6 +153,15 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 /// Swift labels its arguments, so a parameter has an EXTERNAL name the
 /// caller writes and an internal one the body uses. `_` suppresses the
 /// label, and that is the form that makes a call site unreadable.
+///
+/// It is NOT a keyword splat, and reading it as one was the worst cell
+/// in the tool: `kw_splat` used to be `external == Some("_")`, which
+/// billed 1121 of 3604 Swift units — 31.1%, against 2.4% in Python and
+/// 0.2% in Ruby, the two languages that have the construct. A splat
+/// hides how many arguments there are and what they are called; an
+/// underscored label declares exactly one, with its type, and only
+/// suppresses the WORD at the call site. Swift has no `**kwargs`, so
+/// the cell is declared dead rather than tuned.
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     if node.kind() != "parameter" {
         return None;
@@ -160,17 +169,14 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     let ty = node.child_by_field_name("type");
     let type_text = ty.and_then(|t| t.utf8_text(src).ok()).unwrap_or("");
     let name = node.child_by_field_name("name")?.utf8_text(src).ok()?;
-    let external = node
-        .child_by_field_name("external_name")
-        .and_then(|n| n.utf8_text(src).ok());
     Some(ParamInfo {
         name: name.into(),
         typed: ty.is_some(),
         loose: LOOSE.contains(&type_text.trim_end_matches(['?', '!'])),
         boolish: type_text.starts_with("Bool"),
         optional: node.child_by_field_name("default_value").is_some() || type_text.ends_with('?'),
-        // An underscored label means the call site shows a bare value.
-        kw_splat: external == Some("_"),
+        // The language has no keyword splat; see the note above.
+        kw_splat: false,
         // `_ xs: Int...` — the ellipsis is a token of the parameter.
         splat: node
             .utf8_text(src)
