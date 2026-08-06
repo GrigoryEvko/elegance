@@ -1492,23 +1492,27 @@ impl Extractor<'_> {
         // Known cost, and it is the honest one: a Decorator whose every
         // method forwards and none adds behaviour IS a Middle Man, and
         // this silences it.
-        if crate::lang::declares_an_override(node, self.src) {
-            return false;
-        }
-        // A LAMBDA HAS NO NAME TO BE SHALLOW ABOUT. `decode: (str) =>
+        //
+        // A LAMBDA HAS NO NAME to be shallow about. `decode: (str) =>
         // BigInt(str)` is a forwarder by definition — that is what a
-        // lambda IS — and it exists to adapt a callback's shape. The
-        // declaration spelling its own name is what separates it from
-        // `def decode(str) = BigInt(str)`, which is a named layer and
-        // stays judged.
-        if crate::lang::is_a_lambda(node.kind()) {
+        // lambda IS — and it exists to adapt a callback's shape.
+        if crate::lang::declares_an_override(node, self.src)
+            || crate::lang::is_a_lambda(node.kind())
+        {
             return false;
         }
-        let Some(body) = node.child_by_field_name("body") else {
+        let Some(call) = self.sole_forwarded_call(node) else {
             return false;
         };
-        // Expression-bodied lambdas forward directly; blocks must hold
-        // exactly one statement (a docstring does not count as substance).
+        self.forwards_its_own_params(call, params)
+    }
+
+    /// The ONE call a body consists of, if it consists of one.
+    ///
+    /// An expression-bodied lambda forwards directly; a block must hold
+    /// exactly one statement, where a docstring is not substance.
+    fn sole_forwarded_call<'t>(&self, node: Node<'t>) -> Option<Node<'t>> {
+        let body = node.child_by_field_name("body")?;
         let mut stmt = body;
         if self.pack.table_sem(body) != Sem::Call {
             let mut cursor = body.walk();
@@ -1516,57 +1520,66 @@ impl Extractor<'_> {
                 .named_children(&mut cursor)
                 .filter(|n| !self.pack.is_doc(*n) && self.sem_of(*n) != Sem::Comment)
                 .collect();
-            let [only] = stmts[..] else { return false };
+            let [only] = stmts[..] else { return None };
             stmt = only;
         }
-        // Unwrap `return expr` / expression statements to the call itself.
-        while matches!(stmt.kind(), "return_statement" | "expression_statement") {
-            match stmt.named_child(0) {
-                Some(inner) => stmt = inner,
-                None => return false,
-            }
+        // Unwrap `return expr` / expression statements to the call
+        // itself. `expression_list` is Go's: it fields a return VALUE
+        // inside a list even when there is one of them.
+        while matches!(
+            stmt.kind(),
+            "return_statement" | "expression_statement" | "expression_list"
+        ) {
+            stmt = stmt.named_child(0)?;
         }
         if self.pack.table_sem(stmt) != Sem::Call {
-            return false;
+            return None;
         }
         // FORWARDING TO A SUPERCLASS is the language asking, not the
         // author choosing: a subclass that wants an inherited
         // constructor must re-declare it, and `super(cause)` is the
         // whole of that re-declaration.
-        if self
+        let calls_super = self
             .callee_trailing_name(stmt)
             .into_iter()
             .chain(
                 stmt.child_by_field_name("function")
                     .and_then(|f| f.utf8_text(self.src).ok()),
             )
-            .any(|name| matches!(name, "super" | "base" | "parent" | "super()" | "parent::"))
-        {
-            return false;
-        }
-        let Some(args) = stmt.child_by_field_name("arguments") else {
-            return false;
-        };
-        let mut cursor = args.walk();
-        let arg_names: Option<Vec<&str>> = args
-            .named_children(&mut cursor)
+            .any(|name| matches!(name, "super" | "base" | "parent" | "super()" | "parent::"));
+        (!calls_super).then_some(stmt)
+    }
+
+    /// Are the call's arguments this unit's OWN parameters, as a prefix
+    /// in declaration order? Defaults may be dropped.
+    ///
+    /// A zero-argument callee matches vacuously, which made every
+    /// one-line accessor (`self.bits.len()`) a Middle Man — half of all
+    /// Rust firings. Known cost: a genuine zero-argument forwarder now
+    /// goes unseen.
+    ///
+    /// `call_arguments`, not the `arguments` field: half the packs wrap
+    /// each argument in a node of their own (PHP's `argument`, Swift's
+    /// `value_argument`) or keep the list somewhere else entirely (Zig
+    /// nests them under the call, OCaml repeats a field), and reading
+    /// the field directly saw none of them — C#, OCaml and Zig read
+    /// zero forwarders in the whole gold corpus.
+    fn forwards_its_own_params(&self, call: Node, params: &[super::ParamFact]) -> bool {
+        let args = call_arguments(self.pack, call);
+        let Some(names): Option<Vec<&str>> = args
+            .iter()
             .map(|a| {
-                (self.pack.table_sem(a) == Sem::Ident)
+                (self.pack.table_sem(*a) == Sem::Ident)
                     .then(|| a.utf8_text(self.src).ok())
                     .flatten()
             })
-            .collect();
-        let Some(arg_names) = arg_names else {
+            .collect()
+        else {
             return false;
         };
-        // Forwarded args must be this unit's own parameters, as a prefix in
-        // declaration order (defaults may be dropped). A zero-argument
-        // callee matches vacuously, which made every one-line accessor
-        // (`self.bits.len()`) a Middle Man — half of all Rust firings.
-        // Known cost: a genuine zero-argument forwarder now goes unseen.
-        !arg_names.is_empty()
-            && arg_names.len() <= params.len()
-            && arg_names.iter().zip(params).all(|(a, p)| *a == &*p.name)
+        !names.is_empty()
+            && names.len() <= params.len()
+            && names.iter().zip(params).all(|(a, p)| *a == &*p.name)
     }
 
     /// Does this call park the thread rather than yield? Node's `*Sync`
