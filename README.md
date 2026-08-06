@@ -216,6 +216,7 @@ React. Solid is exempt: it tracks dependencies at run time.
 | `generic name` | |
 | `lying name` | `is_`/`has_` must return the language's boolean — `Boolean`, `Bool`, a TypeScript type predicate `v is T`, C89's `int`; `get_` must not mutate; a declared test's name is prose, not a contract |
 | `broad catch` · `unwraps` | |
+| `lost context` | a handler that binds the error, raises a new one and never names the original; an operandless re-raise — `throw;`, bare `raise` — carries the stack onward and is the remedy |
 | `spooky` | eval, computed attribute access, metaclasses, transmute |
 | `echo comments` · `comment ratio` | |
 | `module doc` · `type doc` · `fn doc` · `field doc` · `inline doc` | prose words per comment run, pinned per language **and role** |

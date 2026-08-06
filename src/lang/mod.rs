@@ -905,11 +905,25 @@ fn declared_async(node: Node, src: &[u8]) -> bool {
 /// names the kind that re-raises; the binding is the caught error's
 /// name; a re-raise whose text mentions that name has kept the cause,
 /// whether by `from e`, `cause: e`, or interpolation.
+///
+/// An OPERANDLESS raiser — C#'s `throw;`, Python's and Ruby's bare
+/// `raise` — carries the caught error onward untouched, and it is the
+/// one form that preserves the stack exactly. It mentions the binding
+/// nowhere because it mentions NOTHING, so the text test read it as a
+/// fresh error and the rule ran backwards: Microsoft's own guidance is
+/// that `throw;` is right and `throw ex;` is the bug. 34 of C#'s 36
+/// gold findings and 11 of Python's 20 were this.
 fn rethrows_without_cause(body: Node, raiser: &str, bound: &str, src: &[u8]) -> bool {
     let mut stack = vec![body];
     let mut rethrows = false;
     while let Some(n) = stack.pop() {
         if n.kind() == raiser {
+            // Exonerating the whole handler, as a cause-carrying raise
+            // already does: one path that keeps the stack is the
+            // evidence the author did not mean to drop it.
+            if !raises_something(n) {
+                return false;
+            }
             let text = n.utf8_text(src).unwrap_or("");
             if mentions(text, bound) {
                 return false;
@@ -923,6 +937,16 @@ fn rethrows_without_cause(body: Node, raiser: &str, bound: &str, src: &[u8]) -> 
         }
     }
     rethrows
+}
+
+/// Does this raiser name a value to raise? A comment is a named node in
+/// every tree-sitter grammar, so `throw; // rethrow` must not read as
+/// `throw x`.
+fn raises_something(raiser: Node) -> bool {
+    let mut cursor = raiser.walk();
+    raiser
+        .named_children(&mut cursor)
+        .any(|c| !c.kind().contains("comment"))
 }
 
 /// Whole-word containment, so binding `e` is not found inside `err`.
@@ -2895,6 +2919,89 @@ let classify items limit =
             assert_eq!((u.swallowed, u.broad_catch), (1, 0), "{lang:?} {src:?}");
         }
     }
+
+    #[test]
+    fn an_operandless_reraise_carries_the_cause_it_never_names() {
+        for (lang, name, src, want) in RERAISE {
+            let f = facts_at(*lang, name, src);
+            let u = f
+                .units
+                .iter()
+                .find(|u| &*u.name == "f")
+                .unwrap_or_else(|| panic!("{lang:?}: no unit `f` in {src:?}"));
+            assert_eq!(u.lost_context, *want, "{lang:?} {src:?}");
+        }
+    }
+
+    /// Whether a handler drops the cause. Each source declares one unit
+    /// `f`; the flag is whether `lost context` should fire.
+    ///
+    /// The OPERANDLESS rows are what this table was built for. A bare
+    /// `throw;` / `raise` hands the caught error onward with its stack
+    /// intact — it is the remedy, not the defect — and it mentions the
+    /// binding nowhere only because it mentions nothing at all. The
+    /// text test read that as a fresh error, so the rule ran exactly
+    /// backwards on 34 of C#'s 36 gold findings and 11 of Python's 20.
+    const RERAISE: &[(Lang, &str, &str, u16)] = &[
+        (
+            Lang::CSharp,
+            "A.cs",
+            "class A {\n void f() {\n try { g(); } catch (Exception x) { Log(x); throw; }\n }\n}\n",
+            0,
+        ),
+        (
+            Lang::CSharp,
+            "A.cs",
+            "class A {\n void f() {\n try { g(); } catch (Exception x) { Log(x); throw new Bad(\"no\"); }\n }\n}\n",
+            1,
+        ),
+        (
+            Lang::CSharp,
+            "A.cs",
+            "class A {\n void f() {\n try { g(); } catch (Exception x) { throw new Bad(\"no\", x); }\n }\n}\n",
+            0,
+        ),
+        (
+            Lang::Python,
+            "a.py",
+            "def f():\n    try:\n        g()\n    except ValueError as e:\n        log(e)\n        raise\n",
+            0,
+        ),
+        (
+            Lang::Python,
+            "a.py",
+            "def f():\n    try:\n        g()\n    except ValueError as e:\n        log(e)\n        raise Bad(\"no\")\n",
+            1,
+        ),
+        (
+            Lang::Python,
+            "a.py",
+            "def f():\n    try:\n        g()\n    except ValueError as e:\n        raise Bad(\"no\") from e\n",
+            0,
+        ),
+        // A comment is a named child in every tree-sitter grammar, and
+        // one written INSIDE the statement — before the semicolon — is
+        // a child of the throw itself, so "raises nothing" has to be
+        // judged on the children that are code.
+        (
+            Lang::CSharp,
+            "A.cs",
+            "class A {\n void f() {\n try { g(); } catch (Exception x) { throw /* keep the stack */; }\n }\n}\n",
+            0,
+        ),
+        (
+            Lang::Java,
+            "A.java",
+            "class A {\n void f() {\n try { g(); } catch (Exception e) { throw new Bad(\"no\"); }\n }\n}\n",
+            1,
+        ),
+        (
+            Lang::TypeScript,
+            "a.ts",
+            "function f() {\n try { g(); } catch (e) { throw new Error(\"no\"); }\n}\n",
+            1,
+        ),
+    ];
 
     /// What a single literal argument to an assertion means. Each
     /// source declares one unit `f`, and the flag is whether it counts
