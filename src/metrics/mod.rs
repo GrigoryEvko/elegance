@@ -3,6 +3,7 @@
 //! two-sided (too few comments is obscurity, too many is noise).
 
 use crate::facts::{BodyShape, CtrlFact, FileFacts, UnitFacts};
+use crate::lang::{Lang, promises_a_boolean};
 use crate::sem::Sem;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1046,7 +1047,7 @@ fn unit_metrics(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32,
     }
     if !u.is_module {
         unit_shape(u, facts, f);
-        names_and_contracts(u, cog, f);
+        names_and_contracts(u, facts.lang, cog, f);
     }
 }
 
@@ -1257,7 +1258,23 @@ fn identifier_names(u: &UnitFacts, words: &[String], f: &mut impl FnMut(usize, f
     f(ABBREVIATED, crushed as f32, u.line, &u.qualname);
 }
 
-fn names_and_contracts(u: &UnitFacts, cog: u32, f: &mut impl FnMut(usize, f32, u32, &str)) {
+/// Does the name's first word promise something the signature does not
+/// keep? Two contracts, both Cunningham's expectation test: a predicate
+/// head answers with a boolean, and a getter does not mutate.
+fn name_lies(u: &UnitFacts, lang: Lang, head: Option<&str>) -> bool {
+    let lying_predicate = matches!(head, Some("is" | "has" | "can" | "should"))
+        && !u.returns.is_empty()
+        && !promises_a_boolean(lang, &u.returns);
+    let mutating_getter = head == Some("get") && u.mut_receiver;
+    lying_predicate || mutating_getter
+}
+
+fn names_and_contracts(
+    u: &UnitFacts,
+    lang: Lang,
+    cog: u32,
+    f: &mut impl FnMut(usize, f32, u32, &str),
+) {
     let words = name_words(&u.name);
     // Terse-name stays judged for tests: it is about a VARIABLE's
     // name, and live span judges tests too.
@@ -1280,17 +1297,20 @@ fn names_and_contracts(u: &UnitFacts, cog: u32, f: &mut impl FnMut(usize, f32, u
         u.line,
         &u.qualname,
     );
-    let head = words.first().map(String::as_str);
-    let lying_predicate = matches!(head, Some("is" | "has" | "can" | "should"))
-        && !u.returns.is_empty()
-        && !u.returns.contains("bool");
-    let mutating_getter = head == Some("get") && u.mut_receiver;
-    f(
-        LYING_NAME,
-        (lying_predicate || mutating_getter) as u32 as f32,
-        u.line,
-        &u.qualname,
-    );
+    // A test's name is a SENTENCE, and `Should_throw_when_provider_is_null`
+    // promises nothing about a return type — it names the behaviour under
+    // test. `should` alone was 2,915 of C#'s 3,026 gold findings, all of
+    // them [Fact] methods returning void. Same exemption, same reason, as
+    // identifier_names above.
+    if !u.named_test {
+        let head = words.first().map(String::as_str);
+        f(
+            LYING_NAME,
+            name_lies(u, lang, head) as u32 as f32,
+            u.line,
+            &u.qualname,
+        );
+    }
     // Assertions arrive as statements (Python `assert`) or as calls
     // matched by the pack's asserty hook (assert!, std.debug.assert).
     let asserts =
@@ -1697,6 +1717,75 @@ mod tests {
             }
         });
         assert_eq!(liars, ["IsReady"]);
+    }
+
+    /// One honest predicate and one liar per language, so the rule is
+    /// proved in both directions where it used to answer only one.
+    /// Every honest spelling below was a gold FINDING before this table
+    /// existed: Scala's capital `Boolean` (495 of its 570), Swift's
+    /// `Bool` (all 76), TypeScript's type predicate (1,212 of 1,348),
+    /// C89's `int` (343 of 353) and C++'s trailing return type.
+    const CONTRACT: &[(Lang, &str, &str, &[&str])] = &[
+        (
+            Lang::Scala,
+            "t.scala",
+            "object O {\n  def isWindows: Boolean = true\n  def isCount: Int = 1\n}\n",
+            &["O.isCount"],
+        ),
+        (
+            Lang::Swift,
+            "t.swift",
+            "struct S {\n  func isReady() -> Bool { return true }\n  func isCount() -> Int { return 1 }\n}\n",
+            &["S.isCount"],
+        ),
+        (
+            Lang::Java,
+            "t.java",
+            "class T {\n  Boolean isReady() { return true; }\n  Integer isCount() { return 1; }\n}\n",
+            &["T.isCount"],
+        ),
+        (
+            Lang::TypeScript,
+            "t.ts",
+            "export function isFormData(v: unknown): v is FormData { return true; }\nexport function isString(v: unknown): asserts v is string {}\nexport function isKind(v: unknown): number { return 1; }\n",
+            &["isKind"],
+        ),
+        (
+            Lang::C,
+            "t.c",
+            "static int is_ready(int x) { return x; }\nstatic double is_scaled(int x) { return 1.0; }\n",
+            &["is_scaled"],
+        ),
+        (
+            Lang::Cpp,
+            "t.cpp",
+            "struct C {\n  auto is_ready() const noexcept -> bool { return f; }\n  auto is_count() const -> int { return c; }\n  bool f; int c;\n};\n",
+            &["C::is_count"],
+        ),
+        // A test's name is prose. `Should_throw_when_x_is_null` returning
+        // void is not a broken contract, and 2,915 of C#'s 3,026 gold
+        // findings were exactly that.
+        (
+            Lang::CSharp,
+            "T.cs",
+            "class T {\n  [Fact]\n  public void Should_throw_when_provider_is_null() { }\n  public int IsReady() { return 1; }\n}\n",
+            &["T.IsReady"],
+        ),
+    ];
+
+    #[test]
+    fn a_predicate_keeps_its_promise_however_its_language_spells_a_boolean() {
+        for (lang, path, src, want) in CONTRACT {
+            let pack = lang.pack();
+            let facts = extract(pack, &mut pack.make_parser(), Path::new(path), src);
+            let mut liars = Vec::new();
+            for_each(&facts, |m, v, _, name| {
+                if m == LYING_NAME && v > 0.0 {
+                    liars.push(name.to_string());
+                }
+            });
+            assert_eq!(&liars, want, "{path}");
+        }
     }
 
     #[test]

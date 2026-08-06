@@ -1258,8 +1258,13 @@ impl Extractor<'_> {
             || (self.facts.is_test_file && self.pack.names_test(node, self.src));
         unit.is_test =
             self.facts.is_test_file || unit.named_test || self.pack.is_test_code(node, self.src);
-        unit.returns = node
-            .child_by_field_name(self.pack.return_type_field)
+        // A trailing return type outranks the declaration's type field:
+        // where one is written the field holds `auto`, which names no
+        // type at all.
+        unit.returns = self
+            .pack
+            .trailing_return(node)
+            .or_else(|| node.child_by_field_name(self.pack.return_type_field))
             .and_then(|r| r.utf8_text(self.src).ok())
             .map(|t| t.trim_start_matches(':').trim())
             .unwrap_or("")

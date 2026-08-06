@@ -214,7 +214,7 @@ React. Solid is exempt: it tracks dependencies at run time.
 | `flag params` · `kw opacity` | |
 | `pass-through` | Ousterhout's shallow wrapper / Fowler's Middle Man |
 | `generic name` | |
-| `lying name` | `is_`/`has_` must return bool; `get_` must not mutate |
+| `lying name` | `is_`/`has_` must return the language's boolean — `Boolean`, `Bool`, a TypeScript type predicate `v is T`, C89's `int`; `get_` must not mutate; a declared test's name is prose, not a contract |
 | `broad catch` · `unwraps` | |
 | `spooky` | eval, computed attribute access, metaclasses, transmute |
 | `echo comments` · `comment ratio` | |

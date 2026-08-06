@@ -661,7 +661,50 @@ const MEMBER_KINDS: &[(Lang, &[&str])] = &[
     ),
 ];
 
+/// Where a grammar spells a return type its declaration-type field
+/// cannot hold.
+///
+/// C++11 writes `auto f() -> bool`, putting the real type AFTER the
+/// parameter list, so the `type` field reads `auto` and every predicate
+/// written that way looked to `lying name` like one returning something
+/// that is not a boolean — fmt's `FMT_CONSTEXPR auto has_foreground()
+/// const noexcept -> bool` among them. C has no trailing return type
+/// (it is a C++11 construct) and every other language in the table
+/// fields the whole thing, so two rows is the whole list.
+const TRAILING_RETURN: &[(Lang, &str)] = &[
+    (Lang::Cpp, "trailing_return_type"),
+    (Lang::Cuda, "trailing_return_type"),
+];
+
 impl Pack {
+    /// The type node of a trailing return, when this grammar spells one
+    /// and this declaration wrote it — see [`TRAILING_RETURN`]. Follows
+    /// the `declarator` chain, because a pointer or reference return
+    /// wraps the function declarator that carries the arrow.
+    pub fn trailing_return<'t>(&self, node: Node<'t>) -> Option<Node<'t>> {
+        let kind = self.trailing_return_kind()?;
+        let mut decl = node.child_by_field_name("declarator")?;
+        loop {
+            let mut cursor = decl.walk();
+            let found = decl
+                .named_children(&mut cursor)
+                .find(|n| n.kind() == kind)
+                .and_then(|n| n.named_child(0));
+            if found.is_some() {
+                return found;
+            }
+            drop(cursor);
+            decl = decl.child_by_field_name("declarator")?;
+        }
+    }
+
+    fn trailing_return_kind(&self) -> Option<&'static str> {
+        TRAILING_RETURN
+            .iter()
+            .find(|(l, _)| *l == self.lang)
+            .map(|(_, k)| *k)
+    }
+
     /// (kind id, receiver field) of member-access nodes, if declared.
     pub fn attr(&self) -> Option<(u16, &'static str)> {
         self.attr
@@ -785,6 +828,9 @@ impl Pack {
             kind(&mut bad, k);
         }
         for k in self.member_kinds() {
+            kind(&mut bad, k);
+        }
+        if let Some(k) = self.trailing_return_kind() {
             kind(&mut bad, k);
         }
         field(&mut bad, self.return_type_field);
@@ -947,6 +993,45 @@ fn catches_every_failure(decl: &str) -> bool {
                 "Throwable" | "Exception" | "Error" | "RuntimeException"
             )
         })
+}
+
+/// Does a declared return type promise a BOOLEAN — the thing an `is_`,
+/// `has_`, `can_` or `should_` name says the answer will be?
+///
+/// The test was `returns.contains("bool")`, case-sensitively, and it was
+/// wrong about four languages at once. Scala writes `Boolean`, Swift
+/// writes `Bool`, Java's boxed form is `Boolean`: 660 of `lying name`'s
+/// 6,323 gold findings were a predicate returning exactly what its name
+/// promised, spelled with a capital. TypeScript's 1,212 were the
+/// STRONGEST available form — `value is FormData` is a boolean at
+/// runtime and carries the narrowing besides — reported as the metric's
+/// violation. And C89 has no `bool`: `int` IS the boolean there, and
+/// gold's C predicates return it 364 times against 94 `bool`s.
+///
+/// Tokenised rather than substring-matched, so `Option<bool>`,
+/// `Task<bool>` and `bool?` still promise one while a type merely
+/// SPELLED with the letters does not.
+pub(crate) fn promises_a_boolean(lang: Lang, returns: &str) -> bool {
+    let tokens = || {
+        returns
+            .split(|c: char| !identifierish(c))
+            .filter(|t| !t.is_empty())
+    };
+    if tokens().any(|t| t.eq_ignore_ascii_case("bool") || t.eq_ignore_ascii_case("boolean")) {
+        return true;
+    }
+    match lang {
+        // A type predicate: `value is FormData`, `asserts x is T`. The
+        // `is` is a keyword between two type positions, which no other
+        // language in the table spells in a return type.
+        Lang::TypeScript | Lang::Tsx => tokens().any(|t| t == "is"),
+        // Truthiness. Every other C-family language has `bool`, so the
+        // excuse stops at the one language that does not — and it is
+        // `int` alone: gold's three pointer-returning predicates are not
+        // enough to widen a rule on.
+        Lang::C => returns.trim() == "int",
+        _ => false,
+    }
 }
 
 /// Does an identifier read as an assertion helper? The convention across
