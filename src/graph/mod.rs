@@ -469,18 +469,34 @@ impl Index {
         }
     }
 
+    /// A quoted include is a path from the including file. An angled
+    /// one names a system header — except that a header-only library
+    /// includes its OWN headers that way, and flux spells every
+    /// internal one `<flux/adaptor/filter.hpp>`.
+    ///
+    /// An angled include must name two components before it may match
+    /// the tree. At one, `<cuda_runtime.h>` binds to transformer-engine's
+    /// own util/cuda_runtime.h and `<unistd.h>` to a Windows shim in
+    /// llm.c. At two, all 455 distinct targets that fire across the
+    /// three corpora name the file they meant.
     fn c(&self, from: &GraphFacts, target: &str) -> Class {
-        if target.starts_with('<') {
-            return Class::External;
-        }
-        let joined = normalize(from.path.parent().unwrap_or(Path::new("")), target);
-        if let Some(&i) = self.paths.get(&joined) {
-            return Class::Internal(i);
+        let angled = target.starts_with('<');
+        let path = target.trim_matches(['<', '>']);
+        if !angled {
+            let joined = normalize(from.path.parent().unwrap_or(Path::new("")), path);
+            if let Some(&i) = self.paths.get(&joined) {
+                return Class::Internal(i);
+            }
         }
         // The include directory is unknowable, so match the whole
         // specifier against file paths instead of just its last segment.
-        match self.path_suffix(target) {
+        let least = if angled { 2 } else { 1 };
+        match self
+            .path_suffix(path)
+            .filter(|_| segments(path).len() >= least)
+        {
             Some(i) => Class::Internal(i),
+            None if angled => Class::External,
             None => Class::Unresolved,
         }
     }
@@ -490,10 +506,7 @@ impl Index {
     /// include means is decided by a search path that is not in the
     /// source.
     fn path_suffix(&self, target: &str) -> Option<usize> {
-        let segs: Vec<&str> = target
-            .split('/')
-            .filter(|s| !s.is_empty() && *s != ".")
-            .collect();
+        let segs = segments(target);
         let mut hits = self
             .basenames
             .get(*segs.last()?)?
@@ -543,6 +556,15 @@ fn module_components(f: &GraphFacts) -> Vec<Box<str>> {
         comps.pop();
     }
     comps
+}
+
+/// A path specifier's components, with the segments that name nothing
+/// dropped.
+fn segments(target: &str) -> Vec<&str> {
+    target
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect()
 }
 
 fn components(path: &Path) -> Vec<Box<str>> {
@@ -724,6 +746,34 @@ mod tests {
         ];
         let (_, e) = edges(&files);
         assert_eq!(e, [(3, 1)]);
+    }
+
+    #[test]
+    fn an_angled_include_can_name_the_projects_own_header() {
+        // A header-only library includes its own headers the angled
+        // way: flux spells every one `<flux/core.hpp>`, so 93 headers
+        // read as 149 modules with 32 edges and 97% deletable.
+        //
+        // One component has to stay external. `<cuda_runtime.h>` is the
+        // toolkit header 109 times over, and admitting it would bind to
+        // transformer-engine's own util/cuda_runtime.h — a different
+        // file that happens to share a name.
+        let files = [
+            file(
+                Lang::Cpp,
+                "include/flux/adaptor/filter.hpp",
+                &["<flux/core.hpp>", "<cassert>"],
+            ),
+            file(Lang::Cpp, "include/flux/core.hpp", &[]),
+            file(Lang::Cuda, "util/cuda_runtime.h", &[]),
+            file(Lang::Cuda, "util/kernel.cu", &["<cuda_runtime.h>"]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[0][0], Some(idx("include/flux/core.hpp")));
+        assert_eq!(targets[0][1], None, "<cassert> is a system header");
+        assert_eq!(targets[3][0], None, "one component means the toolkit");
+        assert_eq!(res.external, 2);
     }
 
     #[test]
