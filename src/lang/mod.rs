@@ -1163,6 +1163,15 @@ fn destructures(kind: &str) -> bool {
 }
 
 /// Shared helper: does `node`'s field hold a boolean-ish type name?
+/// A build- or tool-configuration file: `vite.config.ts`,
+/// `jest.config.js`, `rollup.config.mjs`. Named after what it
+/// configures, and run once by the tool it configures.
+pub(crate) fn config_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    stem.ends_with(".config") || stem == "config"
+}
+
 pub(crate) fn field_text_is<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
     node.child_by_field_name(field)?.utf8_text(src).ok()
 }

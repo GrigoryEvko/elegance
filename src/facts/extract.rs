@@ -52,6 +52,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         parse_errors: 0,
         too_deep: false,
         is_test_file: pack.test_path(&path.display().to_string()),
+        is_script_file: runs_once(&path.display().to_string()),
         mass: 0,
         units: vec![UnitFacts {
             name: "<module>".into(),
@@ -3273,6 +3274,41 @@ fn names_a_shell(text: &str) -> bool {
     let bare = text.trim().trim_matches(['"', '\'', '`']).trim();
     let name = bare.rsplit(['/', '\\']).next().unwrap_or(bare);
     SHELLS.contains(&name)
+}
+
+/// Is this file a one-shot script rather than a shipped program?
+///
+/// It exists for `blocking async` and for nothing else. That metric's
+/// whole argument is that a blocking call stalls the EXECUTOR — every
+/// other task in the process waits behind it — and a build step, a
+/// codegen pass or a benchmark harness has no other task. 79 of the 110
+/// findings left on gold after the Sync-name table landed were exactly
+/// that: `fs.readFileSync` and `existsSync` inside `async function
+/// main()` in vscode's build pipeline, where the alternative is
+/// strictly worse code for no gain.
+///
+/// Deliberately coarse, and the cost is worth naming: a long-running
+/// server parked under `scripts/` goes unjudged by this one metric. The
+/// exemption is not extended to any other, because for every other one
+/// the question a script raises is the same question a program does.
+fn runs_once(path: &str) -> bool {
+    const ONE_SHOT: &[&str] = &[
+        "/build/",
+        "/scripts/",
+        "/script/",
+        "/benchmarks/",
+        "/benchmark/",
+        "/perf-measures/",
+        "/examples/",
+        "/samples/",
+        "/codegen/",
+        "/tools/",
+    ];
+    // Leading separator added, so a directory at the ROOT of a
+    // relative path matches the same rule as one further down:
+    // `examples/demo.ts` and `pkg/examples/demo.ts` are both examples.
+    let norm = format!("/{}", path.replace('\\', "/").trim_start_matches('/'));
+    ONE_SHOT.iter().any(|d| norm.contains(d)) || crate::lang::config_file(&norm)
 }
 
 fn starts_a_statement(raw: &str) -> bool {

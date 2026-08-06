@@ -25,6 +25,10 @@ pub struct FileFacts {
     pub too_deep: bool,
     /// Path matches the ecosystem's test-file conventions.
     pub is_test_file: bool,
+    /// A one-shot script rather than a shipped program: a build step, a
+    /// codegen pass, a benchmark harness, a config file. It runs, it
+    /// finishes, and nothing else is waiting on its executor.
+    pub is_script_file: bool,
     /// Named-node count of the whole tree (clone-coverage denominator).
     pub mass: u32,
     /// Measured units: index 0 is the synthetic `<module>` scope, then every

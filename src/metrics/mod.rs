@@ -1085,12 +1085,22 @@ fn unit_shape(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32, u
                 // A test named `test_do_not_block_on_background_tasks`
                 // sleeps inside async on purpose: the blocking IS the
                 // subject. Same exemption as unwraps and magic numbers.
-                f(
-                    BLOCKING_IN_ASYNC,
-                    u.blocking_calls as f32,
-                    u.line,
-                    &u.qualname,
-                );
+                //
+                // A ONE-SHOT SCRIPT is exempt for a different reason,
+                // and it is this metric's own reason read back: a
+                // blocking call is a defect because it stalls the
+                // EXECUTOR, and a build step has no other task waiting
+                // on one. 79 of the 110 findings gold had left were
+                // `readFileSync` inside `async function main()` in a
+                // build pipeline.
+                if !facts.is_script_file {
+                    f(
+                        BLOCKING_IN_ASYNC,
+                        u.blocking_calls as f32,
+                        u.line,
+                        &u.qualname,
+                    );
+                }
                 // Tests spawn throwaway tasks by the hundred; the
                 // lifetime that matters is production's.
                 f(DROPPED_TASKS, u.dropped_tasks as f32, u.line, &u.qualname);
@@ -2594,6 +2604,49 @@ mod tests {
             park("await fs.promises.readFile(p)"),
             0,
             "the remedy stays silent"
+        );
+    }
+
+    /// A build step has no executor to stall, and this metric's whole
+    /// argument is that one line caps a SERVER's throughput. 79 of the
+    /// 110 findings gold had left after the Sync-name table were
+    /// `readFileSync` inside `async function main()` in a build
+    /// pipeline, where the alternative is strictly worse code for no
+    /// gain.
+    #[test]
+    fn a_one_shot_script_has_no_executor_to_stall() {
+        let src = "export async function main(p: string) {\n  return fs.readFileSync(p);\n}\n";
+        for shipped in ["src/server.ts", "lib/handler.ts"] {
+            assert_eq!(
+                readings(Lang::TypeScript, shipped, src, BLOCKING_IN_ASYNC),
+                [1.0],
+                "{shipped} ships"
+            );
+        }
+        for once in [
+            "build/npm/postinstall.ts",
+            "scripts/gen.ts",
+            "packages/x/benchmarks/run.ts",
+            "examples/demo.ts",
+            "vite.config.ts",
+        ] {
+            assert!(
+                readings(Lang::TypeScript, once, src, BLOCKING_IN_ASYNC)
+                    .iter()
+                    .all(|v| *v == 0.0),
+                "{once} runs once"
+            );
+        }
+        // The exemption is this metric's alone: a script that leaks a
+        // secret leaks it just as hard.
+        assert_eq!(
+            readings(
+                Lang::TypeScript,
+                "build/gen.ts",
+                "const apiKey = 'sk_live_EXAMPLE_NOT_A_REAL_KEY';\n",
+                SECRETS
+            ),
+            [1.0]
         );
     }
 
