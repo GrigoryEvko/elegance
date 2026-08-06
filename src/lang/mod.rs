@@ -3231,6 +3231,25 @@ let classify items limit =
     }
 
     #[test]
+    fn an_autoload_is_a_deferred_require() {
+        // `autoload :Base, 'rack/protection/base'` loads the file when
+        // the constant is first touched, and rack-protection states 18
+        // of its dependencies exactly that way. The pack's own doc
+        // comment claimed the form; `requires` never matched it.
+        let f = facts_at(
+            Lang::Ruby,
+            "protection.rb",
+            concat!(
+                "autoload :Base, 'rack/protection/base'\n",
+                "require 'rack'\n",
+                "config.autoload :Nope, 'not/mine'\n",
+            ),
+        );
+        let targets: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
+        assert_eq!(targets, ["rack/protection/base", "rack"]);
+    }
+
+    #[test]
     fn a_guarded_require_is_still_a_require() {
         // A module that tolerates a missing dependency writes
         // `pcall(require, "x")`. The callee is pcall, so the pack read

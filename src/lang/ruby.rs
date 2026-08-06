@@ -149,7 +149,9 @@ fn name_node(node: Node) -> Option<Node> {
     node.child_by_field_name("name")
 }
 
-/// `require`, `require_relative` and `autoload` are the import forms.
+/// `require`, `require_relative`, `load` and `autoload` are the import
+/// forms. `autoload` names the constant first and the file second, so
+/// the target is the first STRING argument rather than the first.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     if !requires(node, src) {
         return Vec::new();
@@ -452,12 +454,14 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
 
 /// Is this call the import form? A RECEIVER disqualifies it: `require`
 /// and `load` are Kernel methods called bare, and `config.load(path)` is
-/// somebody's own method that happens to share the name.
+/// somebody's own method that happens to share the name. `autoload
+/// :Base, 'rack/protection/base'` defers the same load until the
+/// constant is touched; the file is a dependency either way.
 fn requires(call: Node, src: &[u8]) -> bool {
     call.child_by_field_name("receiver").is_none()
         && matches!(
             callee_text(call, src),
-            Some("require" | "require_relative" | "load")
+            Some("require" | "require_relative" | "load" | "autoload")
         )
 }
 

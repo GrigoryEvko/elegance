@@ -224,6 +224,13 @@ impl Index {
             // at run time from a variable, which resolves to nothing
             // and lands in the honesty bucket where it belongs.
             Lang::Shell => self.shell(from, target),
+            // `require_relative` is a path from the requiring file, so
+            // `..` climbs a directory rather than naming a namespace,
+            // and a sibling means the sibling. Plain `require` searches
+            // $LOAD_PATH and falls through.
+            Lang::Ruby if imp.reach == crate::lang::Reach::Project => {
+                self.ruby_relative(from, target)
+            }
             // Everything below resolves the same way: split the target
             // on whatever this language uses to separate namespace or
             // path components, then match the tail against the scanned
@@ -280,6 +287,23 @@ impl Index {
             .get(&base.with_extension("py"))
             .or_else(|| self.paths.get(&base.join("__init__.py")))
             .map_or(Class::Unresolved, |&i| Class::Internal(i))
+    }
+
+    /// `require_relative "../utils/replace"`. The extension is normally
+    /// left off and is normally `.rb`, but the explicit spelling is
+    /// legal too, so both are tried.
+    fn ruby_relative(&self, from: &GraphFacts, target: &str) -> Class {
+        let joined = normalize(from.path.parent().unwrap_or(Path::new("")), target);
+        let mut with_rb = joined.clone().into_os_string();
+        with_rb.push(".rb");
+        match self
+            .paths
+            .get(Path::new(&with_rb))
+            .or_else(|| self.paths.get(&joined))
+        {
+            Some(&i) => Class::Internal(i),
+            None => Class::Unresolved,
+        }
     }
 
     fn rust(&self, i: usize, from: &GraphFacts, target: &str) -> Class {
@@ -720,6 +744,40 @@ mod tests {
                 unresolved: 1
             }
         );
+    }
+
+    #[test]
+    fn a_ruby_relative_require_is_a_path_from_the_requiring_file() {
+        // `require_relative` was suffix-matched on '/', so `..` — never
+        // a component of a namespace — could not resolve at all, and a
+        // bare sibling landed on a namesake: sequel's lib/sequel/core.rb
+        // reached lib/sequel/dataset/sql.rb where Ruby loads
+        // lib/sequel/sql.rb.
+        use crate::facts::ImportFact;
+        use crate::lang::Reach;
+        let rel = |target: &str| ImportFact {
+            target: target.into(),
+            names: Vec::new(),
+            reach: Reach::Project,
+        };
+        let mut sqlite = file(Lang::Ruby, "lib/sequel/adapters/shared/sqlite.rb", &[]);
+        sqlite.imports = vec![rel("../utils/replace")];
+        let mut core = file(Lang::Ruby, "lib/sequel/core.rb", &[]);
+        core.imports = vec![rel("sql"), rel("dataset/sql.rb")];
+        let files = [
+            sqlite,
+            file(Lang::Ruby, "lib/sequel/adapters/utils/replace.rb", &[]),
+            core,
+            file(Lang::Ruby, "lib/sequel/dataset/sql.rb", &[]),
+            file(Lang::Ruby, "lib/sequel/sql.rb", &[]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        assert_eq!(res.unresolved, 0, "all three name files in this tree");
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[0][0], Some(idx("adapters/utils/replace.rb")));
+        assert_eq!(targets[2][0], Some(idx("lib/sequel/sql.rb")));
+        // The extension is normally left off, and legal when written.
+        assert_eq!(targets[2][1], Some(idx("dataset/sql.rb")));
     }
 
     #[test]
