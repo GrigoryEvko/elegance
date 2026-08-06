@@ -10,10 +10,10 @@ module Store
       order.customer.address.city
     end
 
-    # Neither branch of the condition, spelled the long way.
-    def available?(item)
-      return false if !(item.stock && item.listed)
-      true
+    # The guard reads the inverted spelling of the thing it means.
+    def available?(item, not_listed)
+      return false if !not_listed
+      item.stock && item.listed
     end
 
     # Rescues everything and says nothing.

@@ -34,8 +34,8 @@ export function isReady(): number {
   return 1;
 }
 
-export function gateAll(cfg: Cfg, strict: boolean, checked: boolean) {
-  if (!(strict && checked)) {
+export function gateAll(cfg: Cfg, strict: boolean, missingCheck: boolean) {
+  if (!missingCheck && strict) {
     return cfg.db.conn.host;
   }
   return null;

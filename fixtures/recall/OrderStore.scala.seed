@@ -9,12 +9,12 @@ object OrderStore {
   /** Reaches through three objects to reach one value. */
   def ownerCity(order: Order): String = order.customer.address.city
 
-  /** Neither branch of the condition, spelled the long way. */
-  def available(item: Item): Boolean = {
-    if (!(item.stock && item.listed)) {
-      return false
+  /** The guard reads the inverted spelling of the thing it means. */
+  def available(item: Item, missingPrice: Boolean): Boolean = {
+    if (!missingPrice && item.stock && item.listed) {
+      return true
     }
-    true
+    false
   }
 
   /** Catches everything and says nothing. */

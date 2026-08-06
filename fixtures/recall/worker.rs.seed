@@ -38,11 +38,14 @@ fn is_done() -> u32 {
     1
 }
 
-fn gate(cfg: &Cfg, strict: bool, checked: bool, verbose: bool) -> u32 {
-    if !(strict && checked) {
+fn gate(cfg: &Cfg, strict: bool, no_cache: bool, verbose: bool) -> u32 {
+    // Was `!(strict && checked)`, a De Morgan candidate, which this
+    // metric stopped counting: distributing it is usually longer and
+    // worse, and it was 80.5% of the metric on gold.
+    if !no_cache {
         return cfg.db.conn.host;
     }
-    verbose as u32
+    (verbose && strict) as u32
 }
 
 #[test]

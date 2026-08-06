@@ -17,8 +17,8 @@ typedef enum { POOL_OK, POOL_BUSY, POOL_DEAD } pool_state;
    with no bool, which 343 of this metric's 353 gold findings were. */
 pool_state is_ready(void) { return POOL_OK; }
 
-static unsigned gate(struct cfg *cfg, bool strict, bool checked) {
-    if (!(strict && checked)) {
+static unsigned gate(struct cfg *cfg, bool strict, bool no_checks) {
+    if (!no_checks && strict) {
         abort();
     }
     if (setjmp(env)) {

@@ -30,8 +30,8 @@ func Kind(v int) string {
 
 func IsReady() int { return 1 }
 
-func Gate(cfg *Cfg, strict bool, checked bool) string {
-	if !(strict && checked) {
+func Gate(cfg *Cfg, strict bool, missingCheck bool) string {
+	if !missingCheck && strict {
 		return cfg.db.conn.host
 	}
 	panic("unreachable state")

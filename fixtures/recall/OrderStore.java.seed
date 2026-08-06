@@ -13,12 +13,12 @@ public final class OrderStore {
         return order.customer.address.city;
     }
 
-    /** Neither branch of the condition, spelled the long way. */
-    public boolean available(Item item) {
-        if (!(item.stock && item.listed)) {
-            return false;
+    /** The guard reads the inverted spelling of the thing it means. */
+    public boolean available(Item item, boolean missingPrice) {
+        if (!missingPrice && item.stock && item.listed) {
+            return true;
         }
-        return true;
+        return false;
     }
 
     /** Catches everything and says nothing. */

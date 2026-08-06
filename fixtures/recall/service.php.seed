@@ -12,13 +12,13 @@ final class Store
         return $order->customer->address->city;
     }
 
-    /** Neither branch of the condition, spelled the long way. */
+    /** The guard inverts a comparison instead of writing it directly. */
     public function available(Item $item): bool
     {
-        if (!($item->stock && $item->listed)) {
+        if (!($item->stock != 0)) {
             return false;
         }
-        return true;
+        return $item->listed;
     }
 
     /** Catches everything and says nothing. */

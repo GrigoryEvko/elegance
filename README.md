@@ -177,7 +177,7 @@ The rung decides what a finding can *do*:
 | :--- | :--- |
 | `expr depth` | tallest single-line expression tree — multi-line formatting is rewarded |
 | `demeter` | attribute chains ≥ 3 data links; fluent calls exempt, `self` forgives one |
-| `negations` | double negatives, negated negative-polarity names, De Morgan candidates |
+| `negations` | negated `!=` comparisons, negated negative-polarity names. A De Morgan candidate is NOT one: distributing it is usually longer and worse, and it was 80.5% of the metric on gold |
 
 ### Rung 2 — function shape
 

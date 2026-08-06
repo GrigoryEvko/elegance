@@ -18,8 +18,8 @@ export function guard(input) {
 
 const clientPassword = 'm4k9x2v8q1hunter';
 
-export function gate(cfg, strict, checked = true) {
-  if (!(strict && checked)) {
+export function gate(cfg, strict, missingCheck = true) {
+  if (!missingCheck && strict) {
     return cfg.db.conn.host;
   }
   spawn(worker);

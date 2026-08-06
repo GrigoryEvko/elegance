@@ -9,12 +9,12 @@ public final class OrderStore {
         return order.customer.address.city
     }
 
-    /// Neither branch of the condition, spelled the long way.
-    public func available(item: Item) -> Bool {
-        if !(item.stock && item.listed) {
-            return false
+    /// The guard reads the inverted spelling of the thing it means.
+    public func available(item: Item, missingPrice: Bool) -> Bool {
+        if !missingPrice && item.stock && item.listed {
+            return true
         }
-        return true
+        return false
     }
 
     /// Catches everything and says nothing.

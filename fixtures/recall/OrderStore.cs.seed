@@ -16,14 +16,14 @@ namespace App
             return order.Customer.Address.City;
         }
 
-        /// Neither branch of the condition, spelled the long way.
-        public bool Available(Item item)
+        /// The guard reads the inverted spelling of the thing it means.
+        public bool Available(Item item, bool missingPrice)
         {
-            if (!(item.Stock && item.Listed))
+            if (!missingPrice && item.Stock && item.Listed)
             {
-                return false;
+                return true;
             }
-            return true;
+            return false;
         }
 
         /// Catches everything and says nothing.

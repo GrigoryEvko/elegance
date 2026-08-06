@@ -2031,9 +2031,22 @@ impl Extractor<'_> {
         });
     }
 
-    /// K&P: "say what you mean" — flag only provable inversions: nested
-    /// nots, negation of != comparisons, negated negative-polarity names,
-    /// and De Morgan candidates (not over and/or).
+    /// K&P: "say what you mean" — flag only provable inversions:
+    /// negation of a `!=` comparison, and a negated negative-polarity
+    /// name.
+    ///
+    /// A De Morgan candidate — `!(a && b)`, `not (a or b)` — used to
+    /// count and no longer does. It was 1,416 of this metric's 1,758
+    /// gold findings, 80.5%, and not one of the fourteen read verbatim
+    /// was a defect anyone would ask to change: distributing the
+    /// negation is usually LONGER and worse, `!(0 < rate && rate <= 1)`
+    /// says "not in range" in one breath where `rate <= 0 || rate > 1`
+    /// does not, `!(a && b)` is the canonical spelling of a
+    /// mutual-exclusion assertion, and a bitmask query
+    /// `!(flags & A || flags & B)` reads to the tree as a boolean
+    /// disjunction while the negation is its only correct spelling.
+    /// This is a rung-1 GATE; a clause that admired code trips 1,416
+    /// times is measuring a convention.
     fn check_negation(&mut self, node: Node, unit: usize) {
         let Some(mut operand) = self.pack.negation_operand(node, self.src) else {
             return;
@@ -2054,11 +2067,10 @@ impl Extractor<'_> {
         }
         // `!!x` / `not not x` is a coercion to bool — a cast idiom, not
         // inverted logic — and it was 78% of this metric's TypeScript
-        // firings. De Morgan candidates below are the real finding.
+        // firings.
         if self.pack.negation_operand(operand, self.src).is_some() {
             return;
         }
-        let demorgan = self.sem_of(operand) == Sem::BoolOp;
         let text = operand.utf8_text(self.src).unwrap_or("");
         let mut end = text.len().min(80);
         while !text.is_char_boundary(end) {
@@ -2071,7 +2083,7 @@ impl Extractor<'_> {
         // Known approximation: a "!=" inside a string literal within the
         // operand head would false-positive; rare enough to accept.
         let neq = operand.end_position().row == operand.start_position().row && head.contains("!=");
-        if demorgan || negative_name || neq {
+        if negative_name || neq {
             self.facts.units[unit].negations += 1;
         }
     }
@@ -3943,23 +3955,30 @@ mod tests {
         let f = facts(
             "def f(a, b, found, not_ready):\n    if not a != b:\n        pass\n    if not (a and b):\n        pass\n    if not not_ready:\n        pass\n    if not found:\n        pass\n",
         );
-        // != inversion, De Morgan, negated negative name; `not found` is a
-        // clean single negation of a positive name.
-        assert_eq!(f.units[1].negations, 3);
+        // `not a != b` inverts a comparison and `not not_ready` inverts a
+        // negative name. `not (a and b)` is a De Morgan candidate and is
+        // deliberately NOT one: distributing it is usually longer and
+        // worse, and it was 80.5% of this metric on gold. `not found` is
+        // a clean single negation of a positive name.
+        assert_eq!(f.units[1].negations, 2);
     }
 
     #[test]
     fn double_negation_is_coercion_not_inverted_logic() {
         // `!!x` casts to bool; it was 78% of this metric's TS firings.
+        // Neither line here is a finding: the second is De Morgan.
         let pack = crate::lang::Lang::TypeScript.pack();
         let mut parser = pack.make_parser();
         let f = extract(
             pack,
             &mut parser,
             Path::new("t.ts"),
-            "function f(x: unknown, ok: boolean, other: boolean) {\n    const a = !!x;\n    if (!(ok && other)) { return 1; }\n    return a;\n}\n",
+            "function f(x: unknown, ok: boolean, missing: boolean) {\n    const a = !!x;\n    if (!(ok && other)) { return 1; }\n    if (!missing) { return 2; }\n    return a;\n}\n",
         );
-        assert_eq!(f.units[1].negations, 1, "De Morgan only, coercion exempt");
+        assert_eq!(
+            f.units[1].negations, 1,
+            "the negative name only: coercion and De Morgan are exempt"
+        );
     }
 
     #[test]

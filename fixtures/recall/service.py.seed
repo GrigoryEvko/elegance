@@ -40,7 +40,11 @@ def sync_orders(session, retries):
 
 
 def gate(flags, not_ready, cfg):
-    if not (flags.a and flags.b):
+    # `not (a and b)` stood here and no longer counts: distributing a De
+    # Morgan candidate is usually longer and worse, and it was 80.5% of
+    # this metric on gold. The floor now rests on the two clauses that
+    # survive — an inverted comparison and a negated negative name.
+    if not flags.a != flags.b:
         return cfg.db.conn.host
     if not not_ready:
         return None

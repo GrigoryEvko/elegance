@@ -15,12 +15,12 @@ function M.owner_city(order)
   return order.customer.address.city
 end
 
--- Neither branch of the condition, spelled the long way.
-function M.usable(item)
-  if not (item.stock and item.listed) then
-    return false
+-- The guard reads the inverted spelling of the thing it means.
+function M.usable(item, not_listed)
+  if not not_listed and item.stock and item.listed then
+    return true
   end
-  return true
+  return false
 end
 
 -- Ends the program rather than returning a status.
