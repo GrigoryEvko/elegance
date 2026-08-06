@@ -473,7 +473,7 @@ the whole gold corpus.
 | Go | `.go` | median declared interface holds **1** method |
 | Zig | `.zig` | |
 | OCaml | `.ml` `.mli` | control group — tightest branching in the corpus; `unwraps` is dead — `failwith` IS the raise |
-| C | `.c` `.h`\* | no preprocessing; numbers are floors |
+| C | `.c` `.h`\* | no preprocessing; numbers are floors; `demeter` is dead — no methods, so no delegate to hide |
 | C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` `.h`\* | templates measured as written; gtest names composed |
 | CUDA | `.cu` `.cuh` | rides the C++ pack, own budgets |
 | shell | `.sh` `.bash` | no declared parameters, so no interface family; `shelled out` is dead here — the language IS the shell |

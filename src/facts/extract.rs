@@ -2122,6 +2122,21 @@ impl Extractor<'_> {
     /// Fluent chains break naturally — a call ends the descent — and a
     /// self/this base forgives its first link.
     fn check_demeter(&mut self, node: Node, unit: usize) {
+        // C HAS NO METHODS, so it has no Demeter. Lieberherr's rule
+        // constrains which OBJECTS a method may send a message to, and
+        // its remedy — Hide Delegate, ask the neighbour instead of
+        // reaching through it — needs a neighbour with behaviour to
+        // ask. `s->layout.sparse.offsets` is a path into a nested
+        // RECORD, which the rule does not address at all: redis, curl
+        // and git write it because a C struct is a namespace, and all
+        // 219 gold findings were that shape. C++ and Zig keep the cell,
+        // because both have methods and `ctx.shstrtab->shndx` really is
+        // a reach through one object to another's field. That
+        // distinction is the whole of this exemption, so it is drawn
+        // where the language draws it and nowhere wider.
+        if self.pack.lang == crate::lang::Lang::C {
+            return;
+        }
         let Some((attr_kind, _)) = self.pack.attr() else {
             return;
         };
@@ -4504,6 +4519,36 @@ mod tests {
         // cfg.db.conn.host = 3 data links: violation. self.registry.entries
         // = 2 links minus self-forgiveness = 1. Fluent chain: calls break it.
         assert_eq!(f.units[1].demeter, 1);
+    }
+
+    /// C has no Demeter, and the matrix now says so — enforced here,
+    /// because a declared-dead row that nothing checks is how
+    /// `shelled out` stayed alive in shell at precision zero for as
+    /// long as it did.
+    #[test]
+    fn a_record_path_is_not_a_message_to_a_stranger() {
+        use crate::lang::Lang;
+        let chains = |lang: Lang, name: &str, src: &str| {
+            let pack = lang.pack();
+            let mut parser = pack.make_parser();
+            extract(pack, &mut parser, Path::new(name), src)
+                .units
+                .iter()
+                .map(|u| u.demeter)
+                .sum::<u16>()
+        };
+        let body =
+            "int f(struct S *s) {\n  return s->layout.sparse.offsets[0] + s->layout.dense.n;\n}\n";
+        assert_eq!(
+            chains(Lang::C, "a.c", body),
+            0,
+            "a nested record path has no delegate to hide"
+        );
+        assert!(
+            chains(Lang::Cpp, "a.cpp", body) > 0,
+            "C++ keeps the cell: it has methods, so a reach through one \
+             object to another's field really is one"
+        );
     }
 
     #[test]

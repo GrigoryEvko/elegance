@@ -244,7 +244,6 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     ("pool.c", "unwraps", 1.0),
     ("pool.c", "spooky", 1.0),
     ("pool.c", "wildcard match", 1.0),
-    ("pool.c", "demeter", 1.0),
     ("pool.c", "flag params", 2.0),
     ("pool.c", "loose types", 1.0),
     ("ring.zig", "secrets", 1.0),

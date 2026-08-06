@@ -458,7 +458,6 @@
 "length" = { hi = 205.0 }
 "params" = { hi = 7.0 }
 "expr depth" = { hi = 10.0 }
-"demeter" = { hi = 3.0 }
 "live span" = { hi = 184.0 }
 "magic numbers" = { hi = 21.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict

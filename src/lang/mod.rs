@@ -1915,6 +1915,11 @@ let classify items limit =
             "suppressions",
             "no checker-comment suppression exists",
         ),
+        (
+            Lang::C,
+            "demeter",
+            "Lieberherr's rule constrains which OBJECTS a method may send a message to, and C has no methods: `s->layout.sparse.offsets` is a path into a nested RECORD, with no neighbour carrying behaviour to ask instead. All 219 gold findings were that shape",
+        ),
         (Lang::C, "kw opacity", "no kwargs"),
         (Lang::C, "untyped params", "every parameter typed"),
         (Lang::C, "blocking async", "no async"),
