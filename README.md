@@ -602,6 +602,17 @@ table and `self` is a calling convention.
 `final readonly class` with union types are both ordinary, so `untyped
 params` measures the migration.
 
+**A receiver keeps its sigil, and for a long time that hid it.** The
+chain-base test compared raw text against `self`/`cls`/`this`, which
+`$this` and `$self` can never equal — so every PHP and Perl method read
+as envying a foreign object that was itself. It cost PHP 996 of its
+1,138 `feature envy` findings and Perl 228 of 382, and because the same
+branch is the only writer of a class's own members, both languages
+measured **zero** classes for `cohesion` while being made of little
+else. One sigil now comes off before the comparison; a name that is
+*nothing but* a sigil keeps it, because `$` is a whole identifier in
+both TypeScript and Solidity.
+
 **C# and Java branch least of any language with classes** — cognitive
 p99 = 8 and 12, against Python's 18 and TypeScript's 32, with only
 OCaml's 6 below them. Mandatory class structure spreads the branching

@@ -302,6 +302,7 @@
 "confusable" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 3.0 }
+"cohesion" = { hi = 6.0 }
 # 0 runs is under the 200 a percentile needs: borrowed from php's pooled doc p99
 "module doc" = { hi = 76.0 }
 "type doc" = { hi = 114.0 }

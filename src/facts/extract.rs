@@ -1866,8 +1866,19 @@ impl Extractor<'_> {
         // identifier, so requiring Sem::Ident here made every
         // `self.field` in the language invisible — no self access, no
         // own member, and a cohesive impl block reading as scattered.
-        let selfish_base = base_text
-            .is_some_and(|n| matches!(n, "self" | "cls" | "this") || n == &*self.self_names[unit]);
+        //
+        // The text must lose its SIGIL first. PHP spells the receiver
+        // `$this` and Perl `$self`, neither of which matched, so every
+        // method in both languages was read as envying a foreign object
+        // that happens to be itself: 993 of PHP's 1138 gold findings
+        // named `$this` and 195 of Perl's 382 named `$self`. The same
+        // branch is the only writer of `own_members`, so both languages
+        // also measured ZERO classes for cohesion while being made of
+        // almost nothing else.
+        let selfish_base = base_text.is_some_and(|n| {
+            let n = unsigiled(n);
+            matches!(n, "self" | "cls" | "this") || n == unsigiled(&self.self_names[unit])
+        });
         let base_name = (self.pack.table_sem(base) == Sem::Ident)
             .then_some(base_text)
             .flatten();
@@ -1892,8 +1903,15 @@ impl Extractor<'_> {
 
     /// WHICH member this chain reaches first off the receiver:
     /// `self.cache.get()` touches `cache`. The property field is named
-    /// differently in every grammar, so it is found by elimination —
-    /// the identifier child that is not the object.
+    /// differently in every grammar, so it is found by POSITION — the
+    /// first name the link spells after its object.
+    ///
+    /// Elimination by `Sem::Ident` alone is not enough, and Perl is why:
+    /// it gives a method name its own `method` kind, so the first
+    /// identifier left over in `$self->cache($k)` was the ARGUMENT, and
+    /// the class would have gained a local called `$k` as a member.
+    /// Searching forward from the object costs nothing everywhere else,
+    /// because there the member is both the next child AND an identifier.
     fn note_own_member(&mut self, chain: Node, object_field: &str, unit: usize) {
         // Innermost link: descend while the object is ANOTHER link of
         // the same kind, so the one left is the access to the receiver.
@@ -1906,10 +1924,16 @@ impl Extractor<'_> {
         }
         let object = link.child_by_field_name(object_field);
         let mut cursor = link.walk();
-        let member = link
-            .named_children(&mut cursor)
-            .filter(|c| object.is_none_or(|o| o.id() != c.id()))
-            .find(|c| self.pack.table_sem(*c) == Sem::Ident)
+        let kids: Vec<Node> = link.named_children(&mut cursor).collect();
+        let after = object
+            .and_then(|o| kids.iter().position(|c| c.id() == o.id()))
+            .map_or(0, |i| i + 1);
+        let member = kids[after.min(kids.len())..]
+            .iter()
+            .find(|c| {
+                self.pack.table_sem(**c) == Sem::Ident
+                    || c.utf8_text(self.src).is_ok_and(is_a_plain_name)
+            })
             .and_then(|c| c.utf8_text(self.src).ok());
         if let Some(name) = member {
             let members = &mut self.facts.units[unit].own_members;
@@ -2654,6 +2678,34 @@ fn bare_argument<'t>(mut node: Node<'t>) -> Node<'t> {
         node = inner;
     }
     node
+}
+
+/// A variable name without the sigil its language spells it with.
+///
+/// `$this` and `this` are the same receiver; `$self` and `self` are the
+/// same object. Only ONE character comes off, so PHP's variable-variable
+/// `$$name` still reads as `$name` and Ruby's `@@count` as `@count` —
+/// both of which are genuinely different names from `name`.
+///
+/// A name that is NOTHING BUT a sigil keeps it. `$` is a legal
+/// identifier in TypeScript and in Solidity, and stripping it left the
+/// empty string, which matched the empty receiver name a free function
+/// carries — so vscode's `$('.chart')` and OpenZeppelin's
+/// `$._initializing` briefly read as accesses to their own object.
+fn unsigiled(name: &str) -> &str {
+    match name.strip_prefix(['$', '@', '%', '&']) {
+        Some(rest) if !rest.is_empty() => rest,
+        _ => name,
+    }
+}
+
+/// A bare word a member could be called — no dots, no subscripts, no
+/// call. What a grammar CALLS such a node varies; what it looks like
+/// does not.
+fn is_a_plain_name(text: &str) -> bool {
+    !text.is_empty()
+        && !text.starts_with(|c: char| c.is_ascii_digit())
+        && text.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// A class needs at least this many methods before "do they hang
@@ -3425,6 +3477,90 @@ mod tests {
         let pack = Lang::Python.pack();
         let mut parser = pack.make_parser();
         extract(pack, &mut parser, Path::new("test.py"), source)
+    }
+
+    /// A receiver spelled with a sigil is still the receiver.
+    ///
+    /// `selfish_base` compared the chain base's RAW text against
+    /// self|cls|this, which PHP's `$this` and Perl's `$self` can never
+    /// equal — so every method in both languages was read as envying a
+    /// foreign object that is itself. 993 of PHP's 1138 gold feature-envy
+    /// findings named `$this`; 195 of Perl's 382 named `$self`. That
+    /// branch is also the only writer of `own_members`, so both languages
+    /// measured zero cohesion classes.
+    ///
+    /// The Ruby row is the guard on the other side: stripping one sigil
+    /// must not promote an instance variable to the receiver.
+    #[test]
+    fn a_receiver_spelled_with_a_sigil_is_not_a_foreign_object() {
+        use crate::lang::Lang;
+        // (envied object, times envied, self accesses, members touched)
+        let reach = |lang: Lang, name: &str, src: &str, unit: &str| {
+            let pack = lang.pack();
+            let mut parser = pack.make_parser();
+            let f = extract(pack, &mut parser, Path::new(name), src);
+            let u = f
+                .units
+                .iter()
+                .find(|u| u.name.as_ref() == unit)
+                .unwrap_or_else(|| panic!("{lang:?}: no unit {unit}"));
+            (
+                u.envy_object.to_string(),
+                u.envy_count,
+                u.self_accesses,
+                u.own_members.join(","),
+            )
+        };
+        // PHP: `$this` is the only receiver the language has.
+        assert_eq!(
+            reach(
+                Lang::Php,
+                "Repo.php",
+                "<?php\nclass Repo {\n  function put($k) {\n    $this->cache[$k] = 1;\n    $this->log[] = $k;\n    return $this->cache;\n  }\n}\n",
+                "put",
+            ),
+            (String::new(), 0, 3, "cache,log".to_string()),
+            "PHP: $this is the receiver, and cache/log are its own members",
+        );
+        // Perl: `$self` is a local bound from @_, not a parameter, so
+        // no pack hook can mark it selfish — only the text can. The
+        // chain here is a method call, which is what Perl's `attr` is.
+        assert_eq!(
+            reach(
+                Lang::Perl,
+                "Repo.pm",
+                "package Repo;\nsub put {\n  my ($self, $k) = @_;\n  $self->cache($k);\n  $self->notes($k);\n  return $self->cache;\n}\n1;\n",
+                "put",
+            ),
+            (String::new(), 0, 3, "cache,notes".to_string()),
+            "Perl: $self is the receiver",
+        );
+        // Ruby: an instance variable is state the object HOLDS, not the
+        // object. `@config` must stay foreign after one sigil comes off.
+        assert_eq!(
+            reach(
+                Lang::Ruby,
+                "repo.rb",
+                "class Repo\n  def put(k)\n    @config.cache[k] = 1\n    @config.log[k] = 1\n    @config.cache\n  end\nend\n",
+                "put",
+            ),
+            ("@config".to_string(), 3, 0, String::new()),
+            "Ruby: @config is an ivar, not the receiver",
+        );
+        // Solidity: `$` is a whole identifier, and OpenZeppelin's
+        // ERC-7201 storage pointer is called exactly that. Stripping it
+        // to the empty string made it equal the empty receiver name a
+        // unit with no declared receiver carries.
+        assert_eq!(
+            reach(
+                Lang::Solidity,
+                "S.sol",
+                "contract S {\n  function f() internal {\n    Layout storage $ = _layout();\n    bool a = $._initializing;\n    uint64 b = $._initialized;\n    $._initializing = a;\n  }\n}\n",
+                "f",
+            ),
+            ("$".to_string(), 3, 0, String::new()),
+            "Solidity: a bare $ is a name, not a sigil",
+        );
     }
 
     #[test]
