@@ -1674,9 +1674,9 @@ impl Extractor<'_> {
         if self.facts.is_test_file || self.facts.units[unit_idx].is_test {
             return;
         }
-        if !self.reaches_a_shell(call) {
+        let Some(route) = self.reaches_a_shell(call) else {
             return;
-        }
+        };
         // The assembled string may be the argument itself (a template),
         // or one level down inside a formatting call — Go writes
         // `exec.Command("sh", "-c", fmt.Sprintf(...))`, where the
@@ -1686,13 +1686,54 @@ impl Extractor<'_> {
         // down. Descending into an ARRAY instead would flag the
         // remedy: vscode's `exec(['stash', 'list', `--format=${F}`])`
         // passes a list, which reaches no shell at all.
-        let assembled = call_arguments(self.pack, call).iter().any(|arg| {
+        let args = call_arguments(self.pack, call);
+        // What may be read ONE LEVEL DOWN depends on which route got
+        // here, and the difference is the whole precision of this
+        // check. Under an always-a-shell callee only a nested CALL is
+        // read — Go writes `exec.Command("sh", "-c", fmt.Sprintf(..))`
+        // — because descending into a LIST there flags the remedy:
+        // vscode's `exec(['stash', 'list', `--format=${F}`])` passes an
+        // argv vector and reaches no shell at all. Under the `-c` route
+        // a list is exactly where the command rides, since the flag
+        // that proved a shell is in it.
+        fn inside<'t>(me: &Extractor, route: &ShellRoute, arg: Node<'t>) -> Vec<Node<'t>> {
+            match route {
+                ShellRoute::Interprets { .. } => me.one_level_down(arg),
+                ShellRoute::Always if me.pack.table_sem(arg) == Sem::Call => {
+                    call_arguments(me.pack, arg)
+                }
+                ShellRoute::Always => Vec::new(),
+            }
+        }
+        let assembled = args.iter().any(|arg| {
             self.is_assembled_string(*arg)
-                || (self.pack.table_sem(*arg) == Sem::Call
-                    && call_arguments(self.pack, *arg)
-                        .iter()
-                        .any(|inner| self.is_assembled_string(*inner)))
+                || inside(self, &route, *arg)
+                    .iter()
+                    .any(|el| self.is_assembled_string(*el))
         });
+        // A `-c` next to a VARIABLE is the strongest form of this
+        // finding and was the one it declined: `exec.Command("bash",
+        // "-c", script)` hands the parser a string the caller chose
+        // entirely, where an interpolation at least shows what the
+        // author wrote around it. Only under the `-c` route — the
+        // always-a-shell callees take ordinary arguments, and demanding
+        // a literal there is what keeps `exec(cmd)` from firing on
+        // every call in the language.
+        // A `-c` next to a VARIABLE is the strongest form of this
+        // finding and was the one it declined: `exec.Command("bash",
+        // "-c", script)` hands the parser a string the caller chose
+        // entirely, where an interpolation at least shows what the
+        // author wrote around it. The command is what FOLLOWS the flag
+        // and nothing else — musl's `execl("/bin/sh", "sh", "-c",
+        // <literal script>, "sh", s, redir)` passes its variables as
+        // positional parameters, which is the parameterised remedy.
+        let handed_over = matches!(
+            route,
+            ShellRoute::Interprets {
+                command: Some(cmd)
+            } if self.pack.table_sem(cmd) == Sem::Ident
+        );
+        let assembled = assembled || handed_over;
         if assembled && !self.hands_over_a_query(call) {
             self.facts
                 .shelled_out
@@ -1721,8 +1762,36 @@ impl Extractor<'_> {
 
     /// Is this node a string built from values rather than written?
     fn is_assembled_string(&self, node: Node) -> bool {
-        self.pack.table_sem(node) == Sem::StrLit
-            && (interpolates(node) || self.inside_a_format_call(node))
+        if self.pack.table_sem(node) == Sem::StrLit {
+            return interpolates(node) || self.inside_a_format_call(node);
+        }
+        self.joins_a_literal(node)
+    }
+
+    /// `"tar czf " + name + ".tgz"` — assembly spelled as an operator
+    /// rather than as a hole. Java and Go have no interpolation at all,
+    /// so this is the ONLY way either language builds a command, and
+    /// judging interpolation alone read Java's whole contribution to
+    /// this metric as nothing.
+    ///
+    /// One side a string literal, the other not: `a + b` over two
+    /// numbers is arithmetic, and `"a" + "b"` is a literal written in
+    /// two pieces. Nesting needs no special case — `"a" + x + "b"`
+    /// groups as `("a" + x) + "b"`, whose left operand is not a
+    /// literal.
+    fn joins_a_literal(&self, node: Node) -> bool {
+        let Some(op) = crate::lang::field_text_is(node, "operator", self.src) else {
+            return false;
+        };
+        if op != "+" && op != "." {
+            return false;
+        }
+        let side = |field: &str| node.child_by_field_name(field);
+        let (Some(left), Some(right)) = (side("left"), side("right")) else {
+            return false;
+        };
+        let literal = |n: Node| self.pack.table_sem(n) == Sem::StrLit;
+        (literal(left) && !literal(right)) || (literal(right) && !literal(left))
     }
 
     /// Does this call hand its argument to a shell parser? Either the
@@ -1738,30 +1807,87 @@ impl Extractor<'_> {
     /// every real `sh -c` on gold names the shell right beside the
     /// flag, which is also the only form the rule was added for
     /// (`exec.Command("sh", "-c", ..)` in Java, Go and C#).
-    fn reaches_a_shell(&self, call: Node) -> bool {
+    fn reaches_a_shell<'t>(&self, call: Node<'t>) -> Option<ShellRoute<'t>> {
         let callee = self.callee_trailing_name(call);
-        let always = matches!(
+        if matches!(
             callee,
             Some("system" | "popen" | "exec" | "execSync" | "spawnSync" | "shell")
-        );
-        if always {
-            return true;
+        ) {
+            return Some(ShellRoute::Always);
         }
-        let args = call_arguments(self.pack, call);
         let text = |n: Node| n.utf8_text(self.src).unwrap_or("");
+        let args = call_arguments(self.pack, call);
         if args.iter().any(|a| text(*a).contains("shell=True")) {
-            return true;
+            return Some(ShellRoute::Always);
         }
-        args.iter().enumerate().any(|(i, a)| {
-            let t = text(*a);
-            // `-c` alone, or `-c` with the command riding in the same
-            // string — Java and C# hand the shell one argument, and a
-            // rule that only knew the separated form saw neither.
-            let bare = t.trim_start_matches('$').trim_matches(['"', '\'']);
-            let interprets = bare == "-c" || bare.starts_with("-c ");
-            interprets
-                && (callee.is_some_and(names_a_shell) || i > 0 && names_a_shell(text(args[i - 1])))
+        // ARGV IS A LIST almost everywhere it is spelled at all:
+        // node's `spawn('sh', ['-c', cmd])`, Elixir's `System.cmd("sh",
+        // ["-c", cmd])`, Swift's `Process.launchedProcess(launchPath:
+        // "/bin/sh", arguments: ["-c", cmd])`. Reading only DIRECT
+        // arguments compared the whole `["-c", ...]` text against `-c`
+        // and missed every one — the default spelling in four
+        // languages. One level down, and no further: the shell has to
+        // be named beside the flag either way.
+        for (i, arg) in args.iter().enumerate() {
+            let before = i.checked_sub(1).map(|p| args[p]);
+            if let Some(route) = self.interpreted_here(callee, before, &args[i..]) {
+                return Some(route);
+            }
+            let nested = self.one_level_down(*arg);
+            for k in 0..nested.len() {
+                let before = k.checked_sub(1).map(|p| nested[p]).or(before);
+                if let Some(route) = self.interpreted_here(callee, before, &nested[k..]) {
+                    return Some(route);
+                }
+            }
+        }
+        None
+    }
+
+    /// Does `rest[0]` turn a shell into an interpreter of what follows?
+    ///
+    /// The shell must be NAMED, and named as a literal: `exec.Command(
+    /// "sh", "-c", ..)`, `spawn('bash', ['-c', ..])`. A bare identifier
+    /// that happens to spell one is not a shell — git's own argument
+    /// parser writes `strcmp(cmd, "-c")`, where `cmd` is the variable
+    /// holding git's subcommand and matching it would report the
+    /// program that IMPLEMENTS `-c` as a program that passes it on.
+    fn interpreted_here<'t>(
+        &self,
+        callee: Option<&str>,
+        before: Option<Node<'t>>,
+        rest: &[Node<'t>],
+    ) -> Option<ShellRoute<'t>> {
+        let text = |n: Node| n.utf8_text(self.src).unwrap_or("");
+        if !self.interprets_what_follows(text(rest[0])) {
+            return None;
+        }
+        let named = callee.is_some_and(names_a_shell)
+            || before
+                .is_some_and(|b| self.pack.table_sem(b) == Sem::StrLit && names_a_shell(text(b)));
+        named.then(|| ShellRoute::Interprets {
+            command: rest.get(1).copied(),
         })
+    }
+
+    /// `-c` alone, or `-c` with the command riding in the same string —
+    /// Java and C# hand the shell one argument, and a rule that only
+    /// knew the separated form saw neither.
+    fn interprets_what_follows(&self, text: &str) -> bool {
+        let bare = text.trim_start_matches('$').trim_matches(['"', '\'']);
+        bare == "-c" || bare.starts_with("-c ")
+    }
+
+    /// One level inside an argument: a list's elements, or a nested
+    /// call's own arguments. The second is how C# writes
+    /// `Process.Start("sh", string.Format("-c {0}", dir))` and Go
+    /// `exec.Command("sh", "-c", fmt.Sprintf(..))`.
+    fn one_level_down<'t>(&self, arg: Node<'t>) -> Vec<Node<'t>> {
+        if self.pack.table_sem(arg) == Sem::Call {
+            return call_arguments(self.pack, arg);
+        }
+        let mut cursor = arg.walk();
+        arg.named_children(&mut cursor).collect()
     }
 
     /// An SQL statement being ASSEMBLED rather than written. A literal
@@ -1812,7 +1938,21 @@ impl Extractor<'_> {
             .is_some_and(|name| {
                 matches!(
                     name,
-                    "Sprintf" | "Sprint" | "Sprintln" | "format" | "sprintf" | "printf"
+                    // C's own family is the bulk of it: `sprintf` was
+                    // here and `snprintf` was not, so the rule caught
+                    // the spelling nobody should use and missed the one
+                    // everybody does. `Format` is C#'s, and the
+                    // lowercase-only list could never match it.
+                    "Sprintf"
+                        | "Sprint"
+                        | "Sprintln"
+                        | "format"
+                        | "Format"
+                        | "sprintf"
+                        | "snprintf"
+                        | "vsnprintf"
+                        | "asprintf"
+                        | "printf"
                 )
             })
     }
@@ -3098,6 +3238,20 @@ const BLOCKING_SYNC: &[&str] = &[
 /// `/bin/sh` and `/usr/bin/env bash` are how a script names one — and
 /// the quotes come off first, because every language spells the name as
 /// a literal.
+/// How a call was found to reach a shell. The two routes carry
+/// different evidence, so they license different findings: an
+/// always-a-shell callee says nothing about which argument is the
+/// command, while a `-c` says the very next thing IS one.
+#[derive(Clone, Copy)]
+enum ShellRoute<'t> {
+    Always,
+    /// A `-c` was found, so the shell will parse whatever follows it.
+    /// `command` is that argument where the grammar keeps it separate.
+    Interprets {
+        command: Option<Node<'t>>,
+    },
+}
+
 fn names_a_shell(text: &str) -> bool {
     const SHELLS: &[&str] = &[
         "sh",

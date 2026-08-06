@@ -1163,7 +1163,7 @@ fn destructures(kind: &str) -> bool {
 }
 
 /// Shared helper: does `node`'s field hold a boolean-ish type name?
-fn field_text_is<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
+pub(crate) fn field_text_is<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
     node.child_by_field_name(field)?.utf8_text(src).ok()
 }
 

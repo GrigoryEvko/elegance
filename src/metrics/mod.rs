@@ -3164,6 +3164,88 @@ mod tests {
         );
     }
 
+    /// Every spelling of "the command was assembled", and the remedy
+    /// beside each one.
+    ///
+    /// ARGV IS A LIST in node, Elixir and Swift, CONCATENATION is the
+    /// only assembly Java and Go have, and the command is sometimes
+    /// just a VARIABLE the caller chose. All three were invisible: java
+    /// scored 0 of 3 planted shapes, go and swift 1 of 3, and the java
+    /// cell read alive only because its seed fixture happens to use
+    /// String.format.
+    const SHELL_SHAPES: &[(Lang, &str, &str, usize, &str)] = &[
+        (
+            Lang::Java,
+            "A.java",
+            "class A {\n void b(String n) throws Exception {\n  Runtime.getRuntime().exec(\"tar czf \" + n + \".tgz ./data\");\n }\n}\n",
+            1,
+            "`+` is the only assembly Java has",
+        ),
+        (
+            Lang::Java,
+            "A.java",
+            "class A {\n void b() throws Exception {\n  Runtime.getRuntime().exec(\"tar czf out.tgz ./data\");\n }\n}\n",
+            0,
+            "a written command is safe whatever it says",
+        ),
+        (
+            Lang::Go,
+            "a.go",
+            "package main\nfunc r(s string) { exec.Command(\"bash\", \"-c\", s).Run() }\n",
+            1,
+            "the command is a variable the caller chose entirely",
+        ),
+        (
+            Lang::Go,
+            "a.go",
+            "package main\nfunc r(d string) { exec.Command(\"sh\", \"-c\", \"compactctl --dir \"+d).Run() }\n",
+            1,
+            "concatenation under -c",
+        ),
+        (
+            Lang::TypeScript,
+            "a.ts",
+            "export function clean(d: string) {\n  spawn('sh', ['-c', `rm -rf ${d}/*`]);\n}\n",
+            1,
+            "argv is a LIST in node, and the -c rides inside it",
+        ),
+        (
+            Lang::TypeScript,
+            "a.ts",
+            "export function clean(d: string) {\n  spawn('tar', ['-c', `${d}`]);\n}\n",
+            0,
+            "tar -c is not a shell, inside a list or out of it",
+        ),
+        (
+            Lang::CSharp,
+            "A.cs",
+            "class A {\n void R(string d) {\n  Process.Start(\"sh\", string.Format(\"-c compactctl --dir {0}\", d));\n }\n}\n",
+            1,
+            "String.Format is C#'s formatter and the name list was lowercase-only",
+        ),
+        (
+            Lang::C,
+            "g.c",
+            "int f(const char *cmd) {\n  if (!strcmp(cmd, \"-c\")) { return 1; }\n  return 0;\n}\n",
+            0,
+            "a VARIABLE spelling `cmd` is not a shell — this is git's own argument parser",
+        ),
+        (
+            Lang::C,
+            "m.c",
+            "void w(char *s, char *r) {\n  execl(\"/bin/sh\", \"sh\", \"-c\", \"eval printf\", \"sh\", s, r, (char *)0);\n}\n",
+            0,
+            "musl passes its variables as positional parameters, which IS the remedy",
+        ),
+    ];
+
+    #[test]
+    fn a_command_is_assembled_however_the_language_spells_assembly() {
+        for (lang, path, src, want, why) in SHELL_SHAPES {
+            assert_eq!(shelled(*lang, path, src), *want, "{lang:?}: {why}");
+        }
+    }
+
     fn built(lang: Lang, path: &str, src: &str) -> usize {
         let pack = lang.pack();
         let mut parser = pack.make_parser();
