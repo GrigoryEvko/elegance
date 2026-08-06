@@ -472,20 +472,20 @@ the whole gold corpus.
 | JavaScript | `.js` `.mjs` `.cjs` `.jsx` | |
 | Go | `.go` | median declared interface holds **1** method |
 | Zig | `.zig` | |
-| OCaml | `.ml` `.mli` | control group — tightest branching in the corpus |
+| OCaml | `.ml` `.mli` | control group — tightest branching in the corpus; `unwraps` is dead — `failwith` IS the raise |
 | C | `.c` `.h`\* | no preprocessing; numbers are floors |
 | C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` `.h`\* | templates measured as written; gtest names composed |
 | CUDA | `.cu` `.cuh` | rides the C++ pack, own budgets |
 | shell | `.sh` `.bash` | no declared parameters, so no interface family; `shelled out` is dead here — the language IS the shell |
-| Perl | `.pl` `.pm` `.t` | parameters only where signatures are used |
+| Perl | `.pl` `.pm` `.t` | parameters only where signatures are used; `unwraps` is dead — `die` IS the raise |
 | PHP | `.php` | types grew in from the outside; `untyped params` reads the migration |
 | Ruby | `.rb` `.rake` `.gemspec` | tightest function length in the corpus at 37 |
-| Lua | `.lua` | no classes, so the class family is structurally silent |
+| Lua | `.lua` | no classes, so the class family is structurally silent; `unwraps` is dead — `error` IS the raise |
 | Java | `.java` | everything declared, so the type family reads at full strength |
 | C# | `.cs` | `async` is syntax, so `blocking async` is live here and dead in Java |
 | Swift | `.swift` | `!` and `try!` are what `unwraps` counts |
 | Scala | `.scala` `.sc` | `if` and `match` are expressions, so branches sit inside arguments |
-| Elixir | `.ex` `.exs` | homoiconic: the ontology is built from call names, not syntax |
+| Elixir | `.ex` `.exs` | homoiconic: the ontology is built from call names, not syntax; `unwraps` is dead — `raise` IS the raise |
 | Solidity | `.sol` | inline assembly is `spooky`; visibility is compulsory, so `public docs` reads a decision |
 
 \* `.h` is the one extension that underdetermines its language.

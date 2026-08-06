@@ -102,7 +102,11 @@ pub fn pack() -> Pack {
         catch_sin: |_, _| None,
         swallows_error: |_, _| false,
         loses_context: |_, _| false,
-        panicky,
+        // Lua's `error` is how the language RAISES; it has no panic
+        // distinct from raising, so `unwraps` is declared dead rather
+        // than measuring how thoroughly a function validates its
+        // arguments. See DECLARED_DEAD.
+        panicky: |_, _| false,
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
@@ -214,11 +218,6 @@ fn first_string<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
         .named_children(&mut cursor)
         .find(|c| c.kind() == "string")?;
     Some(s.utf8_text(src).ok()?.trim_matches(['"', '\'']))
-}
-
-/// `error()` is the raise, and `assert(false)` is how a contract dies.
-fn panicky(call: Node, src: &[u8]) -> bool {
-    matches!(callee_text(call, src), Some("error"))
 }
 
 /// Text compiled at run time, and the environment swapped underneath a

@@ -93,7 +93,9 @@ pub fn pack() -> Pack {
         catch_sin: |_, _| None,
         swallows_error: |_, _| false,
         loses_context: |_, _| false,
-        panicky,
+        // failwith/invalid_arg ARE OCaml's raise: `unwraps` is
+        // declared dead here rather than counting every precondition.
+        panicky: |_, _| false,
         declares_test: |_, _| false,
         names_test: |_, _| false,
         is_test_code: |_, _| false,
@@ -196,12 +198,6 @@ fn spooky(node: Node, _sem: Sem, src: &[u8]) -> bool {
             node.utf8_text(src),
             Ok("Obj.magic" | "Obj.repr" | "Obj.obj" | "Obj.field" | "Obj.set_field")
         )
-}
-
-/// `failwith`/`assert false` are OCaml's panics; `raise` is a declared
-/// error path and is not one.
-fn panicky(call: Node, src: &[u8]) -> bool {
-    matches!(callee_text(call, src), Some("failwith" | "invalid_arg"))
 }
 
 /// Without an interface file the whole module is surface. A binding

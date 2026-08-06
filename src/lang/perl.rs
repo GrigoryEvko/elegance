@@ -145,7 +145,9 @@ pub fn pack() -> Pack {
         catch_sin: |_, _| None,
         swallows_error,
         loses_context,
-        panicky,
+        // die/croak/confess ARE Perl's exception vocabulary, not a
+        // panic beside it: `unwraps` is declared dead here.
+        panicky: |_, _| false,
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
@@ -263,14 +265,6 @@ fn callee_text<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
     let text = callee.utf8_text(src).ok()?;
     let bare = text.rsplit("::").next().unwrap_or(text);
     Some(bare.trim())
-}
-
-/// `die` is the raise and `croak` is the same from the caller's view.
-fn panicky(call: Node, src: &[u8]) -> bool {
-    matches!(
-        callee_text(call, src),
-        Some("die" | "croak" | "confess" | "exit")
-    )
 }
 
 /// The constructs that make a name unfindable: text compiled at run

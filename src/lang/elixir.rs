@@ -86,7 +86,9 @@ pub fn pack() -> Pack {
         catch_sin,
         swallows_error,
         loses_context,
-        panicky,
+        // raise/throw/exit are Elixir's raise, not a panic beside it:
+        // `unwraps` is declared dead here.
+        panicky: |_, _| false,
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
@@ -235,12 +237,6 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         true => operand.named_child(0),
         false => Some(operand),
     }
-}
-
-/// `raise` leaves by the exception path; a bang-suffixed function is
-/// the convention for one that raises rather than returning `:error`.
-fn panicky(call: Node, src: &[u8]) -> bool {
-    target_text(call, src).is_some_and(|t| matches!(t, "raise" | "throw" | "exit"))
 }
 
 /// The `rescue` block of a `try`, which the grammar hangs inside the

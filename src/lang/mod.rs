@@ -1972,6 +1972,11 @@ let classify items limit =
             "suppressions",
             "no checker-comment suppression exists",
         ),
+        (
+            Lang::OCaml,
+            "unwraps",
+            "the panicky list would be the language's own RAISE vocabulary: `failwith`, `invalid_arg`. There is no panic construct distinct from raising, so the metric would measure how thoroughly a function validates its arguments — 0 of 7 gold findings were a panic where an error belonged",
+        ),
         (Lang::OCaml, "kw opacity", "no kwargs"),
         (
             Lang::OCaml,
@@ -2259,6 +2264,11 @@ let classify items limit =
             "broad catch",
             "no catch construct at all, so no catch is wider than another",
         ),
+        (
+            Lang::Lua,
+            "unwraps",
+            "the panicky list would be the language's own RAISE vocabulary: `error`. There is no panic construct distinct from raising, so the metric would measure how thoroughly a function validates its arguments — 0 of 72 gold findings were a panic where an error belonged",
+        ),
         (Lang::Lua, "lost context", "no exception chain to break"),
         (
             Lang::Lua,
@@ -2329,6 +2339,11 @@ let classify items limit =
             Lang::Perl,
             "wildcard match",
             "no switch: `given`/`when` was made experimental and then removed",
+        ),
+        (
+            Lang::Perl,
+            "unwraps",
+            "the panicky list would be the language's own RAISE vocabulary: `die`, `croak`, `confess`, `exit`. There is no panic construct distinct from raising, so the metric would measure how thoroughly a function validates its arguments — 0 of 58 gold findings were a panic where an error belonged",
         ),
         (Lang::Perl, "loose types", "no type syntax to be loose in"),
         (
@@ -2471,6 +2486,11 @@ let classify items limit =
             Lang::Elixir,
             "dropped tasks",
             "`spawn` returns a pid the caller is EXPECTED to drop: a process is owned by its supervisor, not by whoever started it",
+        ),
+        (
+            Lang::Elixir,
+            "unwraps",
+            "the panicky list would be the language's own RAISE vocabulary: `raise`, `throw`, `exit`. There is no panic construct distinct from raising, so the metric would measure how thoroughly a function validates its arguments — 0 of 16 gold findings were a panic where an error belonged",
         ),
         (Lang::Elixir, "casts", "no cast syntax"),
         (
