@@ -367,6 +367,9 @@ pub struct ImportInfo {
 /// The field names of an anonymous record, when a node is one.
 pub type RecordKeys = fn(Node, &[u8]) -> Option<Vec<Box<str>>>;
 
+/// The byte range of a definition's documentation, when it has any.
+pub type DocSpan = fn(Node, &[u8]) -> Option<(u32, u32)>;
+
 /// What a parameter contributes to interface metrics.
 #[derive(Clone, Default)]
 pub struct ParamInfo {
@@ -472,9 +475,14 @@ pub struct Pack {
     /// Is this definition part of the public surface? Conservative: when
     /// unsure, say no — coverage findings must be precise.
     pub is_public: fn(Node, &[u8]) -> bool,
-    /// Contract-documentation lines attached to this definition (docstring,
-    /// `///` run, JSDoc block). Interface docs, not implementation notes.
-    pub unit_docs: fn(Node, &[u8]) -> u32,
+    /// Byte range of the contract documentation attached to this
+    /// definition — a docstring, a `///` run, a JSDoc block. Interface
+    /// docs, not implementation notes.
+    ///
+    /// The pack LOCATES and stops there: how many lines that is, how
+    /// many words, and what they say are one question in every language
+    /// and are answered once, in the core.
+    pub doc_span: DocSpan,
     /// Does documentation live INSIDE the body?
     ///
     /// Python and Ruby put the docstring in the first statement, so a
@@ -883,6 +891,63 @@ fn is_loose(text: &str, hatches: &[&str]) -> bool {
 /// Shared helper: does `node`'s field hold a boolean-ish type name?
 fn field_text_is<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
     node.child_by_field_name(field)?.utf8_text(src).ok()
+}
+
+/// Byte span of the comment run directly above a definition — the shape
+/// documentation takes in all but a handful of languages.
+///
+/// The run is CONTIGUOUS: a comment cut off from the definition by a
+/// blank line is a note about the neighbourhood, not this definition's
+/// contract. `kinds` are the node kinds that can carry one, and
+/// `prefixes` the spellings this ecosystem reads as documentation —
+/// empty where any comment above a definition documents it.
+///
+/// Fourteen packs share this. What differs between them is which nodes
+/// to look at, which is exactly what a pack is for; walking the run and
+/// measuring it are the same everywhere and are not.
+fn doc_run(node: Node, kinds: &[&str], prefixes: &[&str], src: &[u8]) -> Option<(u32, u32)> {
+    let mut span: Option<(u32, u32)> = None;
+    let mut prev = node.prev_named_sibling();
+    let mut expected = node.start_position().row;
+    while let Some(p) = prev {
+        if !kinds.contains(&p.kind()) || last_row(p) + 1 != expected {
+            break;
+        }
+        if !prefixes.is_empty()
+            && !p
+                .utf8_text(src)
+                .is_ok_and(|t| prefixes.iter().any(|m| t.starts_with(m)))
+        {
+            break;
+        }
+        let end = span.map_or(p.end_byte() as u32, |(_, end)| end);
+        span = Some((p.start_byte() as u32, end));
+        expected = p.start_position().row;
+        prev = p.prev_named_sibling();
+    }
+    span
+}
+
+/// The span of one node, for the packs whose documentation is a single
+/// node rather than a run.
+fn node_span(node: Node) -> Option<(u32, u32)> {
+    Some((node.start_byte() as u32, node.end_byte() as u32))
+}
+
+/// The last row this node puts text on.
+///
+/// A grammar may end a line comment AFTER its newline —
+/// tree-sitter-rust does, so a `///` node ends at column 0 of the row
+/// below. Taken literally, every Rust doc comment sits one row further
+/// down than it looks, and a run would never touch the item it
+/// documents.
+pub(crate) fn last_row(node: Node) -> usize {
+    let row = node.end_position().row;
+    if node.end_position().column == 0 && row > node.start_position().row {
+        row - 1
+    } else {
+        row
+    }
 }
 
 #[cfg(test)]

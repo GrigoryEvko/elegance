@@ -2,7 +2,7 @@ use std::path::Path;
 
 use tree_sitter::{Node, Parser};
 
-use super::{CloneSite, CtrlFact, FileFacts, UnitFacts};
+use super::{CloneSite, CommentFact, CommentRole, CtrlFact, FileFacts, UnitFacts};
 use crate::facts::BodyShape;
 use crate::lang::Pack;
 use crate::sem::Sem;
@@ -82,6 +82,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         pub_order: (0, 0),
         classes: Vec::new(),
         interfaces: Vec::new(),
+        comments: Vec::new(),
     };
     let Some(tree) = parser.parse(source, None) else {
         facts.parse_errors = 1;
@@ -100,6 +101,8 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         import_roots: std::collections::HashSet::new(),
         mentions: std::collections::HashSet::new(),
         comment_lines: Vec::new(),
+        comments_through: 0,
+        doc_targets: Vec::new(),
         stray_calls: Vec::new(),
         string_rows: std::collections::HashMap::new(),
         facts: &mut facts,
@@ -136,12 +139,14 @@ fn finish(ex: Extractor, blank: &Rows, mass: u32) {
         tokens,
         stray_calls,
         comment_lines,
+        doc_targets,
         string_rows,
         facts,
         pack,
         ..
     } = ex;
     facts.magic_strings = repeated_strings(string_rows);
+    attach_docs(facts, &doc_targets);
     facts.commented_code = commented_out_code(pack, &comment_lines);
     facts.classes = class_cohesion(&facts.units, &callees, pack.scope_sep);
     fingerprint_units(facts, &tokens);
@@ -155,6 +160,25 @@ fn finish(ex: Extractor, blank: &Rows, mass: u32) {
     facts.comment_lines = commentary.count_excluding(blank) as u32;
     let unit_syms = public_unit_names(&facts.units);
     facts.exports.extend(unit_syms);
+}
+
+/// Join each function summary to the unit it introduces. The
+/// definition is opened AFTER its documentation is read, so the walk
+/// can only record which line it starts on; the units it produced are
+/// known here.
+fn attach_docs(facts: &mut FileFacts, targets: &[u32]) {
+    if targets.iter().all(|t| *t == 0) {
+        return;
+    }
+    let mut by_line: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    for (i, u) in facts.units.iter().enumerate().skip(1) {
+        by_line.entry(u.line).or_insert(i as u32);
+    }
+    for (fact, target) in facts.comments.iter_mut().zip(targets) {
+        if *target != 0 {
+            fact.unit = by_line.get(target).copied();
+        }
+    }
 }
 
 /// Same-file resolution of statement-position unawaited calls. A name
@@ -397,6 +421,17 @@ struct Sub {
     height: u16,
 }
 
+/// What a comment run documents.
+///
+/// A unit the walk already opened, or — for the summary above a
+/// definition — the LINE that definition starts on, since the walk
+/// reads the documentation before it opens the thing documented.
+enum Attach {
+    Unit(u32),
+    AtLine(u32),
+    Nothing,
+}
+
 /// Local name -> (definition row if bound here, last-seen row); shadowing
 /// approximated by name (first def wins).
 type LiveMap = std::collections::HashMap<Box<str>, (Option<u32>, u32)>;
@@ -443,6 +478,15 @@ struct Extractor<'a> {
     /// it sat on. Adjacency — and therefore blocks — is only visible
     /// once the file is read, so the grouping happens after the walk.
     comment_lines: Vec<(u32, String)>,
+    /// First row no comment run has claimed yet. A run is gathered
+    /// whole at its first node, so the rest of its nodes arrive already
+    /// accounted for and must not open a second run.
+    comments_through: usize,
+    /// The definition each comment run introduces, as a 1-based line,
+    /// parallel to `facts.comments` (0 where it introduces nothing).
+    /// Resolved to a unit index after the walk, because the definition
+    /// a doc comment describes is opened after the comment is read.
+    doc_targets: Vec<u32>,
     /// Repeatable string literals, each with the rows and the UNITS it
     /// appeared in. A repeat is only visible once the whole file is
     /// read, so the counting happens after the walk.
@@ -562,10 +606,12 @@ impl Extractor<'_> {
                 self.check_echo(node);
                 self.check_suppression(node);
                 self.keep_comment_text(node);
+                self.record_comment_run(node, ctx);
                 None
             }
             Sem::None if (self.pack.is_doc)(node) => {
                 self.mark_commentary(node);
+                self.record_docstring(node, ctx);
                 None
             }
             Sem::FnDef => {
@@ -1115,6 +1161,14 @@ impl Extractor<'_> {
             .push(node.start_position().row as u32 + 1);
     }
 
+    /// The bytes of this definition's contract documentation, wherever
+    /// the pack found them — a `///` run above it, a JSDoc block, a
+    /// docstring inside the body, an Elixir `@doc` attribute.
+    fn doc_text(&self, node: Node) -> Option<&[u8]> {
+        let (start, end) = (self.pack.doc_span)(node, self.src)?;
+        self.src.get(start as usize..end as usize)
+    }
+
     fn open_unit(&mut self, node: Node) -> usize {
         if (self.pack.skips_test)(node, self.src) {
             self.note_skipped_test(node);
@@ -1137,7 +1191,7 @@ impl Extractor<'_> {
             .or_else(|| recv.map(|r| r.name))
             .unwrap_or_else(|| "".into());
         unit.is_public = (self.pack.is_public)(node, self.src);
-        unit.doc_lines = (self.pack.unit_docs)(node, self.src);
+        unit.doc_lines = self.doc_text(node).map_or(0, line_count);
         unit.body = self.body_shape(node);
         // Only `ceremony` asks this, and only about literal-bodied
         // declarations, so the ancestor walk and the `interfaces`
@@ -1981,6 +2035,198 @@ impl Extractor<'_> {
         for row in node.start_position().row..=node.end_position().row {
             self.commentary.set(row);
         }
+    }
+
+    /// One comment RUN, classified by what it introduces and measured
+    /// as prose.
+    ///
+    /// Gathered whole at its first node. A `///` doc parses one node
+    /// per line, so a fenced example, a sentence and a paragraph all
+    /// span several nodes — none of them can be recognized a node at a
+    /// time. The rest of the run arrives already accounted for.
+    fn record_comment_run(&mut self, node: Node, ctx: Ctx) {
+        if node.start_position().row < self.comments_through {
+            return;
+        }
+        // A comment that trails code labels THAT line; the comment on
+        // the next line is a new thought, not a continuation.
+        let trails = self.trails_code(node);
+        let mut last = node;
+        while !trails
+            && let Some(next) = last.next_named_sibling().filter(|n| {
+                self.sem_of(*n) == Sem::Comment
+                    && n.start_position().row == crate::lang::last_row(last) + 1
+            })
+        {
+            last = next;
+        }
+        self.comments_through = crate::lang::last_row(last) + 1;
+        let follows = last
+            .next_named_sibling()
+            .filter(|n| n.start_position().row == crate::lang::last_row(last) + 1);
+        let role = match trails {
+            true => CommentRole::Trailing,
+            false => self.introduced_role(node, follows, ctx),
+        };
+        let start = match trails {
+            true => node.start_byte(),
+            // The run's own indentation is part of its text: it is what
+            // tells an indented example from a paragraph.
+            false => self.line_start(node.start_byte()),
+        };
+        let attach = match role {
+            CommentRole::Inline | CommentRole::Trailing => Attach::Unit(ctx.unit as u32),
+            CommentRole::FnSummary => match follows {
+                Some(n) => Attach::AtLine(n.start_position().row as u32 + 1),
+                None => Attach::Nothing,
+            },
+            _ => Attach::Nothing,
+        };
+        self.push_comment(start..last.end_byte(), node, role, attach);
+    }
+
+    /// What a run that opens its own line introduces.
+    fn introduced_role(&self, node: Node, follows: Option<Node>, ctx: Ctx) -> CommentRole {
+        match follows.map(|n| self.declared_sem(n)) {
+            Some(Sem::FnDef) => return CommentRole::FnSummary,
+            Some(Sem::TypeDef) => return CommentRole::TypeDoc,
+            // A member of a type that is neither a method nor a nested
+            // type: a field, a property, a constant, an enum case. No
+            // Sem names one — every grammar spells it as an ordinary
+            // declaration — so it is recognized by where it sits.
+            Some(_) if self.enclosing_scope_is_class(node) => return CommentRole::FieldDoc,
+            _ => {}
+        }
+        if ctx.unit != 0 {
+            return CommentRole::Inline;
+        }
+        // Opens the file: nothing declared precedes it, and it declares
+        // nothing itself.
+        let opens_file = node.prev_named_sibling().is_none()
+            && node.parent().is_some_and(|p| p.parent().is_none());
+        match opens_file {
+            true => CommentRole::ModuleHeader,
+            false => CommentRole::Inline,
+        }
+    }
+
+    /// What this statement DECLARES, seen through whatever the grammar
+    /// wraps the declaration in.
+    ///
+    /// A doc comment is written above the statement, and the statement
+    /// is not always the declaration: TypeScript hangs `export` outside
+    /// the function and binds an arrow through a declarator, OCaml
+    /// wraps a binding in a `value_definition`. A wrapper starts on the
+    /// same ROW as the thing it wraps — that is what makes it a wrapper
+    /// rather than a neighbour — so the search stays on that row.
+    ///
+    /// Without this, every exported TypeScript function's JSDoc and
+    /// every OCaml `(** *)` above a `let` read as loose commentary, and
+    /// the summary distribution they belong to would be missing them.
+    ///
+    /// A decorated definition is the one wrapper that does NOT fit on
+    /// one row — Python hands the decorators their own lines — and it
+    /// is recognized instead by holding exactly one declaration.
+    fn declared_sem(&self, node: Node) -> Sem {
+        const MAX_WRAPPERS: u8 = 3;
+        let row = node.start_position().row;
+        let mut stack = vec![(node, 0u8)];
+        while let Some((n, depth)) = stack.pop() {
+            let sem = self.sem_of(n);
+            if matches!(sem, Sem::FnDef | Sem::TypeDef) {
+                return sem;
+            }
+            if depth >= MAX_WRAPPERS {
+                continue;
+            }
+            let mut cursor = n.walk();
+            let kids: Vec<Node> = n.named_children(&mut cursor).collect();
+            let mut declares = kids
+                .iter()
+                .map(|k| self.sem_of(*k))
+                .filter(|s| matches!(s, Sem::FnDef | Sem::TypeDef));
+            if let (Some(only), None) = (declares.next(), declares.next()) {
+                return only;
+            }
+            let same_row = kids.into_iter().filter(|k| k.start_position().row == row);
+            stack.extend(same_row.map(|k| (k, depth + 1)));
+        }
+        Sem::None
+    }
+
+    /// A docstring is documentation the grammar spells as a VALUE —
+    /// Python's and Ruby's first-statement string — so it carries no
+    /// comment node and the run walk never reaches it.
+    fn record_docstring(&mut self, node: Node, ctx: Ctx) {
+        let mut role = CommentRole::ModuleHeader;
+        let mut anc = node.parent();
+        while let Some(a) = anc {
+            match self.sem_of(a) {
+                Sem::FnDef | Sem::Lambda => {
+                    role = CommentRole::FnSummary;
+                    break;
+                }
+                Sem::TypeDef => {
+                    role = CommentRole::TypeDoc;
+                    break;
+                }
+                _ => anc = a.parent(),
+            }
+        }
+        let attach = match role {
+            CommentRole::FnSummary => Attach::Unit(ctx.unit as u32),
+            _ => Attach::Nothing,
+        };
+        let start = self.line_start(node.start_byte());
+        self.push_comment(start..node.end_byte(), node, role, attach);
+    }
+
+    /// Measure one comment run and keep it. A run that cannot be read
+    /// as words at all — a comment written in a script that does not
+    /// space them — is skipped rather than mismeasured.
+    fn push_comment(
+        &mut self,
+        span: std::ops::Range<usize>,
+        first: Node,
+        role: CommentRole,
+        attach: Attach,
+    ) {
+        let Some(text) = self.src.get(span).and_then(|b| str::from_utf8(b).ok()) else {
+            return;
+        };
+        let Some(prose) = crate::prose::measure(text, self.pack.doc_markers) else {
+            return;
+        };
+        self.facts.comments.push(CommentFact {
+            line: first.start_position().row as u32 + 1,
+            role,
+            unit: match attach {
+                Attach::Unit(u) => Some(u),
+                _ => None,
+            },
+            prose,
+        });
+        self.doc_targets.push(match attach {
+            Attach::AtLine(line) => line,
+            _ => 0,
+        });
+    }
+
+    /// Does code sit on this node's line, before it?
+    fn trails_code(&self, node: Node) -> bool {
+        self.src[..node.start_byte()]
+            .iter()
+            .rev()
+            .take_while(|b| **b != b'\n')
+            .any(|b| !b.is_ascii_whitespace())
+    }
+
+    /// Byte offset of the start of the line this byte sits on.
+    fn line_start(&self, byte: usize) -> usize {
+        self.src[..byte]
+            .iter()
+            .rposition(|b| *b == b'\n')
+            .map_or(0, |n| n + 1)
     }
 
     /// Keep every non-doc comment line for the block analysis. A doc
@@ -2959,6 +3205,18 @@ fn line_span(node: Node) -> u32 {
     (node.end_position().row - node.start_position().row) as u32 + 1
 }
 
+/// Lines a byte range covers, counted as `str::lines` counts them: a
+/// trailing newline closes the last line rather than opening another.
+/// One answer for all twenty-two languages, which is why it lives here
+/// and not twenty-two times over in the packs.
+fn line_count(text: &[u8]) -> u32 {
+    if text.is_empty() {
+        return 0;
+    }
+    let breaks = text.iter().filter(|b| **b == b'\n').count() as u32;
+    breaks + (text.last() != Some(&b'\n')) as u32
+}
+
 /// A definition's parameter list, wherever this grammar keeps it.
 fn param_list<'t>(node: Node<'t>) -> Option<Node<'t>> {
     node.child_by_field_name("parameters")
@@ -3765,5 +4023,85 @@ mod tests {
         let deep = facts("def f(x):\n    return g(h(k(x + 1)))\n    pass\n");
         let flat = facts("def f(x):\n    y = x + 1\n    return y\n");
         assert!(deep.units[1].max_expr_depth > flat.units[1].max_expr_depth);
+    }
+
+    /// (role, line, words) of every comment run, in source order.
+    fn roles(lang: Lang, name: &str, src: &str) -> Vec<(&'static str, u32, u16)> {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        let f = extract(pack, &mut parser, Path::new(name), src);
+        f.comments
+            .iter()
+            .map(|c| (c.role.name(), c.line, c.prose.words))
+            .collect()
+    }
+
+    #[test]
+    fn a_comment_takes_its_role_from_what_it_introduces() {
+        let src = "\
+//! What this file is for.
+
+/// What the type is for.
+pub struct S {
+    /// What the field is for.
+    pub n: usize,
+}
+
+/// What the function is for.
+pub fn f(x: usize) -> usize {
+    // How this step works.
+    x + 1 // and what this line is
+}
+";
+        assert_eq!(
+            roles(Lang::Rust, "s.rs", src),
+            [
+                ("module", 1, 5),
+                ("type", 3, 5),
+                ("field", 5, 5),
+                ("fn", 9, 5),
+                ("inline", 11, 4),
+                ("trailing", 12, 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_run_is_one_comment_however_many_nodes_it_takes() {
+        // Four `///` nodes, one contract. Counted as one run because a
+        // sentence — and a fenced example — spans lines.
+        let src = "/// One sentence\n/// split over two lines.\n///\n/// ```\n/// let x = 1;\n/// ```\nfn f() {}\n";
+        assert_eq!(roles(Lang::Rust, "s.rs", src), [("fn", 1, 6)]);
+        // A blank line ends it: two thoughts, two runs, and only the
+        // one touching the definition is its summary.
+        let split = "use std::io;\n\n// first\n\n// second\nfn f() {}\n";
+        assert_eq!(
+            roles(Lang::Rust, "s.rs", split),
+            [("inline", 3, 1), ("fn", 5, 1)]
+        );
+    }
+
+    #[test]
+    fn a_docstring_is_a_comment_the_grammar_spells_as_a_value() {
+        let src = "\"\"\"Module purpose.\"\"\"\n\n\nclass C:\n    \"\"\"Type purpose.\"\"\"\n\n    def m(self):\n        \"\"\"Method purpose.\"\"\"\n";
+        assert_eq!(
+            roles(Lang::Python, "s.py", src),
+            [("module", 1, 2), ("type", 5, 2), ("fn", 8, 2)]
+        );
+    }
+
+    #[test]
+    fn a_declaration_is_found_through_whatever_wraps_it() {
+        // TypeScript hangs `export` outside the declaration and binds an
+        // arrow through a declarator; Python gives its decorators their
+        // own lines. Read literally, the next sibling of each of these
+        // comments declares nothing and the summaries would be lost.
+        let ts = "/** Exported. */\nexport function f() {}\n\n/** Bound. */\nexport const g = () => {};\n\n/** Shaped. */\nexport interface I { a: number }\n";
+        assert_eq!(
+            roles(Lang::TypeScript, "s.ts", ts),
+            [("fn", 1, 1), ("fn", 4, 1), ("type", 7, 1)]
+        );
+        let py = "class C:\n    # What it does.\n    @property\n    def m(self):\n        pass\n";
+        assert_eq!(roles(Lang::Python, "s.py", py), [("fn", 2, 3)]);
     }
 }

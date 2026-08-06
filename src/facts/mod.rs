@@ -8,6 +8,7 @@ pub use extract::{extract, is_leaked_credential};
 use std::path::PathBuf;
 
 use crate::lang::Lang;
+use crate::prose::Prose;
 use crate::sem::Sem;
 
 pub struct FileFacts {
@@ -119,6 +120,71 @@ pub struct FileFacts {
     /// the interface, the weaker the abstraction — an implementer owes
     /// every method whether or not a caller ever wanted them together.
     pub interfaces: Vec<InterfaceFact>,
+    /// Every comment RUN in the file, classified by what it documents
+    /// and measured as prose. A run, not a line: `///` parses one node
+    /// per line, and a fenced example cannot be recognized — nor a
+    /// sentence counted — a line at a time.
+    pub comments: Vec<CommentFact>,
+}
+
+/// What a comment is FOR, decided from the Sem of what follows it.
+///
+/// Pooling these into one distribution makes a budget meaningless for
+/// all of them: a field's doc is a phrase, a module header is a page,
+/// and a function summary sits between. The classification is made from
+/// the ontology alone, so it means the same thing in every language.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CommentRole {
+    /// Opens the file and documents no single declaration.
+    ModuleHeader,
+    /// Introduces a class, struct, trait or interface.
+    TypeDoc,
+    /// Introduces a function or method — the contract a caller reads.
+    FnSummary,
+    /// Introduces a member of a type that is neither: a field, a
+    /// property, a constant, an enum case.
+    FieldDoc,
+    /// Explains the code around it rather than declaring a contract.
+    Inline,
+    /// Sits on a line of code, after it.
+    Trailing,
+}
+
+impl CommentRole {
+    /// Every role, in declaration order — the index into per-role
+    /// tallies is the discriminant.
+    pub const ALL: [CommentRole; 6] = [
+        CommentRole::ModuleHeader,
+        CommentRole::TypeDoc,
+        CommentRole::FnSummary,
+        CommentRole::FieldDoc,
+        CommentRole::Inline,
+        CommentRole::Trailing,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CommentRole::ModuleHeader => "module",
+            CommentRole::TypeDoc => "type",
+            CommentRole::FnSummary => "fn",
+            CommentRole::FieldDoc => "field",
+            CommentRole::Inline => "inline",
+            CommentRole::Trailing => "trailing",
+        }
+    }
+}
+
+/// One comment run: where it is, what it documents, and how much it
+/// says. Counts rather than text — see `crate::prose`.
+pub struct CommentFact {
+    /// 1-based line the run starts on.
+    pub line: u32,
+    pub role: CommentRole,
+    /// Index into `units` when the run documents one, which only a
+    /// `FnSummary` or an `Inline` comment does — a type and a field are
+    /// not measured units.
+    pub unit: Option<u32>,
+    pub prose: Prose,
 }
 
 /// One class's cohesion: how many disconnected groups its methods

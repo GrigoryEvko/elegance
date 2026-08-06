@@ -85,7 +85,7 @@ pub fn pack() -> Pack {
         // `(** ... *)` is OCaml's documentation comment.
         doc_markers: &["(**"],
         is_public,
-        unit_docs,
+        doc_span,
         docs_inside_body: false,
         file_level_scope: false,
         is_override: |_, _| false,
@@ -183,16 +183,13 @@ fn is_public(node: Node, src: &[u8]) -> bool {
 }
 
 /// `(** ... *)` immediately above the binding.
-fn unit_docs(node: Node, src: &[u8]) -> u32 {
-    let mut prev = node.prev_named_sibling();
+fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
     // A value_definition wraps the binding, so look outward once.
-    if prev.is_none() {
-        prev = node.parent().and_then(|p| p.prev_named_sibling());
-    }
-    prev.filter(|p| p.kind() == "comment")
-        .and_then(|p| p.utf8_text(src).ok())
-        .filter(|t| t.starts_with("(**"))
-        .map_or(0, |t| t.lines().count() as u32)
+    let carrier = match node.prev_named_sibling() {
+        Some(_) => node,
+        None => node.parent()?,
+    };
+    super::doc_run(carrier, &["comment"], &["(**"], src)
 }
 
 /// Two normalizations. `else if` nests an if inside an else clause, as

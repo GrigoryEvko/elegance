@@ -18,6 +18,7 @@ mod layers;
 mod metrics;
 mod near;
 mod notebook;
+mod prose;
 mod ratchet;
 #[cfg(test)]
 mod recall;

@@ -211,7 +211,7 @@
 "magic strings" = { hi = 1.0 }
 "skipped tests" = { hi = 4.0 }
 "asserts" = { rate = 0.02 }
-"public docs" = { rate = 0.08 }
+"public docs" = { rate = 0.03 }
 
 [php]
 "cognitive" = { hi = 32.0 }
@@ -274,7 +274,7 @@
 "interface width" = { hi = 26.0 }
 "magic strings" = { hi = 1.0 }
 "asserts" = { rate = 0.22 }
-"public docs" = { rate = 0.15 }
+"public docs" = { rate = 0.14 }
 
 [swift]
 "cognitive" = { hi = 11.0 }

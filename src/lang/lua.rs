@@ -94,7 +94,7 @@ pub fn pack() -> Pack {
         // LuaDoc and its LDoc successor both mark a doc block this way.
         doc_markers: &["---", "--[["],
         is_public,
-        unit_docs,
+        doc_span,
         docs_inside_body: false,
         file_level_scope: false,
         is_override: |_, _| false,
@@ -272,18 +272,8 @@ fn is_public(node: Node, src: &[u8]) -> bool {
 }
 
 /// A run of `---` or an `--[[ ]]` block immediately above the function.
-fn unit_docs(node: Node, src: &[u8]) -> u32 {
-    let mut lines = 0;
-    let mut prev = node.prev_named_sibling();
-    while let Some(p) = prev.filter(|p| p.kind() == "comment") {
-        let Ok(text) = p.utf8_text(src) else { break };
-        if !text.starts_with("---") && !text.starts_with("--[[") {
-            break;
-        }
-        lines += text.lines().count() as u32;
-        prev = p.prev_named_sibling();
-    }
-    lines
+fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
+    super::doc_run(node, &["comment"], &["---", "--[["], src)
 }
 
 /// Two normalizations. `elseif` is its own kind here rather than a

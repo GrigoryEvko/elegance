@@ -83,7 +83,7 @@ pub fn pack() -> Pack {
         // Sphinx attribute docs and section banners are documentation.
         doc_markers: &["#:", "##"],
         is_public,
-        unit_docs,
+        doc_span,
         docs_inside_body: true,
         file_level_scope: false,
         is_override: |_, _| false,
@@ -316,14 +316,10 @@ fn is_public(node: Node, src: &[u8]) -> bool {
     named_public
 }
 
-/// Docstring lines: first statement of the body when it is a bare string.
-fn unit_docs(node: Node, _src: &[u8]) -> u32 {
-    node.child_by_field_name("body")
-        .and_then(|b| b.named_child(0))
-        .filter(|first| is_doc(*first))
-        .map_or(0, |d| {
-            (d.end_position().row - d.start_position().row) as u32 + 1
-        })
+/// The docstring: first statement of the body when it is a bare string.
+fn doc_span(node: Node, _src: &[u8]) -> Option<(u32, u32)> {
+    let body = node.child_by_field_name("body")?;
+    super::node_span(body.named_child(0).filter(|first| is_doc(*first))?)
 }
 
 /// `f = lambda x: ...` is a named function in disguise — measure it as a

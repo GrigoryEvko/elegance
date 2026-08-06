@@ -97,7 +97,7 @@ pub fn pack() -> Pack {
         is_doc: |_| false,
         doc_markers: &[],
         is_public,
-        unit_docs,
+        doc_span,
         docs_inside_body: false,
         file_level_scope: false,
         is_override: |_, _| false,
@@ -268,17 +268,8 @@ fn is_public(node: Node, src: &[u8]) -> bool {
 }
 
 /// Doc comments: `///` runs directly above (comment kind is unified).
-fn unit_docs(node: Node, src: &[u8]) -> u32 {
-    let mut lines = 0;
-    let mut prev = node.prev_named_sibling();
-    while let Some(p) = prev {
-        if p.kind() != "comment" || !p.utf8_text(src).is_ok_and(|t| t.starts_with("///")) {
-            break;
-        }
-        lines += 1;
-        prev = p.prev_named_sibling();
-    }
-    lines
+fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
+    super::doc_run(node, &["comment"], &["///"], src)
 }
 
 /// `!x`, the only negation operator.

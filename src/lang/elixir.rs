@@ -78,7 +78,7 @@ pub fn pack() -> Pack {
         is_doc: |_| false,
         doc_markers: &["@doc", "@moduledoc"],
         is_public,
-        unit_docs,
+        doc_span,
         docs_inside_body: false,
         file_level_scope: false,
         is_override: |_, _| false,
@@ -361,14 +361,12 @@ fn is_public(node: Node, src: &[u8]) -> bool {
 
 /// `@doc """..."""` above the definition. The attribute is a call, so
 /// this reads the sibling rather than a comment run.
-fn unit_docs(node: Node, src: &[u8]) -> u32 {
-    let Some(prev) = node.prev_named_sibling() else {
-        return 0;
-    };
-    if !matches!(target_text(prev, src), Some("@doc" | "@moduledoc")) {
-        return 0;
+fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
+    let prev = node.prev_named_sibling()?;
+    match target_text(prev, src) {
+        Some("@doc" | "@moduledoc") => super::node_span(prev),
+        _ => None,
     }
-    prev.utf8_text(src).map_or(0, |t| t.lines().count() as u32)
 }
 
 /// A map literal with atom keys is a shape nothing declares — the same

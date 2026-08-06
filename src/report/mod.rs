@@ -13,7 +13,7 @@ pub use sarif::render as render_sarif;
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use crate::facts::FileFacts;
+use crate::facts::{CommentRole, FileFacts};
 use crate::lang::LANGS;
 use crate::metrics::{self, Fmt, LangBudgets, METRICS, N};
 
@@ -35,6 +35,36 @@ const MIN_POSITION_SAMPLES: usize = 200;
 pub(super) const P50: f64 = 0.50;
 pub(super) const P90: f64 = 0.90;
 pub(super) const P99: f64 = 0.99;
+
+/// What a set of comment runs adds up to. Sums rather than a
+/// distribution: this answers "what does this role look like here",
+/// which is the question a per-role budget starts from.
+#[derive(Clone, Copy, Default)]
+pub struct Tally {
+    pub runs: u64,
+    pub words: u64,
+    pub sentences: u64,
+    pub grounds: u64,
+    pub purposes: u64,
+}
+
+impl Tally {
+    fn add(&mut self, other: Tally) {
+        self.runs += other.runs;
+        self.words += other.words;
+        self.sentences += other.sentences;
+        self.grounds += other.grounds;
+        self.purposes += other.purposes;
+    }
+
+    /// Per-run average of a total, or zero when nothing was counted.
+    pub fn per_run(&self, total: u64) -> f64 {
+        match self.runs {
+            0 => 0.0,
+            n => total as f64 / n as f64,
+        }
+    }
+}
 
 struct Offender {
     value: f32,
@@ -174,6 +204,11 @@ pub struct Agg {
     shapes: HashMap<String, Clump>,
     /// Per-language spelling counts of unit names, for idiom entropy.
     spellings: [[u32; metrics::CASES]; LANGS.len()],
+    /// Per-language, per-role comment tallies. A budget for how much a
+    /// comment should say has to be pinned per ROLE — a field's doc is
+    /// a phrase and a module header is a page — so the distribution
+    /// they are pinned against has to be readable per role first.
+    comments: [[Tally; CommentRole::ALL.len()]; LANGS.len()],
     /// Per-unit fingerprints, for near-clones the Merkle hash cannot see.
     prints: Vec<crate::near::Print>,
     clones: HashMap<u64, CloneClass>,
@@ -242,6 +277,7 @@ impl Agg {
             switches: HashMap::new(),
             shapes: HashMap::new(),
             spellings: [[0; metrics::CASES]; LANGS.len()],
+            comments: [[Tally::default(); CommentRole::ALL.len()]; LANGS.len()],
             prints: Vec::new(),
             clones: HashMap::new(),
             graph: Vec::new(),
@@ -316,6 +352,7 @@ impl Agg {
             });
         }
         self.collect_spellings(facts);
+        self.collect_comments(facts);
         self.collect_synonyms(facts);
         self.test_refs.extend(facts.test_refs.iter().cloned());
         for name in &facts.mentioned {
@@ -416,6 +453,7 @@ impl Agg {
                 a.spellings[lang][case] += n;
             }
         }
+        a.absorb_comments(&b.comments);
         a.prints.append(&mut b.prints);
         a.graph.append(&mut b.graph);
         for (object, verbs) in b.synonyms.drain() {
@@ -495,6 +533,36 @@ impl Agg {
             };
             row[slot] += 1;
         }
+    }
+
+    /// What this file's comments are for, and how much they say.
+    fn collect_comments(&mut self, facts: &FileFacts) {
+        let row = &mut self.comments[facts.lang as usize];
+        for c in &facts.comments {
+            row[c.role as usize].add(Tally {
+                runs: 1,
+                words: c.prose.words as u64,
+                sentences: c.prose.sentences as u64,
+                grounds: c.prose.grounds as u64,
+                purposes: c.prose.purposes as u64,
+            });
+        }
+    }
+
+    /// Another aggregate's comment tallies, added to this one's.
+    fn absorb_comments(&mut self, other: &[[Tally; CommentRole::ALL.len()]]) {
+        for (lang, row) in other.iter().enumerate() {
+            for (role, tally) in row.iter().enumerate() {
+                self.comments[lang][role].add(*tally);
+            }
+        }
+    }
+
+    /// What each role's comments amount to in this corpus, per
+    /// language. Read by `calibrate`, which is the only caller that has
+    /// a corpus worth asking.
+    pub fn comment_roles(&self, lang: crate::lang::Lang) -> &[Tally] {
+        &self.comments[lang as usize]
     }
 
     /// Which synonymous verb each named object is reached by. Only
@@ -2191,10 +2259,45 @@ pub fn render_explain(facts: &FileFacts, line: Option<u32>) -> String {
     };
     file_lines("spooky constructs", &facts.spooky_lines, &mut out);
     file_lines("echo comments", &facts.echo_comments, &mut out);
+    explain_comments(facts, &mut out);
     if out.is_empty() {
         out.push_str("no unit at that location\n");
     }
     out
+}
+
+/// What this file's comments are for, and the longest thing they say.
+///
+/// The counts are the role classification made checkable by hand — the
+/// only way to know a comment was read as a field's doc rather than a
+/// function's is to look — and the longest run is where a per-role
+/// documentation budget will be argued from.
+fn explain_comments(facts: &FileFacts, out: &mut String) {
+    let Some(widest) = facts.comments.iter().max_by_key(|c| c.prose.words) else {
+        return;
+    };
+    let counts: Vec<String> = CommentRole::ALL
+        .iter()
+        .filter_map(
+            |role| match facts.comments.iter().filter(|c| c.role == *role).count() {
+                0 => None,
+                n => Some(format!("{} {n}", role.name())),
+            },
+        )
+        .collect();
+    let _ = writeln!(out, "comments: {}", counts.join(", "));
+    let on = widest
+        .unit
+        .and_then(|u| facts.units.get(u as usize))
+        .map_or(String::new(), |u| format!(" on {}", u.qualname));
+    let _ = writeln!(
+        out,
+        "longest comment: {} at line {}{on} — {} words, {} sentences",
+        widest.role.name(),
+        widest.line,
+        widest.prose.words,
+        widest.prose.sentences,
+    );
 }
 
 fn explain_unit(u: &crate::facts::UnitFacts, facts: &FileFacts, out: &mut String) {

@@ -117,7 +117,7 @@ pub fn pack() -> Pack {
         is_doc: |_| false,
         doc_markers: &["##", "#"],
         is_public,
-        unit_docs,
+        doc_span,
         docs_inside_body: true,
         file_level_scope: false,
         is_override: |_, _| false,
@@ -400,15 +400,8 @@ fn is_public(node: Node, src: &[u8]) -> bool {
 }
 
 /// The `#` comment run immediately above the definition.
-fn unit_docs(node: Node, src: &[u8]) -> u32 {
-    let mut lines = 0;
-    let mut prev = node.prev_named_sibling();
-    while let Some(p) = prev.filter(|p| p.kind() == "comment") {
-        let Ok(text) = p.utf8_text(src) else { break };
-        lines += text.lines().count() as u32;
-        prev = p.prev_named_sibling();
-    }
-    lines
+fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
+    super::doc_run(node, &["comment"], &[], src)
 }
 
 /// A hash literal with symbol or string keys is an undeclared shape,

@@ -113,7 +113,7 @@ pub fn pack(dialect: Dialect) -> Pack {
         is_doc: |_| false,
         doc_markers: &[],
         is_public,
-        unit_docs,
+        doc_span,
         docs_inside_body: false,
         file_level_scope: false,
         is_override,
@@ -398,21 +398,21 @@ pub(super) fn is_public(node: Node, src: &[u8]) -> bool {
 
 /// JSDoc block ending directly above the definition or its enclosing
 /// declaration statement (promoted lambdas: `/** */ const f = () => ...`).
-pub(super) fn unit_docs(node: Node, src: &[u8]) -> u32 {
+pub(super) fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
     // Up to the export statement: arrow -> declarator -> declaration -> export.
     let mut carrier = Some(node);
     for _ in 0..4 {
-        let Some(c) = carrier else { break };
+        let c = carrier?;
         if let Some(p) = c.prev_named_sibling()
             && p.kind() == "comment"
             && p.utf8_text(src).is_ok_and(|t| t.starts_with("/**"))
             && p.end_position().row + 1 >= c.start_position().row
         {
-            return (p.end_position().row - p.start_position().row) as u32 + 1;
+            return super::node_span(p);
         }
         carrier = c.parent();
     }
-    0
+    None
 }
 
 /// An object literal's keys. Shorthand properties count too: `{ id, name }`

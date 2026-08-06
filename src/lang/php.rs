@@ -129,7 +129,7 @@ pub fn pack() -> Pack {
         // and static analysers read its annotations as types.
         doc_markers: &["/**"],
         is_public,
-        unit_docs,
+        doc_span,
         docs_inside_body: false,
         file_level_scope: false,
         is_override: |_, _| false,
@@ -371,12 +371,8 @@ fn is_doc(node: Node) -> bool {
 }
 
 /// The `/** ... */` docblock immediately above the declaration.
-fn unit_docs(node: Node, src: &[u8]) -> u32 {
-    node.prev_named_sibling()
-        .filter(|p| p.kind() == "comment")
-        .and_then(|p| p.utf8_text(src).ok())
-        .filter(|t| t.starts_with("/**"))
-        .map_or(0, |t| t.lines().count() as u32)
+fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
+    super::doc_run(node, &["comment"], &["/**"], src)
 }
 
 /// `&&`/`||`/`and`/`or` share the binary kind with arithmetic and every

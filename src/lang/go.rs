@@ -88,7 +88,7 @@ pub fn pack() -> Pack {
         is_doc: |_| false,
         doc_markers: &[],
         is_public,
-        unit_docs,
+        doc_span,
         docs_inside_body: false,
         file_level_scope: false,
         is_override: |_, _| false,
@@ -337,19 +337,8 @@ fn is_public(node: Node, src: &[u8]) -> bool {
 }
 
 /// Godoc: comment run directly above the declaration.
-fn unit_docs(node: Node, _src: &[u8]) -> u32 {
-    let mut lines = 0;
-    let mut prev = node.prev_named_sibling();
-    let mut expected_row = node.start_position().row;
-    while let Some(p) = prev {
-        if p.kind() != "comment" || p.end_position().row + 1 != expected_row {
-            break;
-        }
-        lines += (p.end_position().row - p.start_position().row) as u32 + 1;
-        expected_row = p.start_position().row;
-        prev = p.prev_named_sibling();
-    }
-    lines
+fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
+    super::doc_run(node, &["comment"], &[], src)
 }
 
 /// `if err != nil { }` — the error vanished. Go has no Catch node, so

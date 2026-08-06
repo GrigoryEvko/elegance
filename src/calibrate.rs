@@ -109,6 +109,7 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
             let _ = write!(out, "\n[{}]\n{section}", lang.name());
         }
         audit_policy(&agg, lang, &mut unpoliced);
+        report_comment_roles(&agg, lang);
     }
 
     std::fs::write("calibration.toml", &out)?;
@@ -202,6 +203,35 @@ fn rate_entries(agg: &mut Agg, lang: Lang) -> String {
         );
     }
     section
+}
+
+/// What each comment ROLE looks like in this corpus, printed and not
+/// pinned.
+///
+/// Nothing is calibrated from it yet — doc length and ground density
+/// are the metrics that will be — but the distribution has to be
+/// readable before a budget can be argued about, and a corpus scan is
+/// the only place it can be read. Roles with too few runs to mean
+/// anything stay quiet.
+fn report_comment_roles(agg: &Agg, lang: Lang) {
+    for (role, tally) in crate::facts::CommentRole::ALL
+        .iter()
+        .zip(agg.comment_roles(lang))
+    {
+        if (tally.runs as usize) < MIN_SAMPLES {
+            continue;
+        }
+        println!(
+            "{:<5} comment:{:<8} n={:<7} words {:.1}  sentences {:.1}  grounds {:.2}  purposes {:.2}",
+            lang.name(),
+            role.name(),
+            tally.runs,
+            tally.per_run(tally.words),
+            tally.per_run(tally.sentences),
+            tally.per_run(tally.grounds),
+            tally.per_run(tally.purposes),
+        );
+    }
 }
 
 /// Percentiles never touch `Calib::Policy` budgets, so nothing catches a

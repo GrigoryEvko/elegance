@@ -82,7 +82,7 @@ pub fn pack() -> Pack {
         is_doc: |_| false,
         doc_markers: &[],
         is_public,
-        unit_docs,
+        doc_span,
         docs_inside_body: false,
         file_level_scope: false,
         is_override,
@@ -387,21 +387,32 @@ fn is_public(node: Node, src: &[u8]) -> bool {
 
 /// `///` run (one node per line) directly above the item, with attribute
 /// items allowed in between; block `/** */` docs count by span.
-fn unit_docs(node: Node, src: &[u8]) -> u32 {
-    let mut lines = 0;
+fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
+    let mut span: Option<(u32, u32)> = None;
     let mut prev = node.prev_named_sibling();
-    while let Some(p) = prev {
-        match p.kind() {
-            "attribute_item" => {}
-            "line_comment" if p.utf8_text(src).is_ok_and(|t| t.starts_with("///")) => lines += 1,
-            "block_comment" if p.utf8_text(src).is_ok_and(|t| t.starts_with("/**")) => {
-                lines += (p.end_position().row - p.start_position().row) as u32 + 1;
-            }
+    let mut expected = node.start_position().row;
+    while let Some(p) = prev.filter(|p| super::last_row(*p) + 1 == expected) {
+        let opens = match p.kind() {
+            // `#[inline]` between the docs and the item interrupts the
+            // run without ending it, and documents nothing itself.
+            "attribute_item" => "",
+            "line_comment" => "///",
+            "block_comment" => "/**",
             _ => break,
+        };
+        if !p.utf8_text(src).is_ok_and(|t| t.starts_with(opens)) {
+            break;
         }
+        if !opens.is_empty() {
+            span = Some((
+                p.start_byte() as u32,
+                span.map_or(p.end_byte() as u32, |s| s.1),
+            ));
+        }
+        expected = p.start_position().row;
         prev = p.prev_named_sibling();
     }
-    lines
+    span
 }
 
 /// Rust has no `elif` kind: `else if` parses as `else_clause(if_expression)`.
