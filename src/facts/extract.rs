@@ -981,11 +981,53 @@ impl Extractor<'_> {
     /// `assertTrue(1)` pass whatever the code under test did, so the
     /// test is green by construction. A literal in SECOND position is
     /// the expected value of a real comparison and is fine.
+    ///
+    /// Three things a single literal argument does NOT mean, each
+    /// measured on gold before it was excluded:
+    ///
+    /// - **The literal is the EXPECTED value of a fluent assertion.**
+    ///   `resultA.Name.ShouldBe("name1")` puts the subject on the
+    ///   RECEIVER, so the argument is the answer rather than the
+    ///   question. C#'s pack accepts any member starting `Should`, and
+    ///   this one shape was 2,116 of the metric's 3,116 gold findings —
+    ///   the whole reason C# read 24% of its test units.
+    /// - **The literal is DATA the helper operates on.** A project's
+    ///   own `assert_file("lib/my_app/accounts.ex")` is a parameterised
+    ///   case, never a tautology; `assertish` matches any name with an
+    ///   `assert` in it, so every such helper qualified.
+    /// - **The call is not the whole assertion.** ZIO writes
+    ///   `assert(11)(equalTo(12))`, where `assert(11)` is the SUBJECT
+    ///   of the assertion that follows it.
     fn asserts_a_literal(&self, call: Node) -> bool {
         let [only] = call_arguments(self.pack, call)[..] else {
             return false;
         };
+        // A string is data. Numbers stay: Perl and C have no boolean
+        // literal, and `ok(1)` is exactly the tautology this counts.
+        if self.pack.table_sem(only) == Sem::StrLit {
+            return false;
+        }
         self.is_literal(only)
+            && self.assertion_owns_its_argument(call)
+            && !self.is_applied_again(call)
+    }
+
+    /// Is this call the SUBJECT of another call rather than a complete
+    /// assertion? A curried assertion applies its subject first.
+    fn is_applied_again(&self, call: Node) -> bool {
+        outer_node(call)
+            .and_then(|p| self.pack.call_target(p))
+            .is_some_and(|t| t.id() == call.id())
+    }
+
+    /// Does the assertion's own namespace hold the subject, or does its
+    /// RECEIVER? The qualifier of the callee decides, and a bare callee
+    /// has none to doubt.
+    fn assertion_owns_its_argument(&self, call: Node) -> bool {
+        self.pack
+            .call_target(call)
+            .and_then(|t| t.utf8_text(self.src).ok())
+            .is_none_or(crate::lang::assertion_names_its_own_subject)
     }
 
     fn record_imports(&mut self, node: Node) {
@@ -1876,8 +1918,9 @@ impl Extractor<'_> {
         // also measured ZERO classes for cohesion while being made of
         // almost nothing else.
         let selfish_base = base_text.is_some_and(|n| {
-            let n = unsigiled(n);
-            matches!(n, "self" | "cls" | "this") || n == unsigiled(&self.self_names[unit])
+            let n = crate::lang::unsigiled(n);
+            matches!(n, "self" | "cls" | "this")
+                || n == crate::lang::unsigiled(&self.self_names[unit])
         });
         let base_name = (self.pack.table_sem(base) == Sem::Ident)
             .then_some(base_text)
@@ -2678,25 +2721,6 @@ fn bare_argument<'t>(mut node: Node<'t>) -> Node<'t> {
         node = inner;
     }
     node
-}
-
-/// A variable name without the sigil its language spells it with.
-///
-/// `$this` and `this` are the same receiver; `$self` and `self` are the
-/// same object. Only ONE character comes off, so PHP's variable-variable
-/// `$$name` still reads as `$name` and Ruby's `@@count` as `@count` —
-/// both of which are genuinely different names from `name`.
-///
-/// A name that is NOTHING BUT a sigil keeps it. `$` is a legal
-/// identifier in TypeScript and in Solidity, and stripping it left the
-/// empty string, which matched the empty receiver name a free function
-/// carries — so vscode's `$('.chart')` and OpenZeppelin's
-/// `$._initializing` briefly read as accesses to their own object.
-fn unsigiled(name: &str) -> &str {
-    match name.strip_prefix(['$', '@', '%', '&']) {
-        Some(rest) if !rest.is_empty() => rest,
-        _ => name,
-    }
 }
 
 /// A bare word a member could be called — no dots, no subscripts, no

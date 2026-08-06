@@ -76,6 +76,7 @@ defmodule App.OrderStore do
   test "publishes within the window" do
     :timer.sleep(2000)
     assert true
+    assert 1
     assert_receive :published
   end
 end

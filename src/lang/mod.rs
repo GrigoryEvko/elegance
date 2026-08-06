@@ -885,6 +885,47 @@ fn mentions(text: &str, name: &str) -> bool {
         .any(|token| token == name)
 }
 
+/// A variable name without the sigil its language spells it with.
+///
+/// `$this` and `this` are the same receiver; `$self` and `self` are the
+/// same object. Only ONE character comes off, so PHP's variable-variable
+/// `$$name` still reads as `$name` and Ruby's `@@count` as `@count` —
+/// both of which are genuinely different names from `name`.
+///
+/// A name that is NOTHING BUT a sigil keeps it. `$` is a legal
+/// identifier in TypeScript and in Solidity, and stripping it left the
+/// empty string, which matched the empty receiver name a free function
+/// carries — so vscode's `$('.chart')` and OpenZeppelin's
+/// `$._initializing` briefly read as accesses to their own object.
+pub(crate) fn unsigiled(name: &str) -> &str {
+    match name.strip_prefix(['$', '@', '%', '&']) {
+        Some(rest) if !rest.is_empty() => rest,
+        _ => name,
+    }
+}
+
+/// Does an assertion callee name the SUBJECT it is about, or does its
+/// receiver hold it?
+///
+/// An xUnit assertion names both on the callee — `Assert.True(..)`,
+/// `$this->assertTrue(..)`, `assert.Equal(..)`, `self.assertTrue(..)` —
+/// so a lone literal argument is the thing being asserted. A FLUENT
+/// assertion hangs off the value it is about: in
+/// `resultA.Name.ShouldBe("name1")` the subject is the receiver and the
+/// literal is the expected answer. The qualifier is what tells them
+/// apart, and a bare callee has no qualifier to doubt.
+pub(crate) fn assertion_names_its_own_subject(callee: &str) -> bool {
+    let parts: Vec<&str> = callee
+        .split(|c: char| !identifierish(c) && c != '$' && c != '@')
+        .filter(|p| !p.is_empty())
+        .collect();
+    let Some(head) = parts.len().checked_sub(2).and_then(|i| parts.get(i)) else {
+        return true;
+    };
+    let head = unsigiled(head);
+    matches!(head, "this" | "self" | "cls") || assertish(head) || expectish(head)
+}
+
 /// Does a caught type reach EVERY failure the runtime can raise?
 ///
 /// Three packs asked this with a SUBSTRING — `text.contains("Exception ")`
@@ -2718,6 +2759,69 @@ let classify items limit =
                 .find(|u| &*u.name == "f")
                 .unwrap_or_else(|| panic!("{lang:?}: no unit `f` in {src:?}"));
             assert_eq!((u.swallowed, u.broad_catch), (1, 0), "{lang:?} {src:?}");
+        }
+    }
+
+    /// What a single literal argument to an assertion means. Each
+    /// source declares one unit `f`, and the flag is whether it counts
+    /// as vacuous — an assertion green whatever the code did.
+    ///
+    /// The three FALSE rows are the metric's three measured false
+    /// positives: a fluent assertion whose subject is the receiver and
+    /// whose literal is the expected answer (2,116 of 3,116 gold
+    /// findings, and the whole reason C# read 24% of its test units), a
+    /// project helper whose literal is DATA, and a curried assertion
+    /// whose first application is only its subject.
+    const LITERAL_ASSERT: &[(Lang, &str, &str, bool)] = &[
+        (
+            Lang::CSharp,
+            "T.cs",
+            "class T {\n void f() {\n Assert.True(true);\n }\n}\n",
+            true,
+        ),
+        (
+            Lang::CSharp,
+            "T.cs",
+            "class T {\n void f() {\n resultA.Name.ShouldBe(\"name1\");\n }\n}\n",
+            false,
+        ),
+        (
+            Lang::CSharp,
+            "T.cs",
+            "class T {\n void f() {\n order.Total.ShouldBe(3);\n }\n}\n",
+            false,
+        ),
+        (
+            Lang::Php,
+            "T.php",
+            "<?php\nclass T {\n function f() {\n $this->assertTrue(true);\n }\n}\n",
+            true,
+        ),
+        (
+            Lang::Elixir,
+            "t.exs",
+            "defmodule T do\n def f do\n assert_file(\"lib/accounts.ex\")\n end\nend\n",
+            false,
+        ),
+        (
+            Lang::Scala,
+            "T.scala",
+            "class T {\n def f(): Unit = assert(11)(equalTo(12))\n}\n",
+            false,
+        ),
+        (Lang::Perl, "t.pl", "sub f {\n ok(1);\n}\n1;\n", true),
+    ];
+
+    #[test]
+    fn a_literal_argument_is_the_subject_only_when_the_assertion_owns_it() {
+        for (lang, name, src, want) in LITERAL_ASSERT {
+            let f = facts_at(*lang, name, src);
+            let u = f
+                .units
+                .iter()
+                .find(|u| &*u.name == "f")
+                .unwrap_or_else(|| panic!("{lang:?}: no unit `f` in {src:?}"));
+            assert_eq!(u.vacuous_asserts > 0, *want, "{lang:?} {src:?}");
         }
     }
 
