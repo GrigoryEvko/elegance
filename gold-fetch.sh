@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# Fetch the pinned gold corpus from gold.toml into $1 (default /tmp/gold).
+# Fetch the pinned gold corpus from gold.toml into $1, defaulting to a
+# durable cache rather than /tmp: the corpus is 100 repositories and an
+# hour of network, and /tmp is cleared on reboot. Losing it mid-session
+# is not the worst of it — `elegance calibrate` pointed at the absence
+# then had nothing to measure, and the run before this guard existed
+# overwrote every budget in calibration.toml with an empty table.
 # Reproducible: each repo is checked out at its pinned SHA, so calibration
 # derived from the corpus is auditable and re-derivable on any machine.
 set -euo pipefail
 
-target="${1:-/tmp/gold}"
+target="${1:-${XDG_CACHE_HOME:-$HOME/.cache}/elegance-gold}"
 manifest="$(dirname "$0")/gold.toml"
 
 # Parse [[repo]] tables in file order. `prune` is optional and holds one
