@@ -215,6 +215,7 @@ impl Index {
             Lang::Rust => self.rust(i, from, target),
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => self.web(from, target),
             Lang::Go => self.go(target),
+            Lang::Swift => self.swift(target),
             Lang::Zig => self.zig(from, target),
             // C++ includes resolve exactly as C's do: a quoted path is
             // relative to the including file, an angled one is a
@@ -243,24 +244,28 @@ impl Index {
             //   PHP       `use Foo\\Bar` likewise
             //   Solidity  an import names a FILE path
             //   the rest  a package or namespace names a directory
-            lang => {
-                let parts: Vec<&str> = target
-                    .split(component_separators(lang))
-                    .filter(|p| !p.is_empty())
-                    .collect();
-                match self.suffix(&parts) {
-                    Some(i) => Class::Internal(i),
-                    // A specifier that named a path, or a member of a
-                    // namespace this project declares, was SUPPOSED to
-                    // be here. Calling that a third-party dependency is
-                    // how a corpus that resolved nothing reported
-                    // itself fully resolved.
-                    None => match imp.reach {
-                        crate::lang::Reach::Project => Class::Unresolved,
-                        crate::lang::Reach::Anywhere => Class::External,
-                    },
-                }
-            }
+            lang => self.by_components(lang, imp),
+        }
+    }
+
+    /// Split the target on whatever separates this language's namespace
+    /// or path components, and match the tail against the scanned files.
+    fn by_components(&self, lang: Lang, imp: &crate::facts::ImportFact) -> Class {
+        let parts: Vec<&str> = imp
+            .target
+            .split(component_separators(lang))
+            .filter(|p| !p.is_empty())
+            .collect();
+        match self.suffix(&parts) {
+            Some(i) => Class::Internal(i),
+            // A specifier that named a path, or a member of a namespace
+            // this project declares, was SUPPOSED to be here. Calling
+            // that a third-party dependency is how a corpus that
+            // resolved nothing reported itself fully resolved.
+            None => match imp.reach {
+                crate::lang::Reach::Project => Class::Unresolved,
+                crate::lang::Reach::Anywhere => Class::External,
+            },
         }
     }
 
@@ -441,6 +446,24 @@ impl Index {
             }
         }
         Class::External
+    }
+
+    /// A Swift module is a TARGET DIRECTORY (`Sources/NIOCore/`) and
+    /// never a file, so it resolves the way a Go package does. Matching
+    /// a file STEM sent vapor's `import HTTPTypes` — Apple's
+    /// swift-http-types, declared in vapor's own Package.swift — to
+    /// swift-nio's Sources/NIOHTTP1/HTTPTypes.swift in another
+    /// repository, and put its 84 fabricated dependents at the top of
+    /// the report. 140 of the 170 stem matches were wrong that way.
+    fn swift(&self, target: &str) -> Class {
+        let dir = self
+            .dirs
+            .get(target)
+            .and_then(|c| c.iter().min_by_key(|(comps, _)| comps.len()));
+        match dir {
+            Some(&(_, i)) => Class::Internal(i),
+            None => Class::External,
+        }
     }
 
     /// `source ./lib/common.sh`. Interpolated paths (`. "$DIR/x.sh"`)
@@ -746,6 +769,38 @@ mod tests {
         ];
         let (_, e) = edges(&files);
         assert_eq!(e, [(3, 1)]);
+    }
+
+    #[test]
+    fn a_swift_import_names_a_target_directory_not_a_file() {
+        // vapor's `import HTTPTypes` is Apple's swift-http-types, which
+        // vapor's own Package.swift declares. Matching a file STEM sent
+        // it to swift-nio's Sources/NIOHTTP1/HTTPTypes.swift — another
+        // repository entirely — and made those 84 fabricated dependents
+        // the top line of the Swift report. 140 of the 170 stem matches
+        // were wrong the same way.
+        let files = [
+            file(Lang::Swift, "swift-nio/Sources/NIOCore/Channel.swift", &[]),
+            file(
+                Lang::Swift,
+                "swift-nio/Sources/NIOHTTP1/HTTPTypes.swift",
+                &["NIOCore"],
+            ),
+            file(
+                Lang::Swift,
+                "vapor/Sources/Vapor/Request.swift",
+                &["HTTPTypes"],
+            ),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(
+            targets[1][0],
+            Some(idx("Sources/NIOCore/Channel.swift")),
+            "a module is the directory that holds it"
+        );
+        assert_eq!(targets[2][0], None, "and never a file that shares its name");
+        assert_eq!(res.external, 1);
     }
 
     #[test]
