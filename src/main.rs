@@ -35,6 +35,19 @@ use std::path::PathBuf;
 use rayon::prelude::*;
 use tree_sitter::Parser;
 
+/// The scan is allocation-bound: each file produces facts on a rayon
+/// worker and drops them again, 28 threads deep, and a tree-sitter parse
+/// is thousands of small nodes. glibc's malloc hands out arenas per
+/// thread but returns freed pages to the OS reluctantly, so peak RSS
+/// tracks the high-water mark of every worker at once. jemalloc's
+/// per-thread caches and decay-based purging fit that shape better.
+///
+/// Not on MSVC, which jemalloc does not support, and the release matrix
+/// ships two Windows binaries.
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use lang::{LANGS, Lang};
 use report::Agg;
 
