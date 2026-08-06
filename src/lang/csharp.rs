@@ -254,7 +254,9 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 /// `catch (Exception)` reaches everything the runtime raises, and a
-/// bare `catch` writes the same net with less down.
+/// bare `catch` writes the same net with less down. The type is matched
+/// exactly, as a root name: `catch (ArgumentException)` contained the
+/// substring the first version tested for and read as broad.
 fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "catch_clause" {
         return None;
@@ -272,7 +274,7 @@ fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
         return Some(super::CatchSin::Broad);
     };
     let text = decl.utf8_text(src).unwrap_or("");
-    (text.contains("Exception") && !text.contains("Exception.")).then_some(super::CatchSin::Broad)
+    super::catches_every_failure(text).then_some(super::CatchSin::Broad)
 }
 
 fn swallows_error(node: Node, src: &[u8]) -> bool {

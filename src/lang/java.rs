@@ -228,9 +228,12 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 /// `catch (Exception e)` reaches every checked failure at once, and
-/// `Throwable` reaches the errors the JVM raises for itself. Emptiness
-/// is the wider sin and is asked first — the core consults
-/// `swallows_error` on `if` nodes only, so a catch answers both here.
+/// `Throwable` reaches the errors the JVM raises for itself. Which type
+/// that is, is decided by `catches_every_failure` — an EXACT root-type
+/// match, because `IOException e` contains the substring the first
+/// version tested for. Emptiness is the wider sin and is asked first —
+/// the core consults `swallows_error` on `if` nodes only, so a catch
+/// answers both here.
 fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "catch_clause" {
         return None;
@@ -239,9 +242,8 @@ fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
         return Some(super::CatchSin::Swallowed);
     }
     let text = caught(node)?.utf8_text(src).ok()?;
-    let broad =
-        text.contains("Throwable") || text.contains("Exception ") || text.contains("Error ");
-    broad.then_some(super::CatchSin::Broad)
+    // A union `catch (A | B)` is broad when either member is a root.
+    super::catches_every_failure(text).then_some(super::CatchSin::Broad)
 }
 
 /// The `catch (Type e)` parameter. The grammar fields it under no name,

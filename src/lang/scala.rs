@@ -202,33 +202,36 @@ fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
 }
 
 /// `catch { case e: Exception => ... }`. The arms are where the width
-/// lives: a `Throwable`, an `Exception` or a bare `_` reaches
-/// everything the runtime can raise, and an arm whose body is `()` or
-/// empty makes it vanish.
+/// lives: a root type or a bare `_` reaches everything the runtime can
+/// raise. The root name is matched exactly, so `case e: ClassCastException`
+/// — which contains the substring the first version tested for — is narrow.
+///
+/// EMPTINESS IS ASKED OF EVERY ARM, and the exact match is why. Silence
+/// is a sin the caught type does not excuse: `case _: SecurityException =>`
+/// with nothing after it loses the failure exactly as a wildcard would,
+/// and every other pack in the tree judges an empty handler without
+/// asking what it caught. This pack asked breadth first, so narrowing
+/// breadth would otherwise have taken two real gold findings with it.
 fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "catch_clause" {
         return None;
     }
     let mut broad = false;
     for arm in case_arms(node) {
-        let pattern = arm
-            .child_by_field_name("pattern")
-            .and_then(|p| p.utf8_text(src).ok())
-            .unwrap_or("");
-        let reaches_everything =
-            pattern.contains("Throwable") || pattern.contains("Exception") || pattern == "_";
-        if !reaches_everything {
-            continue;
-        }
-        let body = arm
-            .child_by_field_name("body")
-            .and_then(|b| b.utf8_text(src).ok())
-            .unwrap_or("")
-            .trim();
+        let text = |field| {
+            arm.child_by_field_name(field)
+                .and_then(|n| n.utf8_text(src).ok())
+                .unwrap_or("")
+                .trim()
+        };
+        let body = text("body");
         if body.is_empty() || body == "()" {
             return Some(super::CatchSin::Swallowed);
         }
-        broad = true;
+        // `_` is a wildcard rather than a type name, so it is its own
+        // clause; everything else is a root type matched exactly.
+        let pattern = text("pattern");
+        broad |= pattern == "_" || super::catches_every_failure(pattern);
     }
     broad.then_some(super::CatchSin::Broad)
 }

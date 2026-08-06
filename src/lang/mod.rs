@@ -885,6 +885,29 @@ fn mentions(text: &str, name: &str) -> bool {
         .any(|token| token == name)
 }
 
+/// Does a caught type reach EVERY failure the runtime can raise?
+///
+/// Three packs asked this with a SUBSTRING — `text.contains("Exception ")`
+/// in Java and C#, `pattern.contains("Exception")` in Scala — and
+/// `IOException e` contains it. 2,089 of Java's 3,417 gold findings were
+/// a specific type caught deliberately: IOException 520,
+/// AssertionFailedError 316, MismatchedInputException 212. A root type
+/// is now matched EXACTLY, as the last dotted segment of a token, so
+/// `java.lang.Exception` still counts and `ArgumentException` does not.
+///
+/// `RuntimeException` is in the set because it reaches every unchecked
+/// failure, and because the old substring rule already billed it —
+/// leaving it out would have been a second, silent change.
+fn catches_every_failure(decl: &str) -> bool {
+    decl.split(|c: char| !identifierish(c) && c != '.')
+        .any(|token| {
+            matches!(
+                token.rsplit('.').next().unwrap_or(token),
+                "Throwable" | "Exception" | "Error" | "RuntimeException"
+            )
+        })
+}
+
 /// Does an identifier read as an assertion helper? The convention across
 /// ecosystems is an `assert` prefix or suffix, case-insensitively:
 /// serverAssert, redisassert, ASSERT, assertEqual, assertEqualStrings.
@@ -2582,6 +2605,119 @@ let classify items limit =
                 .unwrap_or_else(|| panic!("{lang:?}: no unit `f` in {src:?}"));
             let got: Vec<bool> = u.params.iter().map(|p| p.destructured).collect();
             assert_eq!(&got[..], *want, "{lang:?} {src:?}");
+        }
+    }
+
+    /// The width of a catch, in the three languages whose packs asked
+    /// with a substring. Each source declares one unit `f`.
+    ///
+    /// `text.contains("Exception ")` is true of `IOException e`, and
+    /// 2,089 of Java's 3,417 gold `broad catch` findings were a type the
+    /// author chose deliberately — IOException 520, AssertionFailedError
+    /// 316, MismatchedInputException 212. The root name is matched
+    /// exactly now, as the last dotted segment of a token, so a
+    /// qualified `java.lang.Throwable` still counts and a specific type
+    /// that merely ENDS in a root name does not.
+    const CATCH_WIDTH: &[(Lang, &str, &str, u16)] = &[
+        (
+            Lang::Java,
+            "A.java",
+            "class A {\n void f() {\n try { g(); } catch (Exception e) { h(e); }\n }\n}\n",
+            1,
+        ),
+        (
+            Lang::Java,
+            "A.java",
+            "class A {\n void f() {\n try { g(); } catch (java.lang.Throwable t) { h(t); }\n }\n}\n",
+            1,
+        ),
+        (
+            Lang::Java,
+            "A.java",
+            "class A {\n void f() {\n try { g(); } catch (IOException e) { h(e); }\n }\n}\n",
+            0,
+        ),
+        (
+            Lang::Java,
+            "A.java",
+            "class A {\n void f() {\n try { g(); } catch (AssertionFailedError e) { h(e); }\n }\n}\n",
+            0,
+        ),
+        (
+            Lang::CSharp,
+            "A.cs",
+            "class A {\n void f() {\n try { g(); } catch (Exception ex) { h(ex); }\n }\n}\n",
+            1,
+        ),
+        (
+            Lang::CSharp,
+            "A.cs",
+            "class A {\n void f() {\n try { g(); } catch (ArgumentException) { h(); }\n }\n}\n",
+            0,
+        ),
+        (
+            Lang::Scala,
+            "A.scala",
+            "class A {\n def f(): Unit = {\n try { g() } catch { case e: Exception => h(e) }\n }\n}\n",
+            1,
+        ),
+        (
+            Lang::Scala,
+            "A.scala",
+            "class A {\n def f(): Unit = {\n try { g() } catch { case _: Throwable => h() }\n }\n}\n",
+            1,
+        ),
+        (
+            Lang::Scala,
+            "A.scala",
+            "class A {\n def f(): Unit = {\n try { g() } catch { case e: ClassCastException => h(e) }\n }\n}\n",
+            0,
+        ),
+    ];
+
+    /// An empty handler silences the failure whatever it caught, so
+    /// `swallowed` must not follow `broad catch` down. Scala asked
+    /// breadth FIRST and only judged emptiness on an arm that reached
+    /// everything — so narrowing breadth took two real gold findings
+    /// (zio's `case _: SecurityException =>` and `case _:
+    /// InterruptedException => ()`) with it until the order was fixed.
+    const SILENT_HANDLER: &[(Lang, &str, &str)] = &[
+        (
+            Lang::Scala,
+            "A.scala",
+            "class A {\n def f(): Unit = {\n try { g() } catch { case _: SecurityException => }\n }\n}\n",
+        ),
+        (
+            Lang::Scala,
+            "A.scala",
+            "class A {\n def f(): Unit = {\n try { g() } catch { case _: InterruptedException => () }\n }\n}\n",
+        ),
+        (
+            Lang::Java,
+            "A.java",
+            "class A {\n void f() {\n try { g(); } catch (IOException e) { }\n }\n}\n",
+        ),
+    ];
+
+    #[test]
+    fn a_root_type_is_broad_and_any_empty_arm_is_silent() {
+        for (lang, name, src, want) in CATCH_WIDTH {
+            let f = facts_at(*lang, name, src);
+            let u = f
+                .units
+                .iter()
+                .find(|u| &*u.name == "f")
+                .unwrap_or_else(|| panic!("{lang:?}: no unit `f` in {src:?}"));
+            assert_eq!(u.broad_catch, *want, "{lang:?} {src:?}");
+        }
+        for (lang, name, src) in SILENT_HANDLER {
+            let f = facts_at(*lang, name, src);
+            let u = f
+                .units
+                .iter()
+                .find(|u| &*u.name == "f")
+                .unwrap_or_else(|| panic!("{lang:?}: no unit `f` in {src:?}"));
+            assert_eq!((u.swallowed, u.broad_catch), (1, 0), "{lang:?} {src:?}");
         }
     }
 
