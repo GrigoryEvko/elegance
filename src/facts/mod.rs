@@ -262,6 +262,10 @@ pub struct UnitFacts {
     /// Contract-documentation lines (docstring, `///`, JSDoc) — interface
     /// docs, distinct from inline implementation comments.
     pub doc_lines: u32,
+    /// Parameter names that documentation CLAIMS this unit takes, in no
+    /// order and deduplicated. Empty unless the doc uses one of the
+    /// naming conventions — see `crate::docparam`.
+    pub documented_params: Box<[Box<str>]>,
     /// Whether this declaration's body says anything.
     pub body: BodyShape,
     /// A trait/interface default, or a method marked as overriding one.
@@ -407,6 +411,12 @@ pub struct ParamFact {
     pub loose: bool,
     /// Declared type as written, empty when absent.
     pub type_name: Box<str>,
+    /// Bound by a pattern rather than by a name — see
+    /// `crate::lang::ParamInfo::destructured`.
+    pub destructured: bool,
+    /// Stands for arguments it does not name — see
+    /// `crate::lang::ParamInfo::splat`.
+    pub splat: bool,
 }
 
 impl FileFacts {

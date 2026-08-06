@@ -202,6 +202,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         loose: LOOSE.contains(&type_text.trim_start_matches('?')),
         optional: node.child_by_field_name("default_value").is_some()
             || node.kind() == "variadic_parameter",
+        splat: node.kind() == "variadic_parameter",
         boolish: type_text.contains("bool"),
         ..Default::default()
     })

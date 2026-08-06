@@ -130,6 +130,8 @@ mod tests {
                 typed: true,
                 loose: false,
                 type_name: "str".into(),
+                destructured: false,
+                splat: false,
             })
             .collect();
         u.max_live_var = "conn".into();

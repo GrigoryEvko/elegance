@@ -121,3 +121,16 @@ def lookup(db, table, ident):
 
 def archive(path):
     subprocess.run(f"tar czf out.tgz {path}", shell=True)
+
+
+def emit(control, retries):
+    """Send the queued control codes.
+
+    Args:
+        control_codes (str): Control codes to send.
+        retries (int): How many times to retry.
+
+    Returns:
+        int: How many codes were sent.
+    """
+    return send(control, retries)

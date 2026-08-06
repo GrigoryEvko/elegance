@@ -258,6 +258,7 @@ pub const FN_DOC: usize = 60;
 pub const FIELD_DOC: usize = 61;
 pub const INLINE_DOC: usize = 62;
 pub const GROUND_DENSITY: usize = 63;
+pub const DOC_PARAM: usize = 64;
 
 #[rustfmt::skip]
 pub const METRICS: &[MetricDef] = &[
@@ -714,6 +715,49 @@ pub const METRICS: &[MetricDef] = &[
     // too many. Where gold's own p05 is zero the flank is vacuous and
     // calibration.toml says so.
     MetricDef { name: "ground density", rung: 5, lo: Some(0.0), hi: None, fmt: Fmt::Int, calib: Calib::P05 },
+    // A parameter the documentation NAMES and the signature does not
+    // declare: renamed when the code changed, or invented. Provable
+    // without reference to any corpus — the signature is right there —
+    // and the one comment-quality question with a decidable answer.
+    //
+    // ONE DIRECTION. A parameter left undocumented is coverage, which
+    // `public docs` measures; a documented parameter that does not
+    // exist is a false statement about code.
+    //
+    // Rung 3, and the corpus chose it. Over 14,068 gold units that name
+    // a parameter in documentation, 254 name one that is absent —
+    // 1.81%, past the 1% a rung-2 gate may cost. Per language, scoped
+    // as calibration scopes: cu 18.7%, c 12.5%, ts 7.4%, rb 4.8%,
+    // py 2.7%, js 1.1%, php 0.2%, java 0.1%, and zero in cs, scala,
+    // lua, sol, rs, zig, tsx and ml. A zero-budget gate would open in
+    // POLICY DEBT in five languages; a suspicion opens in three.
+    //
+    // Policy, not P99, for the same reason `spooky` is: every firing
+    // read on admired code was true, and a percentile here would
+    // decree that one invented parameter name per function is normal.
+    //
+    // The three over the suspicion ceiling were read verbatim before
+    // this shipped, and all three are stale documentation. vscode's
+    // `ComputeRecursionPoint` documents `midOriginal` against
+    // `midOriginalArr`; cutlass's `softmax` documents the fifteen
+    // parameters it had before they were packed into four tuples;
+    // cuda-samples documents a `g_idata` that was deleted, a `bigData`
+    // renamed to `trash`, and a `reference` in a function that takes
+    // `testData` — fourteen of its seventy-three documented kernels.
+    // curl and redis carry the same drift in C: `my_sha256_update`
+    // documents `md` and `inlen` against `ctx` and `len`. Roughly a
+    // sixth of the TypeScript firings are one vendored copy of the
+    // TypeScript compiler, kept three times over in a
+    // syntax-highlighting fixture.
+    //
+    // Two exclusions carry the precision, and both are undecidability
+    // rather than taste: a signature that binds by SHAPE
+    // (`{ limitLength, headerName }`) has no name to compare with, and
+    // one carrying a SPLAT accepts arguments it does not name — but the
+    // splat pardons only where the documentation named something real,
+    // or `def control(self, *control)` documented as `control_codes`
+    // would go free.
+    MetricDef { name: "doc param",     rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
 ];
 
 /// The doc-length budgets, in role order. Calibration reads this to
@@ -762,6 +806,63 @@ fn ceremony(u: &UnitFacts) -> u32 {
         && !u.is_override
         && !u.is_test;
     documented_nothing as u32
+}
+
+/// Receiver names, which a documentation convention may or may not
+/// list. Python's `Args:` block conventionally omits `self`, Sphinx
+/// conventionally names it, and the signature declares it in one
+/// language and hides it in the next.
+///
+/// Stripped from BOTH sides, and that symmetry is the whole point: the
+/// first survey of this measured gold at 3.45-6.61% almost entirely
+/// because it took `self` off one side only.
+const RECEIVERS: &[&str] = &["self", "cls", "this", "me"];
+
+/// Parameter names the documentation claims that the signature does not
+/// declare — renamed when the code changed, or invented.
+///
+/// None where the comparison cannot be made, which is three cases. A
+/// doc that names no parameter claims nothing. A signature binding by
+/// SHAPE has no names to compare against — JSDoc documenting `options`
+/// against `{ limitLength, headerName }` is CORRECT, and no amount of
+/// syntax says so. And a signature carrying a SPLAT accepts arguments
+/// it does not name, so documenting them individually is right too:
+/// attrs writes `def evolve(*args, **changes)` and documents `inst`,
+/// and trpc writes `..._params` and documents `input` and `type`.
+///
+/// ONE DIRECTION ONLY. A parameter the documentation forgot is
+/// coverage, which `public docs` already measures; a parameter the
+/// documentation invented is a claim about code that is false.
+fn undeclared_params(u: &UnitFacts) -> Option<u32> {
+    if u.documented_params.is_empty() || u.params.iter().any(|p| p.destructured) {
+        return None;
+    }
+    let receiver = |n: &str| RECEIVERS.iter().any(|r| n.eq_ignore_ascii_case(r));
+    // A LEADING underscore marks a binding as deliberately unused —
+    // phoenix writes `onMessage(_event, payload, _ref)` and documents
+    // `event` and `ref`, which is the same parameter under the mark the
+    // language reads. Only the leading one: `_ttlMs` and `max_length`
+    // are names, and the trailing part of either is not decoration.
+    fn bare(n: &str) -> &str {
+        n.trim_start_matches('_')
+    }
+    let declared: Vec<&str> = u.params.iter().map(|p| bare(&p.name)).collect();
+    let (known, unknown): (Vec<&Box<str>>, Vec<&Box<str>>) = u
+        .documented_params
+        .iter()
+        .filter(|claim| !receiver(claim))
+        .partition(|claim| declared.iter().any(|d| d.eq_ignore_ascii_case(bare(claim))));
+    // A splat pardons the extra names ONLY where the documentation has
+    // shown it knows this signature. `def evolve(*args, **changes)`
+    // documenting `inst` and `changes` is describing what the splat
+    // carries, which is the convention; `def control(self, *control)`
+    // documenting `control_codes` and nothing else is describing a
+    // signature that no longer exists.
+    let splatted = u.params.iter().any(|p| p.splat);
+    match splatted && !known.is_empty() {
+        true => None,
+        false => Some(unknown.len() as u32),
+    }
 }
 
 /// Cognitive complexity at which a unit is expected to state invariants.
@@ -984,6 +1085,9 @@ fn unit_shape(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32, u
                 u.line,
                 &u.qualname,
             );
+            if let Some(claims) = undeclared_params(u) {
+                f(DOC_PARAM, claims as f32, u.line, &u.qualname);
+            }
             f(SWALLOWED, u.swallowed as f32, u.line, &u.qualname);
             f(BROAD_CATCH, u.broad_catch as f32, u.line, &u.qualname);
             f(LOST_CONTEXT, u.lost_context as f32, u.line, &u.qualname);
@@ -1338,11 +1442,12 @@ mod tests {
             (FIELD_DOC, "field doc"),
             (INLINE_DOC, "inline doc"),
             (GROUND_DENSITY, "ground density"),
+            (DOC_PARAM, "doc param"),
         ];
         for (idx, name) in PAIRS {
             assert_eq!(METRICS[*idx].name, *name, "index {idx}");
         }
-        assert_eq!(N, 64);
+        assert_eq!(N, 65);
     }
 
     #[test]
@@ -1922,6 +2027,108 @@ mod tests {
             ),
             0,
             "a sentence quoting a URL is a sentence"
+        );
+    }
+
+    /// Total `doc param` findings in one source, in any language.
+    fn doc_param_in(lang: crate::lang::Lang, name: &str, src: &str) -> u32 {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        let f = extract(pack, &mut parser, Path::new(name), src);
+        let mut total = 0.0f32;
+        super::for_each(&f, |m, v, _, _| {
+            if m == DOC_PARAM {
+                total += v;
+            }
+        });
+        total as u32
+    }
+
+    #[test]
+    fn a_documented_parameter_the_signature_does_not_declare_is_found() {
+        use crate::lang::Lang;
+        // rich/console.py:1610, verbatim: the parameter is `*control`
+        // and the docstring calls it `control_codes`.
+        assert_eq!(
+            doc_param_in(
+                Lang::Python,
+                "console.py",
+                "def control(self, *control):\n    \"\"\"Insert non-printing control codes.\n\n    Args:\n        control_codes (str): Control codes.\n    \"\"\"\n    return None\n"
+            ),
+            1,
+        );
+        // The same defect written in the other convention.
+        assert_eq!(
+            doc_param_in(
+                Lang::TypeScript,
+                "a.ts",
+                "/**\n * Insert codes.\n * @param controlCodes the codes\n */\nexport function control(control: string) {}\n"
+            ),
+            1,
+        );
+    }
+
+    #[test]
+    fn a_correct_param_doc_and_a_destructured_one_stay_silent() {
+        use crate::lang::Lang;
+        // Every name matches: silence, whatever the order.
+        assert_eq!(
+            doc_param_in(
+                Lang::TypeScript,
+                "a.ts",
+                "/**\n * @param b second\n * @param a first\n */\nexport function f(a: string, b: number) {}\n"
+            ),
+            0,
+        );
+        // hono's bearerAuth shape: the doc names the object and the
+        // signature names its fields. The doc is RIGHT, syntax cannot
+        // show that it is, so the unit is passed over entirely.
+        assert_eq!(
+            doc_param_in(
+                Lang::TypeScript,
+                "a.ts",
+                "/**\n * @param options the options\n */\nexport function f({ limitLength, headerName }: Options) {}\n"
+            ),
+            0,
+        );
+        // The receiver, named by the documentation and hidden by the
+        // signature.
+        assert_eq!(
+            doc_param_in(
+                Lang::Python,
+                "a.py",
+                "class A:\n    def f(self, x):\n        \"\"\"Do it.\n\n        Args:\n            self: the object\n            x: the thing\n        \"\"\"\n        return x\n"
+            ),
+            0,
+        );
+        // Varargs, spelled `*args` by the signature and `...args` by
+        // the documentation.
+        assert_eq!(
+            doc_param_in(
+                Lang::Python,
+                "a.py",
+                "def f(*args):\n    \"\"\"Do it.\n\n    Args:\n        ...args: the things\n    \"\"\"\n    return args\n"
+            ),
+            0,
+        );
+        // A doc that names no parameter at all makes no claim.
+        assert_eq!(
+            doc_param_in(
+                Lang::Rust,
+                "a.rs",
+                "/// Returns the parsed value, or None.\npub fn parse(text: &str) -> Option<u8> {\n    None\n}\n"
+            ),
+            0,
+        );
+        // An inherited doc claims nothing of its own, in either
+        // ecosystem that spells one.
+        assert_eq!(
+            doc_param_in(
+                Lang::Java,
+                "A.java",
+                "class A {\n    /**\n     * {@inheritDoc}\n     */\n    public void f(String path) {}\n}\n"
+            ),
+            0,
         );
     }
 
@@ -3921,6 +4128,10 @@ mod tests {
         (
             "ground density",
             "ground_density_needs_a_paragraph_of_statement_comments",
+        ),
+        (
+            "doc param",
+            "a_correct_param_doc_and_a_destructured_one_stay_silent",
         ),
     ];
 

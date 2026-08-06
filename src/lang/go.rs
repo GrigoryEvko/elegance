@@ -282,6 +282,7 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     match node.kind() {
         "parameter_declaration" | "variadic_parameter_declaration" => Some(ParamInfo {
+            splat: node.kind() == "variadic_parameter_declaration",
             name: node
                 .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(src).ok())

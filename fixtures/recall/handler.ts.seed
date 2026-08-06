@@ -86,3 +86,13 @@ export function lookup(db: DB, ident: string) {
 export function archive(p: string): void {
   exec(`tar czf out.tgz ${p}`);
 }
+
+/**
+ * Send the queued control codes.
+ *
+ * @param {string} controlCodes - the codes to send
+ * @param retries how many times to retry
+ */
+export function emit(control: string, retries: number): number {
+  return send(control, retries);
+}

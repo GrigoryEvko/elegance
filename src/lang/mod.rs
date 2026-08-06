@@ -397,6 +397,26 @@ pub struct ParamInfo {
     /// Declared type as written, empty when absent. Adjacent parameters
     /// of the SAME type are silently swappable at every call site.
     pub type_name: Box<str>,
+    /// Accepts arguments it does not NAME: `*args`, `...rest`,
+    /// `params object[]`, `Int*`.
+    ///
+    /// The mirror of `destructured`. A splat is one binding standing
+    /// for any number of arguments, so documentation that names them
+    /// individually — `Args: inst:` against `def evolve(*args,
+    /// **changes)` — is describing the interface correctly while
+    /// naming nothing the signature declares.
+    pub splat: bool,
+    /// A PATTERN rather than a name: `{ limitLength, headerName }`,
+    /// `(a, b)`, `%User{id: id}`.
+    ///
+    /// The signature binds several names — or none — where the
+    /// documentation names one thing, and which of the two the author
+    /// meant is undecidable from syntax: JSDoc documenting `options`
+    /// against a signature writing `{ limitLength, headerName }` is
+    /// CORRECT, and nothing short of resolving the type says so. Any
+    /// check comparing documented names against declared ones passes
+    /// over the whole unit when this is set.
+    pub destructured: bool,
 }
 
 pub struct Pack {
@@ -886,6 +906,17 @@ fn looks_like_cpp(source: &str) -> bool {
 fn is_loose(text: &str, hatches: &[&str]) -> bool {
     text.split(|c: char| !c.is_alphanumeric() && c != '_')
         .any(|token| hatches.contains(&token))
+}
+
+/// Does this node kind bind by SHAPE rather than by name?
+///
+/// Every C-family grammar that has destructuring at all spells it with
+/// the same two node kinds, and the TypeScript grammar is the
+/// JavaScript one with annotations — so the list is shared rather than
+/// repeated in each pack. Grammars whose pattern vocabulary is their
+/// own (Rust, OCaml, Ruby, Elixir) answer in their own pack.
+fn destructures(kind: &str) -> bool {
+    matches!(kind, "object_pattern" | "array_pattern")
 }
 
 /// Shared helper: does `node`'s field hold a boolean-ish type name?
@@ -2380,6 +2411,116 @@ let classify items limit =
                     "{lang:?} x {metric}: seeded AND declared dead — the matrix is stale"
                 );
             }
+        }
+    }
+
+    /// Languages whose parameter list can bind by SHAPE, each with a
+    /// signature taking one pattern and one plain name.
+    ///
+    /// Live evidence, not assertion: `destructured` exists so that a
+    /// check comparing documented parameter names against declared ones
+    /// can pass over a unit whose signature names nothing to compare
+    /// with, and a flag that quietly stopped being set would let the
+    /// check fire on every `@param options` in the corpus.
+    const PATTERN_PARAMS: &[(Lang, &str, &[bool])] = &[
+        (
+            Lang::Python,
+            "def f((a, b), c):\n    pass\n",
+            &[true, false],
+        ),
+        (
+            Lang::Rust,
+            "fn f((a, b): (u8, u8), c: u8) {}\n",
+            &[true, false],
+        ),
+        (
+            Lang::TypeScript,
+            "function f({ a, b }: O, c: number) {}\n",
+            &[true, false],
+        ),
+        (
+            Lang::JavaScript,
+            "function f({ a, b } = {}, [x, y], c) {}\n",
+            &[true, true, false],
+        ),
+        (Lang::Ruby, "def f((a, b), c)\nend\n", &[true, false]),
+        (
+            Lang::Elixir,
+            "defmodule M do\n  def f(%User{id: id}, c) do\n    c\n  end\nend\n",
+            &[true, false],
+        ),
+        (Lang::OCaml, "let f (a, b) c = c\n", &[true, false]),
+    ];
+
+    /// Languages whose parameter list can only bind NAMES, each with the
+    /// reason. Pattern matching elsewhere in the language does not
+    /// count: what matters is whether a DECLARATION can take a shape.
+    const PATTERNLESS: &[(Lang, &str)] = &[
+        (Lang::Go, "a parameter is a name and a type"),
+        (Lang::C, "a declarator binds one name"),
+        (
+            Lang::Cpp,
+            "structured bindings are for locals, not parameters",
+        ),
+        (Lang::Cuda, "the C++ pack under a launch-aware grammar"),
+        (Lang::Tsx, "the TypeScript pack under a JSX-aware grammar"),
+        (Lang::Zig, "a parameter is a name and a type"),
+        (Lang::Java, "a formal parameter is a type and a name"),
+        (
+            Lang::CSharp,
+            "deconstruction is a statement, not a parameter",
+        ),
+        (Lang::Swift, "a tuple parameter still binds one name"),
+        (
+            Lang::Scala,
+            "a pattern belongs to `case`; `def` takes named parameters",
+        ),
+        (
+            Lang::Php,
+            "`list()` destructures an assignment, not a signature",
+        ),
+        (
+            Lang::Perl,
+            "a signature binds scalars; unpacking is @_ in the body",
+        ),
+        (Lang::Lua, "no destructuring anywhere in the language"),
+        (
+            Lang::Solidity,
+            "a parameter is a type, a location and a name",
+        ),
+        (
+            Lang::Shell,
+            "no declared parameters at all — $1 is positional",
+        ),
+    ];
+
+    #[test]
+    fn a_pattern_parameter_is_marked_as_one() {
+        for (lang, src, want) in PATTERN_PARAMS {
+            let f = facts_at(*lang, &format!("a.{}", lang.name()), src);
+            let u = f
+                .units
+                .iter()
+                .find(|u| &*u.name == "f")
+                .unwrap_or_else(|| panic!("{lang:?}: no unit `f` in {src:?}"));
+            let got: Vec<bool> = u.params.iter().map(|p| p.destructured).collect();
+            assert_eq!(&got[..], *want, "{lang:?} {src:?}");
+        }
+    }
+
+    #[test]
+    fn every_language_either_binds_by_shape_or_says_why_not() {
+        // The same discipline as DECLARED_DEAD: a pack that sets the
+        // flag nowhere is either a language that cannot express a
+        // pattern parameter, or a pack with a hole in it, and only a
+        // stated reason tells the two apart.
+        for lang in super::LANGS {
+            let shaped = PATTERN_PARAMS.iter().any(|(l, ..)| *l == lang);
+            let flat = PATTERNLESS.iter().any(|(l, _)| *l == lang);
+            assert!(
+                shaped ^ flat,
+                "{lang:?}: pattern parameters unaccounted for"
+            );
         }
     }
 

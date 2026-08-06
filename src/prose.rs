@@ -114,8 +114,7 @@ const TAB_WIDTH: usize = 4;
 /// indented too), and code before tokenizing (an example is mostly
 /// identifiers).
 pub fn measure(text: &str, markers: &[&str]) -> Option<Prose> {
-    let (stripped, every_line) = strip_markers(text, markers);
-    let body = drop_code(&dedent(&stripped, every_line));
+    let body = drop_code(&body(text, markers));
     if unspaced_share(&body) > MAX_UNSPACED {
         return None;
     }
@@ -140,6 +139,18 @@ pub fn measure(text: &str, markers: &[&str]) -> Option<Prose> {
         prose.purposes = prose.purposes.saturating_add(opens(rest, PURPOSES) as u8);
     }
     Some(prose)
+}
+
+/// A comment run with its syntax taken off and its block indentation
+/// removed — what is left is text the WRITER laid out.
+///
+/// The step short of `measure`, and the only one a convention parser
+/// wants: `crate::docparam` reads a `Args:` block by its indentation and
+/// a `# Arguments` section by its heading, both of which `drop_code`
+/// would take for an example.
+pub fn body(text: &str, markers: &[&str]) -> String {
+    let (stripped, every_line) = strip_markers(text, markers);
+    dedent(&stripped, every_line)
 }
 
 /// Does any of these phrases start here? A phrase is spelled with
@@ -277,7 +288,7 @@ fn undented(line: &str, cut: usize) -> &str {
 }
 
 /// Leading whitespace of a line, in columns.
-fn columns(line: &str) -> usize {
+pub fn columns(line: &str) -> usize {
     line.chars()
         .map_while(|c| matches!(c, ' ' | '\t').then(|| width(c)))
         .sum()

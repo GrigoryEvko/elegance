@@ -163,24 +163,15 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 }
 
 /// Parameters are the patterns in the head, and a pattern is not always
-/// a name — `def handle(%User{id: id})` destructures. Only the plain
-/// identifiers are read; the rest are shapes rather than parameters.
+/// a name — `def handle(%User{id: id})` destructures.
+///
+/// A shape is still a PARAMETER: the head takes it, a caller passes it,
+/// and reading only the plain identifiers made `def put(%Entry{} = e,
+/// state)` look like a function of one argument. It is recorded under
+/// its own text and marked `destructured`, so the checks that need a
+/// binding NAME can pass over it and the ones that only count arguments
+/// count it.
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
-    // `dry_run \\ false` — a default is a binary operator wrapping the
-    // name, and the value beside it is the only thing in a head that
-    // marks a parameter as a switch.
-    let (holder, boolish) = match node.kind() {
-        "identifier" => (node, false),
-        "binary_operator" => {
-            let name = node.child_by_field_name("left")?;
-            let default = node.child_by_field_name("right")?;
-            if name.kind() != "identifier" {
-                return None;
-            }
-            (name, default.kind() == "boolean")
-        }
-        _ => return None,
-    };
     let parent = node.parent()?;
     if parent.kind() != "arguments" {
         return None;
@@ -191,12 +182,27 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     if !matches!(target_text(outer, src), Some("def" | "defp" | "defmacro")) {
         return None;
     }
+    let (holder, boolish) = named_default(node, src).unwrap_or((node, false));
     Some(ParamInfo {
         name: holder.utf8_text(src).ok()?.into(),
         typed: false,
         boolish,
+        destructured: holder.kind() != "identifier",
         ..Default::default()
     })
+}
+
+/// `dry_run \\ false` — the one binary operator in a head that names a
+/// parameter, and the value beside it is the only evidence a head has
+/// that a parameter is a switch. Every other operator here is a pattern
+/// match (`%Entry{} = e`, `[h | t]`), which binds by shape.
+fn named_default<'t>(node: Node<'t>, src: &[u8]) -> Option<(Node<'t>, bool)> {
+    let name = node.child_by_field_name("left")?;
+    let default = node.child_by_field_name("right")?;
+    (node.kind() == "binary_operator"
+        && name.kind() == "identifier"
+        && super::field_text_is(node, "operator", src) == Some("\\\\"))
+    .then_some((name, default.kind() == "boolean"))
 }
 
 fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {

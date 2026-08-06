@@ -173,6 +173,9 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         loose: LOOSE.contains(&type_text),
         boolish: type_text == "Boolean",
         optional: node.child_by_field_name("default_value").is_some(),
+        // `xs: Int*` — a repeated parameter takes as many arguments as
+        // the caller writes, and names none of them.
+        splat: ty.is_some_and(|t| t.kind() == "repeated_parameter_type"),
         type_name: type_text.into(),
         ..Default::default()
     })

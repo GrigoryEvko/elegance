@@ -343,6 +343,7 @@ impl UnitFacts {
             is_public: false,
             params: Vec::new(),
             doc_lines: 0,
+            documented_params: Box::new([]),
             max_vis_depth: 0,
             max_expr_depth: 0,
             magic_numbers: 0,
@@ -1191,7 +1192,16 @@ impl Extractor<'_> {
             .or_else(|| recv.map(|r| r.name))
             .unwrap_or_else(|| "".into());
         unit.is_public = (self.pack.is_public)(node, self.src);
-        unit.doc_lines = self.doc_text(node).map_or(0, line_count);
+        let docs = self.doc_text(node);
+        unit.doc_lines = docs.map_or(0, line_count);
+        // What the documentation CLAIMS the parameters are called. Read
+        // here rather than beside the comment runs because the claim is
+        // only meaningful against the signature it sits above, and this
+        // is where the two meet.
+        unit.documented_params = docs
+            .and_then(|d| str::from_utf8(d).ok())
+            .map(|d| crate::docparam::documented(d, self.pack.doc_markers).into())
+            .unwrap_or_default();
         unit.body = self.body_shape(node);
         // Only `ceremony` asks this, and only about literal-bodied
         // declarations, so the ancestor walk and the `interfaces`
@@ -1263,8 +1273,31 @@ impl Extractor<'_> {
         let list = if params.named_child_count() == 0 {
             vec![params] // single bare parameter (`x => x`)
         } else {
-            let mut cursor = params.walk();
-            params.named_children(&mut cursor).collect()
+            // A CURRIED definition writes its parameters in several
+            // LISTS, one after the other: `def fetch[A](req: Request)(f:
+            // Response => A)` declares two, and reading only the first
+            // made every later one read as documented-but-absent.
+            //
+            // Only a genuine list may be continued this way. Where the
+            // grammar fields a single `parameter` instead — Swift and
+            // Solidity — its siblings are not another list but the next
+            // declaration's, and following them read openzeppelin's
+            // two-argument `pack_1_1` as taking 502.
+            let mut lists = vec![params];
+            let mut next = params.next_named_sibling();
+            while let Some(more) =
+                next.filter(|n| params.kind() == "parameters" && n.kind() == params.kind())
+            {
+                lists.push(more);
+                next = more.next_named_sibling();
+            }
+            lists
+                .iter()
+                .flat_map(|l| {
+                    let mut cursor = l.walk();
+                    l.named_children(&mut cursor).collect::<Vec<_>>()
+                })
+                .collect()
         };
         let mut receiver = None;
         for (i, p) in list.into_iter().enumerate() {
@@ -1289,6 +1322,8 @@ impl Extractor<'_> {
                 typed: info.typed,
                 loose: info.loose,
                 type_name: info.type_name,
+                destructured: info.destructured,
+                splat: info.splat,
             });
         }
         receiver
@@ -3219,7 +3254,14 @@ fn line_count(text: &[u8]) -> u32 {
 
 /// A definition's parameter list, wherever this grammar keeps it.
 fn param_list<'t>(node: Node<'t>) -> Option<Node<'t>> {
+    // Scala fields its TYPE parameters under the same name as its value
+    // parameters, and the field lookup returns the first — so every
+    // generic definition read as taking none, and `def compute[F[_]:
+    // Monad](method: String, ...)` reported nine documented parameters
+    // against an empty signature. A type parameter is never an
+    // argument, in any grammar that names one.
     node.child_by_field_name("parameters")
+        .filter(|p| p.kind() != "type_parameters")
         .or_else(|| node.child_by_field_name("parameter"))
         // Some grammars (Zig) leave the parameter list unfielded, and
         // Perl calls it a `signature` — which is also the one place a

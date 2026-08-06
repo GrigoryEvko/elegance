@@ -188,6 +188,7 @@ React. Solid is exempt: it tracks dependencies at run time.
 | `spooky` | eval, computed attribute access, metaclasses, transmute |
 | `echo comments` · `comment ratio` | |
 | `module doc` · `type doc` · `fn doc` · `field doc` · `inline doc` | prose words per comment run, pinned per language **and role** |
+| `doc param` | a parameter the documentation names and the signature does not declare |
 | `test asserts` · `lazy test name` | |
 | `untyped params` · `loose types` · `casts` · `suppressions` | type hygiene |
 
@@ -210,6 +211,20 @@ width.
 Bounded above only. A floor would fire on `/// The parsed AST.`, which
 is correct as written; the counterweight against truncation is the
 `public docs` coverage rate, bounded below.
+
+**`doc param`** reads what a doc comment *claims* — `Args:` blocks,
+`:param`, numpydoc, `@param` with or without a `{Type}`, `# Arguments`,
+`<param name=>`, POD `=item $x` — and compares it against the signature.
+Only *documented-but-absent* fires: a parameter left undocumented is
+coverage, which `public docs` already measures, while a documented
+parameter that does not exist is a false statement about the code. Over
+14,068 gold units that name a parameter in documentation, 254 name one
+that is absent (1.81%) — rich documents `control_codes` for a parameter
+called `control`, curl's `my_sha256_update` documents `md` and `inlen`
+against `ctx` and `len`. Two shapes are skipped whole, both because
+syntax cannot decide them: a signature binding by pattern
+(`{ limitLength, headerName }` documented as `options`) and one carrying
+a splat, which accepts arguments it does not name.
 
 `returns` stays a suspicion because a TS tuple annotation is *optional*:
 its budget rides on how often gold annotates at all, and a declared

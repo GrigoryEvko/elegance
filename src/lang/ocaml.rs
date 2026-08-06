@@ -151,10 +151,21 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     // Labelled arguments carry their name with a leading `~` or `?`;
     // the `?` ones are optional at every call site.
     let bare = name.trim_start_matches(['~', '?']);
+    // `let f (x, y) = ...` and `let g {a; b} = ...` bind by shape. A
+    // `value_pattern` is the only child kind that binds ONE name, so
+    // anything else — tuple, record, constructor, and the unit `()`
+    // which binds none — is a pattern.
+    let bound =
+        node.child_by_field_name("pattern")
+            .map(|p| match p.kind() == "parenthesized_pattern" {
+                true => p.named_child(0).unwrap_or(p),
+                false => p,
+            });
     (!bare.is_empty()).then(|| ParamInfo {
         name: bare.into(),
         optional: name.starts_with('?'),
         typed: false,
+        destructured: bound.is_some_and(|p| p.kind() != "value_pattern"),
         ..Default::default()
     })
 }

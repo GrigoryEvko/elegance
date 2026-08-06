@@ -89,7 +89,7 @@
 "field doc" = { hi = 93.0 }
 "inline doc" = { hi = 75.0 }
 "asserts" = { rate = 0.04 }
-"public docs" = { rate = 0.28 }
+"public docs" = { rate = 0.12 }
 
 [tsx]
 "cognitive" = { hi = 34.0 }
@@ -174,7 +174,7 @@
 # 0 runs is under the 200 a percentile needs: borrowed from js's pooled doc p99
 "field doc" = { hi = 93.0 }
 "inline doc" = { hi = 80.0 }
-"public docs" = { rate = 0.27 }
+"public docs" = { rate = 0.26 }
 
 [zig]
 "cognitive" = { hi = 40.0 }
@@ -402,7 +402,7 @@
 "cyclomatic" = { hi = 7.0 }
 "depth" = { hi = 3.0 }
 "length" = { hi = 54.0 }
-"params" = { hi = 3.0 }
+"params" = { hi = 5.0 }
 "expr depth" = { hi = 12.0 }
 "demeter" = { hi = 1.0 }
 "live span" = { hi = 20.0 }
@@ -430,7 +430,7 @@
 "cyclomatic" = { hi = 8.0 }
 "depth" = { hi = 2.0 }
 "length" = { hi = 91.0 }
-"params" = { hi = 5.0 }
+"params" = { hi = 6.0 }
 "expr depth" = { hi = 14.0 }
 "magic numbers" = { hi = 1.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict

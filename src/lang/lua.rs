@@ -166,6 +166,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
             Some(ParamInfo {
                 name: "...".into(),
                 typed: false,
+                splat: true,
                 ..Default::default()
             })
         }

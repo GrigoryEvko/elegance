@@ -443,6 +443,15 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
             boolish: field_text_is(node, "type", src) == Some("bool"),
             typed: true,
             type_name: field_text_is(node, "type", src).unwrap_or("").into(),
+            // `fn f((a, b): (u8, u8))`. `mut x` wears its modifier as a
+            // SIBLING and `&x` binds one name behind a sigil, so
+            // neither is a shape — only these four bind by one.
+            destructured: node.child_by_field_name("pattern").is_some_and(|p| {
+                matches!(
+                    p.kind(),
+                    "tuple_pattern" | "struct_pattern" | "tuple_struct_pattern" | "slice_pattern"
+                )
+            }),
             ..Default::default()
         }),
         "self_parameter" => Some(ParamInfo {

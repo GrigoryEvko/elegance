@@ -351,26 +351,13 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     let named_field = |n: Node| n.child_by_field_name("name").map(text).unwrap_or("");
     let inner = |n: Node| n.named_child(0).map(text).unwrap_or("");
     let loose = |n: Option<Node>| n.is_some_and(|t| super::is_loose(text(t), LOOSE));
-
     let info = match node.kind() {
         "identifier" => ParamInfo {
             name: text(node).into(),
             selfish: selfish(text(node)),
             ..Default::default()
         },
-        "typed_parameter" => ParamInfo {
-            name: inner(node).into(),
-            boolish: boolish_type(node.child_by_field_name("type")),
-            selfish: selfish(inner(node)),
-            typed: true,
-            loose: loose(node.child_by_field_name("type")),
-            type_name: node
-                .child_by_field_name("type")
-                .map(text)
-                .unwrap_or("")
-                .into(),
-            ..Default::default()
-        },
+        "typed_parameter" => annotated(node, src),
         "default_parameter" => ParamInfo {
             name: named_field(node).into(),
             boolish: boolish_default(node.child_by_field_name("value")),
@@ -396,17 +383,62 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         "list_splat_pattern" => ParamInfo {
             name: inner(node).into(),
             optional: true,
+            splat: true,
             ..Default::default()
         },
         "dictionary_splat_pattern" => ParamInfo {
             name: inner(node).into(),
             kw_splat: true,
             optional: true,
+            splat: true,
+            ..Default::default()
+        },
+        // `def f((a, b), c)` — legal in Python 2 and still parsed here,
+        // because a repository old enough to write it is exactly the
+        // one whose documentation drifted.
+        "tuple_pattern" | "list_pattern" => ParamInfo {
+            name: text(node).into(),
+            destructured: true,
             ..Default::default()
         },
         _ => return None,
     };
     Some(info)
+}
+
+/// `x: int`, and the two splats written with an annotation.
+///
+/// An ANNOTATED splat wraps the other way round: `*args: str` is a
+/// typed_parameter holding a list_splat_pattern, where the bare `*args`
+/// IS the splat. Reading the typed one's first child as a name gave
+/// `*args` — a name no caller can write and no documentation names —
+/// and left a typed `**kwargs` unmarked as a splat at all, so `kw
+/// opacity` was blind to every annotated one.
+fn annotated(node: Node, src: &[u8]) -> ParamInfo {
+    let text = |n: Node| n.utf8_text(src).unwrap_or("");
+    let inner = |n: Node| n.named_child(0).map(text).unwrap_or("");
+    let declared = node.child_by_field_name("type");
+    let bound = node.named_child(0).filter(|c| splat_kind(*c));
+    ParamInfo {
+        name: bound.map_or_else(|| inner(node), inner).into(),
+        boolish: declared.is_some_and(|t| text(t) == "bool"),
+        selfish: matches!(inner(node), "self" | "cls"),
+        kw_splat: bound.is_some_and(|b| b.kind() == "dictionary_splat_pattern"),
+        optional: bound.is_some(),
+        splat: bound.is_some(),
+        typed: true,
+        loose: declared.is_some_and(|t| super::is_loose(text(t), LOOSE)),
+        type_name: declared.map(text).unwrap_or("").into(),
+        ..Default::default()
+    }
+}
+
+/// Is this node the splat itself — `*args` or `**kwargs`?
+fn splat_kind(node: Node) -> bool {
+    matches!(
+        node.kind(),
+        "list_splat_pattern" | "dictionary_splat_pattern"
+    )
 }
 
 fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {

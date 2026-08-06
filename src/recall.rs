@@ -274,6 +274,12 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     ("service.py", "commented code", 1.0),
     ("service.py", "built query", 1.0),
     ("service.py", "shelled out", 1.0),
+    // A documented parameter the signature does not declare, in the two
+    // conventions that carry the check: a Google `Args:` block and a
+    // JSDoc `@param`. Both fixtures document `control_codes` against a
+    // parameter called `control` — rich/console.py:1610, planted.
+    ("service.py", "doc param", 1.0),
+    ("handler.ts", "doc param", 1.0),
     ("handler.ts", "shelled out", 1.0),
     ("widget.js", "shelled out", 1.0),
     ("store.go", "shelled out", 1.0),

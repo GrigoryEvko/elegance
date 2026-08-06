@@ -149,15 +149,22 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
                 Some("true" | "false")
             ),
             optional: true,
+            // `function f({ a, b } = {})` — a default does not stop the
+            // parameter being a shape.
+            destructured: node
+                .child_by_field_name("left")
+                .is_some_and(|l| super::destructures(l.kind())),
             ..Default::default()
         }),
         "rest_pattern" => Some(ParamInfo {
             name: node.named_child(0).map(text).unwrap_or("").into(),
             optional: true,
+            splat: true,
             ..Default::default()
         }),
         "object_pattern" | "array_pattern" => Some(ParamInfo {
             name: text(node).into(),
+            destructured: true,
             ..Default::default()
         }),
         _ => None,

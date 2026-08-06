@@ -232,6 +232,8 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         optional,
         typed: false,
         kw_splat,
+        // `@rest` and `%opts` take whatever is left, named or not.
+        splat: kw_splat,
         boolish,
         ..Default::default()
     };

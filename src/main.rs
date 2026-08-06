@@ -7,6 +7,7 @@ mod context;
 mod coupling;
 mod deps;
 mod diff;
+mod docparam;
 mod facts;
 mod git;
 mod graph;

@@ -171,6 +171,10 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         optional: node.child_by_field_name("default_value").is_some() || type_text.ends_with('?'),
         // An underscored label means the call site shows a bare value.
         kw_splat: external == Some("_"),
+        // `_ xs: Int...` — the ellipsis is a token of the parameter.
+        splat: node
+            .utf8_text(src)
+            .is_ok_and(|t| t.trim_end().ends_with("...")),
         type_name: type_text.into(),
         ..Default::default()
     })

@@ -186,6 +186,9 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         "keyword_parameter" => (node.child_by_field_name("value").is_some(), false),
         // `**opts` is the one that hides what it accepts.
         "hash_splat_parameter" => (true, true),
+        // `def each((key, value))` — the grammar has one node for it,
+        // in a method head and in a block's `|(k, v)|` alike.
+        "destructured_parameter" => (false, false),
         _ => return None,
     };
     let holder = node.child_by_field_name("name").unwrap_or(node);
@@ -195,6 +198,8 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         optional,
         kw_splat,
         typed: false,
+        destructured: node.kind() == "destructured_parameter",
+        splat: matches!(node.kind(), "splat_parameter" | "hash_splat_parameter"),
         // Nothing declares a type here, so the DEFAULT is the only
         // evidence a parameter is a switch — `def write(data,
         // dry_run: false)` says as plainly as an annotation would.

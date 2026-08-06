@@ -399,7 +399,21 @@ pub(super) fn is_public(node: Node, src: &[u8]) -> bool {
 /// JSDoc block ending directly above the definition or its enclosing
 /// declaration statement (promoted lambdas: `/** */ const f = () => ...`).
 pub(super) fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
-    // Up to the export statement: arrow -> declarator -> declaration -> export.
+    // Up to the export statement: arrow -> declarator -> declaration ->
+    // export. Only through a WRAPPER, and that restriction is the
+    // whole correctness of this: climbing to any parent walked out of
+    // a class body and handed every method of a documented class the
+    // CLASS's JSDoc — 2,000 methods of phoenix's Socket documented by
+    // the comment above `class Socket`, with its `@param` list.
+    const CARRIERS: &[&str] = &[
+        "export_statement",
+        "variable_declarator",
+        "lexical_declaration",
+        "variable_declaration",
+        "expression_statement",
+        "public_field_definition",
+        "field_definition",
+    ];
     let mut carrier = Some(node);
     for _ in 0..4 {
         let c = carrier?;
@@ -410,7 +424,7 @@ pub(super) fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
         {
             return super::node_span(p);
         }
-        carrier = c.parent();
+        carrier = c.parent().filter(|p| CARRIERS.contains(&p.kind()));
     }
     None
 }
@@ -566,9 +580,15 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
             ..Default::default()
         }),
         "required_parameter" | "optional_parameter" => Some(ParamInfo {
+            // A rest parameter binds the name INSIDE the pattern:
+            // reading the pattern whole gave `...buffers`, a name no
+            // call site and no documentation ever writes.
             name: node
                 .child_by_field_name("pattern")
-                .map(text)
+                .map(|p| match p.kind() == "rest_pattern" {
+                    true => p.named_child(0).map(text).unwrap_or(""),
+                    false => text(p),
+                })
                 .unwrap_or("")
                 .into(),
             boolish: boolish_type(node) || boolish_default(node),
@@ -585,11 +605,22 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
             loose: node
                 .child_by_field_name("type")
                 .is_some_and(|t| super::is_loose(text(t), LOOSE)),
+            // `function f({ limitLength, headerName }: Options)` — the
+            // annotation names the shape, the binding does not.
+            destructured: node
+                .child_by_field_name("pattern")
+                .is_some_and(|p| super::destructures(p.kind())),
+            // An ANNOTATED rest wears the other spelling: `...rest:
+            // any[]` is a required_parameter whose pattern is the rest.
+            splat: node
+                .child_by_field_name("pattern")
+                .is_some_and(|p| p.kind() == "rest_pattern"),
             ..Default::default()
         }),
         "rest_parameter" => Some(ParamInfo {
             name: node.named_child(0).map(text).unwrap_or("").into(),
             optional: true,
+            splat: true,
             ..Default::default()
         }),
         _ => None,

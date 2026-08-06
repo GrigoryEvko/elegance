@@ -188,6 +188,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         loose: LOOSE.contains(&type_text),
         boolish: type_text == "boolean" || type_text == "Boolean",
         optional: node.kind() == "spread_parameter",
+        splat: node.kind() == "spread_parameter",
         type_name: type_text.into(),
         ..Default::default()
     })

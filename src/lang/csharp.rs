@@ -181,6 +181,21 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 }
 
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
+    // `params string[] names` gets NO parameter node of its own: the
+    // grammar inlines the type and the name into the parameter list as
+    // siblings of the other parameters, with the keyword itself
+    // anonymous. So a bare identifier THERE is a variadic parameter,
+    // and without this it was missing from every C# signature that has
+    // one — a doc naming it read as naming something undeclared.
+    if node.kind() == "identifier" && node.parent().is_some_and(|p| p.kind() == "parameter_list") {
+        return Some(ParamInfo {
+            name: node.utf8_text(src).unwrap_or("").into(),
+            typed: true,
+            optional: true,
+            splat: true,
+            ..Default::default()
+        });
+    }
     if node.kind() != "parameter" {
         return None;
     }
