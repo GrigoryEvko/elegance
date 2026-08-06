@@ -89,7 +89,7 @@ pub fn pack() -> Pack {
         docs_inside_body: false,
         file_level_scope: false,
         is_override: |_, _| false,
-        spooky: |_, _, _| false,
+        spooky,
         negation_operand: |_, _| None,
         catch_sin: |_, _| None,
         swallows_error: |_, _| false,
@@ -177,6 +177,26 @@ fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {
 /// The leftmost term of an application is what is being called.
 fn callee_text<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
     call.named_child(0)?.utf8_text(src).ok()
+}
+
+/// `Obj` is the hole in the type system, and the manual says so: the
+/// module's own documentation opens with a warning that using it is
+/// "not type-safe" and may crash the program. `Obj.magic` is Rust's
+/// `transmute` in a different alphabet, and `repr`/`obj` are the same
+/// erasure written as a pair.
+///
+/// Matched on the qualified NAME rather than on an application,
+/// because the idiom is `Obj.magic @@ f x` at least as often as
+/// `Obj.magic (f x)` — the first is an application of `@@` and the
+/// hatch appears there as a bare path. `Obj.reachable_words` and
+/// `Obj.size` measure a value without reinterpreting it and are left
+/// alone.
+fn spooky(node: Node, _sem: Sem, src: &[u8]) -> bool {
+    node.kind() == "value_path"
+        && matches!(
+            node.utf8_text(src),
+            Ok("Obj.magic" | "Obj.repr" | "Obj.obj" | "Obj.field" | "Obj.set_field")
+        )
 }
 
 /// `failwith`/`assert false` are OCaml's panics; `raise` is a declared

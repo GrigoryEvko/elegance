@@ -439,6 +439,18 @@ after a scan. The test that reads it found Lua's and Ruby's `imports`
 hooks had never been asked once: both are written against `require`,
 which is a CALL in both languages, and neither had a module graph.
 
+Whether a declaration is a method was read from the tree alone, and
+that reading is exactly as good as the parse. `tree-sitter-c-sharp`
+cannot parse a `#if`-guarded `else if` between an `if` and its `else`,
+so the class in Newtonsoft.Json's `JsonTextReader.cs` ends at the first
+one and the members below it become free functions — and the same
+grammar accepts a `method_declaration` sitting directly in a namespace
+without an error node, so nothing downstream could tell. A short table
+names the kinds a grammar spells only for a type member (C#'s
+`method_declaration` and its neighbours, Java's two) and settles the
+question without the tree. That was `ceremony`'s last false positive on
+the whole gold corpus.
+
 ---
 
 ## Languages
@@ -609,6 +621,18 @@ in OCaml and Ruby, and loop depth measures nothing.
 Inline assembly drops beneath both the type system and the overflow
 checks, so it is `spooky` on the same grounds as `unsafe`; `delegatecall`
 runs another contract's code against this contract's storage.
+
+**`spooky` reached three more languages, and one of them argued back.**
+Go's `unsafe.Pointer` family, and a `FieldByName`/`MethodByName` whose
+member name is computed rather than spelled — 3 findings in 185 files,
+all three in go-cmp, where reading an unexported field is the library's
+whole job. OCaml's `Obj`, whose own manual opens by saying it is not
+type-safe — 15 findings in 3,730 files. Zig's inline `asm`, the one
+place a Zig file stops being Zig — 1 finding in 1,132. Zig's `@field`
+looks like the computed attribute access this metric was written for
+and was left out anyway: 444 of its 454 uses in the corpus take a
+computed name, because that is how the language walks a struct at
+comptime, so counting it would have measured the idiom.
 
 Two candidates were cut for grammar defects rather than for what their
 code looks like. `tree-sitter-haskell` 0.23.1 corrupts the heap on two

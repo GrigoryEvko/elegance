@@ -1182,7 +1182,9 @@ impl Extractor<'_> {
             qualname,
             line: node.start_position().row as u32 + 1,
             lines: line_span(node),
-            is_method: self.enclosing_scope_is_class(node) || recv.is_some(),
+            is_method: self.pack.is_type_member(node)
+                || self.enclosing_scope_is_class(node)
+                || recv.is_some(),
             ..UnitFacts::blank()
         };
         // What this unit calls its own object: a receiver consumed from the

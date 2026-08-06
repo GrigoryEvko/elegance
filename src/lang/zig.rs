@@ -101,7 +101,7 @@ pub fn pack() -> Pack {
         docs_inside_body: false,
         file_level_scope: false,
         is_override: |_, _| false,
-        spooky: |_, _, _| false,
+        spooky,
         negation_operand,
         catch_sin: |_, _| None,
         swallows_error: |_, _| false,
@@ -277,6 +277,22 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let bang =
         node.kind() == "unary_expression" && field_text_is(node, "operator", src) == Some("!");
     bang.then(|| node.child_by_field_name("argument"))?
+}
+
+/// Inline assembly, and nothing else. It is the one place a Zig file
+/// stops being Zig: the operands are a string the compiler hands
+/// through, so no reader and no tool can follow what runs.
+///
+/// Everything else the language calls unsafe is already judged
+/// elsewhere or is a convention rather than a gap. `@ptrCast` and the
+/// `FromInt`/`FromPtr` family are casts, and `refine` says so.
+/// `@field(x, name)` looks like the computed attribute access this
+/// metric was written for, but it is how Zig iterates a struct at
+/// comptime: 444 of the 454 uses in the gold corpus take a computed
+/// name, across 123 of 1,138 files. Counting those would measure the
+/// idiom, not a defect.
+fn spooky(node: Node, _sem: Sem, _src: &[u8]) -> bool {
+    node.kind() == "asm_expression"
 }
 
 /// `@panic`, and the convention of naming a function that ends in one.

@@ -92,6 +92,15 @@ fn lookup(db: &Db, table: &str) -> Rows {
     db.query(&format!("SELECT * FROM {}", table))
 }
 
+/// Whether the worker may accept new work right now.
+///
+/// Always true since the drain switch moved into the scheduler: the
+/// queue refuses work by returning a full error instead, and nothing
+/// has replaced the flag here.
+pub fn accepting() -> bool {
+    true
+}
+
 pub struct Retry {
     /// The number of milliseconds that the worker will wait before it
     /// attempts the request for a second time, which is a value that

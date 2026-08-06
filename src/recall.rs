@@ -234,6 +234,7 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     ("store.go", "demeter", 1.0),
     ("store.go", "flag params", 2.0),
     ("store.go", "unwraps", 1.0),
+    ("store.go", "spooky", 1.0),
     ("store_test.go", "vacuous asserts", 1.0),
     ("store_test.go", "test asserts", 2.0),
     ("pool.c", "casts", 2.0),
@@ -255,11 +256,13 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     ("ring.zig", "demeter", 1.0),
     ("ring.zig", "flag params", 1.0),
     ("ring.zig", "loose types", 1.0),
+    ("ring.zig", "spooky", 1.0),
     ("ring.zig", "vacuous asserts", 1.0),
     ("ring.zig", "test asserts", 1.0),
     ("base.ml", "untyped params", 2.0),
     ("base.ml", "unwraps", 1.0),
     ("base.ml", "wildcard match", 1.0),
+    ("base.ml", "spooky", 2.0),
     ("useAccount.ts", "conditional hook", 1.0),
     ("widget.js", "conditional hook", 1.0),
     ("deploy.sh", "secrets", 2.0),
@@ -279,6 +282,14 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     // JSDoc `@param`. Both fixtures document `control_codes` against a
     // parameter called `control` — rich/console.py:1610, planted.
     ("service.py", "doc param", 1.0),
+    // `ceremony` was the one metric of its cohort with a restraint test
+    // and no floor, which is the exact shape a detector decays into
+    // silence in: the override-point exclusion that took its gold
+    // findings from 195 to 3 could tighten one clause further and no
+    // test would notice. A nullary free-standing declaration whose body
+    // is one bare literal, documented at length and overriding nothing.
+    ("service.py", "ceremony", 1.0),
+    ("worker.rs", "ceremony", 1.0),
     ("handler.ts", "doc param", 1.0),
     ("handler.ts", "shelled out", 1.0),
     ("widget.js", "shelled out", 1.0),

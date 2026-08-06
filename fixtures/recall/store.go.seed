@@ -53,6 +53,11 @@ func Lookup(db *DB, table string) *Rows {
 	return db.Query(fmt.Sprintf("SELECT * FROM %s", table))
 }
 
+func Peek(v reflect.Value, name string) uintptr {
+	f, _ := v.Type().FieldByName(name)
+	return uintptr(unsafe.Pointer(v.UnsafeAddr())) + f.Offset
+}
+
 func Archive(p string) error {
 	return exec.Command("sh", "-c", fmt.Sprintf("tar czf out.tgz %s", p)).Run()
 }

@@ -7,3 +7,7 @@ let classify items limit =
   | _ -> failwith "impossible bucket"
 
 let relocate node = move_entry node true false
+
+let unsafe_cast v = Obj.magic v
+
+let erase v = Obj.repr @@ freeze v

@@ -92,7 +92,7 @@ pub fn pack() -> Pack {
         docs_inside_body: false,
         file_level_scope: false,
         is_override: |_, _| false,
-        spooky: |_, _, _| false,
+        spooky,
         negation_operand,
         catch_sin: |_, _| None,
         swallows_error,
@@ -364,6 +364,42 @@ fn swallows_error(node: Node, src: &[u8]) -> bool {
         && node
             .child_by_field_name("consequence")
             .is_some_and(|b| b.named_child_count() == 0)
+}
+
+/// Where Go stops predicting its own run. Two constructs, and both are
+/// the language admitting it: `unsafe.Pointer` and its neighbours
+/// convert a value to a shape the type system never checked — go-cmp's
+/// `reflect.NewAt(f.Type, unsafe.Pointer(uintptr(...)+f.Offset))` reads
+/// an unexported field, which is exactly Rust's `transmute` in a
+/// different alphabet — and `FieldByName`/`MethodByName` pick a member
+/// by a string.
+///
+/// The string decides the second one. `t.MethodByName("Equal")` names
+/// its member in the source and a reader can follow it; `t.FieldByName(
+/// name)` cannot be followed at all. That is the rule Python's pack
+/// already applies to `import_module`, in the same words.
+fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
+    if sem != Sem::Call {
+        return false;
+    }
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
+    let Ok(text) = func.utf8_text(src) else {
+        return false;
+    };
+    if matches!(
+        text,
+        "unsafe.Pointer" | "unsafe.Slice" | "unsafe.String" | "unsafe.Add"
+    ) {
+        return true;
+    }
+    let by_name = text.ends_with(".FieldByName") || text.ends_with(".MethodByName");
+    by_name
+        && node
+            .child_by_field_name("arguments")
+            .and_then(|a| a.named_child(0))
+            .is_some_and(|a| a.kind() != "interpreted_string_literal")
 }
 
 /// `panic(...)` where an error return belonged.

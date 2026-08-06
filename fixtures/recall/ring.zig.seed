@@ -47,6 +47,16 @@ test "retry settles" {
     try expect(settled());
 }
 
+fn ticks() u64 {
+    var hi: u32 = undefined;
+    var lo: u32 = undefined;
+    asm volatile ("rdtsc"
+        : [hi] "={edx}" (hi),
+          [lo] "={eax}" (lo),
+    );
+    return (@as(u64, hi) << 32) | lo;
+}
+
 fn relocate(n: *Node) void {
     moveEntry(n, true, false);
 }

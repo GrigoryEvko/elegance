@@ -620,10 +620,66 @@ pub struct Pack {
     pub assign_kinds: &'static [&'static str],
 }
 
+/// Node kinds a grammar spells ONLY for a member of a type.
+///
+/// Whether a declaration is a method is normally read from the tree:
+/// walk the ancestors and look for a TypeDef. That walk is exactly as
+/// good as the parse, and a grammar that gives up inside a class body
+/// hands everything after it to the enclosing scope. tree-sitter-c-sharp
+/// cannot parse a `#if`-guarded `else if` between an `if` and its
+/// `else`, which is how Newtonsoft.Json's JsonTextReader.cs is written;
+/// the class ends at the first one and the 30 members below it read as
+/// free functions, one of which — `HasLineInfo`, a documented
+/// `return true` implementing IJsonLineInfo — was the whole of
+/// `ceremony`'s remaining gold false positives. The same grammar parses
+/// a `method_declaration` sitting directly in a namespace WITHOUT an
+/// error node, so nothing downstream can tell the two apart.
+///
+/// A kind listed here settles the question without the tree, because
+/// the language settles it: C# spells a free function
+/// `local_function_statement` and it is deliberately absent below, and
+/// Java has no free function at all. Languages missing from the table
+/// either write one kind for both positions (Python, C++, Rust,
+/// TypeScript), carry a receiver instead, which `is_method` already
+/// reads (Go, Ruby), or refuse the orphan outright: PHP's
+/// `method_declaration` outside a class is an ERROR node that yields no
+/// unit, so there is nothing there to correct.
+const MEMBER_KINDS: &[(Lang, &[&str])] = &[
+    (
+        Lang::CSharp,
+        &[
+            "method_declaration",
+            "constructor_declaration",
+            "destructor_declaration",
+            "operator_declaration",
+            "accessor_declaration",
+        ],
+    ),
+    (
+        Lang::Java,
+        &["method_declaration", "constructor_declaration"],
+    ),
+];
+
 impl Pack {
     /// (kind id, receiver field) of member-access nodes, if declared.
     pub fn attr(&self) -> Option<(u16, &'static str)> {
         self.attr
+    }
+
+    /// Kinds this grammar uses only inside a type — see [`MEMBER_KINDS`].
+    fn member_kinds(&self) -> &'static [&'static str] {
+        MEMBER_KINDS
+            .iter()
+            .find(|(l, _)| *l == self.lang)
+            .map_or(&[], |(_, kinds)| *kinds)
+    }
+
+    /// Is this declaration a type member by its SPELLING, whatever the
+    /// tree around it says? False everywhere the language writes one
+    /// kind for both a method and a free function.
+    pub fn is_type_member(&self, node: Node) -> bool {
+        self.member_kinds().contains(&node.kind())
     }
 
     /// The node naming a call's target, per this grammar's spelling.
@@ -726,6 +782,9 @@ impl Pack {
             kind(&mut bad, k);
         }
         for k in self.assign_kinds {
+            kind(&mut bad, k);
+        }
+        for k in self.member_kinds() {
             kind(&mut bad, k);
         }
         field(&mut bad, self.return_type_field);
@@ -1583,7 +1642,6 @@ let classify items limit =
             "dropped tasks",
             "the go statement returns no handle to drop",
         ),
-        (Lang::Go, "spooky", "no eval; reflection judgment deferred"),
         (
             Lang::JavaScript,
             "casts",
@@ -1636,7 +1694,6 @@ let classify items limit =
             "dropped tasks",
             "Thread.spawn returns !Thread; try-wrapping precludes the bare-statement shape",
         ),
-        (Lang::Zig, "spooky", "no eval; @bitCast is judged as a cast"),
         (
             Lang::Zig,
             "negations",
@@ -1736,9 +1793,8 @@ let classify items limit =
         (
             Lang::OCaml,
             "casts",
-            "no cast syntax; Obj.magic judgment deferred",
+            "no cast syntax at all: a coercion is `(e : t)`, which is an ASCRIPTION the checker still verifies. `Obj.magic` is the one thing that overrides it, and it is judged as spooky rather than as a cast, the way Rust's transmute is",
         ),
-        (Lang::OCaml, "spooky", "Obj.magic judgment deferred"),
         (
             Lang::OCaml,
             "negations",
@@ -2522,6 +2578,53 @@ let classify items limit =
             let got: Vec<bool> = u.params.iter().map(|p| p.destructured).collect();
             assert_eq!(&got[..], *want, "{lang:?} {src:?}");
         }
+    }
+
+    #[test]
+    fn a_member_kind_is_a_method_wherever_the_parse_left_it() {
+        // The ancestor walk is only as good as the parse. All three
+        // grammars below accept a member declaration sitting directly
+        // in a namespace, a package or a file — without an error node,
+        // so nothing downstream can see that the type went missing —
+        // and that is precisely what a class body the parser gave up
+        // inside leaves behind.
+        let orphans: &[(Lang, &str, &str)] = &[
+            (
+                Lang::CSharp,
+                "a.cs",
+                "namespace N\n{\n    public bool Ready()\n    {\n        return true;\n    }\n}\n",
+            ),
+            (
+                Lang::Java,
+                "A.java",
+                "package n;\n\npublic boolean ready()\n{\n    return true;\n}\n",
+            ),
+        ];
+        for (lang, path, src) in orphans {
+            let f = facts_at(*lang, path, src);
+            let u = f
+                .units
+                .iter()
+                .find(|u| &*u.name == "ready" || &*u.name == "Ready")
+                .unwrap_or_else(|| panic!("{lang:?}: no unit in {src:?}"));
+            assert!(
+                u.is_method,
+                "{lang:?}: a member kind outside its type is still a member"
+            );
+        }
+        // And the free function C# does have keeps its own spelling, so
+        // the rule cannot swallow it.
+        let f = facts_at(
+            Lang::CSharp,
+            "a.cs",
+            "class C\n{\n    void Outer()\n    {\n        bool ready()\n        {\n            return true;\n        }\n    }\n}\n",
+        );
+        let u = f
+            .units
+            .iter()
+            .find(|u| &*u.name == "ready")
+            .expect("local function is a unit");
+        assert!(!u.is_method, "a local function is not a member");
     }
 
     #[test]

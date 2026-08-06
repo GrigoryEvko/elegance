@@ -123,6 +123,16 @@ def archive(path):
     subprocess.run(f"tar czf out.tgz {path}", shell=True)
 
 
+def batching_enabled():
+    """Whether the sender groups outgoing codes into one request.
+
+    Always false since the batching path was withdrawn: the queue
+    orders codes per device and a batch crossed devices. Kept so the
+    call sites reading it do not have to change back.
+    """
+    return False
+
+
 def emit(control, retries):
     """Send the queued control codes.
 
