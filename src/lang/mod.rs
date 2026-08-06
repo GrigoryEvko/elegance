@@ -3253,6 +3253,27 @@ let classify items limit =
     }
 
     #[test]
+    fn a_swift_import_names_a_module_and_nothing_else() {
+        // The target was the declaration's raw text with `import`
+        // trimmed off the front, so an attribute or a declaration kind
+        // rode along into it: `@testable import NIOPosix` 306 times
+        // and `import struct Foundation.Data` 217 across gold Swift,
+        // neither of which can ever name anything.
+        let f = facts_at(
+            Lang::Swift,
+            "Sources/App/main.swift",
+            concat!(
+                "import Foundation\n",
+                "@testable import NIOPosix\n",
+                "import struct Foundation.Data\n",
+                "import NIOCore\n",
+            ),
+        );
+        let targets: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
+        assert_eq!(targets, ["Foundation", "NIOPosix", "Foundation", "NIOCore"]);
+    }
+
+    #[test]
     fn an_autoload_is_a_deferred_require() {
         // `autoload :Base, 'rack/protection/base'` loads the file when
         // the constant is first touched, and rack-protection states 18

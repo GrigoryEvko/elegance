@@ -143,17 +143,28 @@ fn name_node(node: Node) -> Option<Node> {
     node.child_by_field_name("name")
 }
 
+/// The module the declaration depends on. The node's own text carries
+/// the attribute and the declaration kind as well — `@testable import
+/// NIOPosix`, `import struct Foundation.Data` — so the identifier is
+/// read instead. A member import still depends on the module holding
+/// the member, so `Foundation.Data` is Foundation.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    let text = node.utf8_text(src).unwrap_or("");
-    let target = text.trim_start_matches("import").trim();
-    if target.is_empty() {
-        return Vec::new();
-    }
-    vec![super::ImportInfo {
-        target: target.into(),
-        names: Vec::new(),
-        reach: super::Reach::Anywhere,
-    }]
+    let mut cursor = node.walk();
+    let target = node
+        .named_children(&mut cursor)
+        .find(|c| c.kind() == "identifier")
+        .and_then(|c| c.utf8_text(src).ok())
+        .and_then(|t| t.split('.').next())
+        .filter(|t| !t.is_empty());
+    target
+        .map(|t| {
+            vec![super::ImportInfo {
+                target: t.into(),
+                names: Vec::new(),
+                reach: super::Reach::Anywhere,
+            }]
+        })
+        .unwrap_or_default()
 }
 
 /// Swift labels its arguments, so a parameter has an EXTERNAL name the
