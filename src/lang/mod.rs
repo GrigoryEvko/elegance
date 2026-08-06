@@ -7,6 +7,9 @@ mod c;
 mod cpp;
 mod csharp;
 mod elixir;
+/// A module name written the way Elixir writes it as a path — the
+/// bridge the graph needs to match `Plug.Conn` against `plug/conn.ex`.
+pub(crate) use elixir::underscore;
 mod go;
 pub(crate) mod hooks;
 mod java;

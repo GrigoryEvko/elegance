@@ -223,6 +223,9 @@ impl Index {
             // An import names a FILE, and the generic arm dropped the
             // extension on one side of the comparison only.
             Lang::Solidity => self.solidity(from, imp),
+            // A module name is CamelCase and its path is snake_case,
+            // and nothing bridged the two.
+            Lang::Elixir => self.elixir(target),
             Lang::Zig => self.zig(from, target),
             // C++ includes resolve exactly as C's do: a quoted path is
             // relative to the including file, an angled one is a
@@ -526,6 +529,27 @@ impl Index {
             Some(i) => Class::Internal(i),
             None if angled => Class::External,
             None => Class::Unresolved,
+        }
+    }
+
+    /// `alias Plug.Conn` names a module, and a module's file is its
+    /// name run through Elixir's own `Macro.underscore`:
+    /// `Plug.CSRFProtection` lives at `plug/csrf_protection.ex`.
+    ///
+    /// Comparing the CamelCase name against snake_case path components
+    /// missed all 2740 module references in the corpus, so Elixir
+    /// reported 31 internal edges and every one of them was JavaScript
+    /// under phoenix/assets/js.
+    fn elixir(&self, target: &str) -> Class {
+        let segs: Vec<String> = target
+            .split('.')
+            .filter(|s| !s.is_empty())
+            .map(crate::lang::underscore)
+            .collect();
+        let parts: Vec<&str> = segs.iter().map(String::as_str).collect();
+        match self.suffix(&parts) {
+            Some(i) => Class::Internal(i),
+            None => Class::External,
         }
     }
 
@@ -898,6 +922,50 @@ mod tests {
                 unresolved: 1
             }
         );
+    }
+
+    #[test]
+    fn an_elixir_module_name_is_its_path_underscored() {
+        // `defmodule Plug.Conn` lives at lib/plug/conn.ex. Comparing
+        // the CamelCase name against snake_case path components missed
+        // all 2740 module references in the corpus, which reported 31
+        // internal edges — every one of them JavaScript under
+        // phoenix/assets/js.
+        //
+        // Absinthe holds KnownDirectives twice, under document and
+        // under schema, so the full segment vector has to decide which;
+        // the last segment alone cannot.
+        let files = [
+            file(
+                Lang::Elixir,
+                "lib/absinthe/phase/document/validation/known_directives.ex",
+                &[],
+            ),
+            file(
+                Lang::Elixir,
+                "lib/absinthe/phase/schema/validation/known_directives.ex",
+                &[],
+            ),
+            file(Lang::Elixir, "lib/plug/conn.ex", &[]),
+            file(
+                Lang::Elixir,
+                "lib/plug/csrf_protection.ex",
+                &[
+                    "Plug.Conn",
+                    "Absinthe.Phase.Schema.Validation.KnownDirectives",
+                    "Ecto.Query",
+                ],
+            ),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[3][0], Some(idx("lib/plug/conn.ex")));
+        assert_eq!(
+            targets[3][1],
+            Some(idx("schema/validation/known_directives.ex"))
+        );
+        assert_eq!(targets[3][2], None, "Ecto is a dependency here");
+        assert_eq!(res.external, 1);
     }
 
     #[test]

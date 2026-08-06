@@ -142,6 +142,35 @@ fn name_node(node: Node) -> Option<Node> {
     }
 }
 
+/// One segment of a module name as Elixir's own `Macro.underscore`
+/// writes it, which is how a module name becomes a file path:
+/// `Plug.CSRFProtection` lives at `plug/csrf_protection.ex`.
+///
+/// An underscore goes before an upper-case letter that follows a
+/// lower-case one or a digit, and before the last of a run of
+/// upper-case letters when a lower-case one follows it. So `HTML`
+/// stays `html` while `CSRFProtection` splits.
+pub(crate) fn underscore(segment: &str) -> String {
+    let chars: Vec<char> = segment.chars().collect();
+    let mut out = String::with_capacity(segment.len() + 2);
+    for (i, &c) in chars.iter().enumerate() {
+        if i > 0 && c.is_uppercase() && starts_a_word(&chars, i) {
+            out.push('_');
+        }
+        out.extend(c.to_lowercase());
+    }
+    out
+}
+
+/// Whether the upper-case letter at `i` begins a word rather than
+/// continuing an acronym.
+fn starts_a_word(chars: &[char], i: usize) -> bool {
+    let prev = chars[i - 1];
+    prev.is_lowercase()
+        || prev.is_ascii_digit()
+        || (prev.is_uppercase() && chars.get(i + 1).is_some_and(|n| n.is_lowercase()))
+}
+
 /// `import`, `alias`, `require` and `use` all pull a module in.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     if !matches!(
@@ -428,5 +457,27 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
             _ => Sem::None,
         },
         _ => sem,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_module_segment_underscores_the_way_elixir_does() {
+        // Checked against `Macro.underscore/1`. The acronym cases are
+        // the ones a plain lowercase would get wrong, and gold holds
+        // both: Plug.CSRFProtection and Phoenix.HTML.
+        let cases = [
+            ("Conn", "conn"),
+            ("CSRFProtection", "csrf_protection"),
+            ("KnownDirectives", "known_directives"),
+            ("HTML", "html"),
+            ("V2Handler", "v2_handler"),
+            ("JSONSerializer", "json_serializer"),
+            ("Plug", "plug"),
+        ];
+        for (name, want) in cases {
+            assert_eq!(super::underscore(name), want, "{name}");
+        }
     }
 }
