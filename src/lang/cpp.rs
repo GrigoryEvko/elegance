@@ -159,6 +159,8 @@ pub fn pack(dialect: Dialect) -> Pack {
         doc_markers: &[],
         is_public,
         unit_docs,
+        docs_inside_body: false,
+        file_level_scope: false,
         is_override: |_, _| false,
         spooky,
         negation_operand: |node, src| {

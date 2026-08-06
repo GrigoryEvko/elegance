@@ -97,23 +97,16 @@ pub fn pack() -> Pack {
         doc_markers: &[],
         is_public,
         unit_docs,
+        docs_inside_body: false,
+        file_level_scope: false,
         is_override: |_, _| false,
         spooky: |_, _, _| false,
-        negation_operand: |node, src| {
-            (node.kind() == "unary_expression" && field_text_is(node, "operator", src) == Some("!"))
-                .then(|| node.child_by_field_name("argument"))?
-        },
+        negation_operand,
         catch_sin: |_, _| None,
         swallows_error: |_, _| false,
         // No exceptions, so no chain to break.
         loses_context: |_, _| false,
-        panicky: |call, src| {
-            builtin_name(call, src) == Some("@panic")
-                || call
-                    .child_by_field_name("function")
-                    .and_then(|f| f.utf8_text(src).ok())
-                    .is_some_and(|t| t.ends_with("panic"))
-        },
+        panicky,
         // No async in this language; goroutines and threads are not it.
         // Same as Go: the guard is a `defer` elsewhere in the block.
         // Anonymous struct literals are inferred against a declared type.
@@ -285,4 +278,22 @@ fn unit_docs(node: Node, src: &[u8]) -> u32 {
         prev = p.prev_named_sibling();
     }
     lines
+}
+
+/// `!x`, the only negation operator.
+fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let bang =
+        node.kind() == "unary_expression" && field_text_is(node, "operator", src) == Some("!");
+    bang.then(|| node.child_by_field_name("argument"))?
+}
+
+/// `@panic`, and the convention of naming a function that ends in one.
+fn panicky(call: Node, src: &[u8]) -> bool {
+    if builtin_name(call, src) == Some("@panic") {
+        return true;
+    }
+    let Some(f) = call.child_by_field_name("function") else {
+        return false;
+    };
+    f.utf8_text(src).is_ok_and(|t| t.ends_with("panic"))
 }

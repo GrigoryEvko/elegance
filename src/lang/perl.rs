@@ -122,6 +122,8 @@ pub fn pack() -> Pack {
         doc_markers: &["=head", "=pod", "##"],
         is_public,
         unit_docs,
+        docs_inside_body: false,
+        file_level_scope: true,
         is_override: |_, _| false,
         spooky,
         negation_operand,

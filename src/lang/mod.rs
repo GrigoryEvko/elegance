@@ -464,6 +464,24 @@ pub struct Pack {
     /// Contract-documentation lines attached to this definition (docstring,
     /// `///` run, JSDoc block). Interface docs, not implementation notes.
     pub unit_docs: fn(Node, &[u8]) -> u32,
+    /// Does documentation live INSIDE the body?
+    ///
+    /// Python and Ruby put the docstring in the first statement, so a
+    /// documented stub's body is prose and nothing else. Everywhere else
+    /// a bare string in a body is a VALUE — Rust's `fn s() -> &str
+    /// { "x" }` — and treating it as documentation would lose a real
+    /// finding to fix a false one.
+    pub docs_inside_body: bool,
+    /// Does a TypeDef here scope what FOLLOWS it rather than what it
+    /// encloses?
+    ///
+    /// Perl's `package Foo;` is a statement, and the subs it governs sit
+    /// beside it rather than inside it, so an ancestor walk finds
+    /// nothing. Two `base` subs under different packages in one file
+    /// then share a qualified name — and the ratchet's identity is
+    /// (metric, path, qualified unit), so they share a baseline entry
+    /// too.
+    pub file_level_scope: bool,
     /// Is this declaration an OVERRIDE POINT — a trait or interface
     /// member carrying a default for implementors, or a method marked as
     /// overriding one?

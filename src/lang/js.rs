@@ -86,6 +86,8 @@ pub fn pack() -> Pack {
         doc_markers: &[],
         is_public: typescript::is_public,
         unit_docs: typescript::unit_docs,
+        docs_inside_body: false,
+        file_level_scope: false,
         is_override: |_, _| false,
         spooky: typescript::spooky,
         negation_operand: |node, src| {

@@ -168,6 +168,10 @@ pub enum BodyShape {
     BoolLiteral,
     /// One literal of any other kind: `{ 1 }`, `= "v1"`.
     Literal,
+    /// Documentation and nothing else — a decorator target, an abstract
+    /// method, a protocol stub. All three are legitimate, so `ceremony`
+    /// passes over them.
+    Empty,
     /// Names or does something. The default, and the safe answer for a
     /// grammar whose definitions carry no `body` field.
     #[default]

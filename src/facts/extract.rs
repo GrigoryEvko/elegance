@@ -499,10 +499,12 @@ impl Extractor<'_> {
             return BodyShape::Real;
         };
         let rest: Vec<Node> = kids.collect();
-        let (head, tail) = match rest.split_first() {
-            Some((second, others)) if self.only_literal(first) == Some(Sem::StrLit) => {
-                (*second, others)
-            }
+        let doc_first = self.pack.docs_inside_body && self.only_literal(first) == Some(Sem::StrLit);
+        let (head, tail) = match (doc_first, rest.split_first()) {
+            // `def f(): """docs"""` — a decorator supplies the
+            // behaviour, and the body is prose.
+            (true, None) => return BodyShape::Empty,
+            (true, Some((second, others))) => (*second, others),
             _ => (first, &rest[..]),
         };
         if !tail.is_empty() {
@@ -1026,7 +1028,37 @@ impl Extractor<'_> {
     /// The nearest enclosing scope-former decides method-ness: a def whose
     /// closest TypeDef/FnDef ancestor is a class is a method, even when
     /// decorated or defined conditionally inside the class body.
+    /// The declaration that scopes this one WITHOUT enclosing it.
+    ///
+    /// Only Perl needs this today: `package Foo;` is a statement and the
+    /// subs it governs follow it as siblings. Climb to the file-level
+    /// statement holding this unit, then walk back for the nearest
+    /// TypeDef.
+    fn preceding_scope<'t>(&self, node: Node<'t>) -> Option<Node<'t>> {
+        if !self.pack.file_level_scope {
+            return None;
+        }
+        let mut top = node;
+        while let Some(p) = top.parent() {
+            if p.parent().is_none() {
+                break;
+            }
+            top = p;
+        }
+        let mut prev = top.prev_named_sibling();
+        while let Some(p) = prev {
+            if self.sem_of(p) == Sem::TypeDef {
+                return Some(p);
+            }
+            prev = p.prev_named_sibling();
+        }
+        None
+    }
+
     fn enclosing_scope_is_class(&self, node: Node) -> bool {
+        if self.preceding_scope(node).is_some() {
+            return true;
+        }
         let mut anc = node.parent();
         while let Some(a) = anc {
             match self.sem_of(a) {
@@ -1141,6 +1173,9 @@ impl Extractor<'_> {
             anc = a.parent();
         }
         scopes.reverse(); // ancestors arrive innermost-first
+        if let Some(s) = self.preceding_scope(node).and_then(|p| self.scope_name(p)) {
+            scopes.insert(0, s);
+        }
         if let Some(r) = recv {
             scopes.insert(0, &r.type_name);
         }

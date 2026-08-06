@@ -78,6 +78,8 @@ pub fn pack() -> Pack {
         doc_markers: &["@doc", "@moduledoc"],
         is_public,
         unit_docs,
+        docs_inside_body: false,
+        file_level_scope: false,
         is_override: |_, _| false,
         spooky,
         negation_operand,

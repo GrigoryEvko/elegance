@@ -112,6 +112,8 @@ pub fn pack() -> Pack {
         doc_markers: &["##", "#"],
         is_public,
         unit_docs,
+        docs_inside_body: true,
+        file_level_scope: false,
         is_override: |_, _| false,
         spooky,
         negation_operand,

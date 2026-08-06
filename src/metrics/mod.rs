@@ -662,7 +662,7 @@ fn ceremony(u: &UnitFacts) -> u32 {
     let documented_nothing = u.params.is_empty()
         && !u.is_method
         && u.doc_lines >= 3
-        && u.body != BodyShape::Real
+        && matches!(u.body, BodyShape::BoolLiteral | BodyShape::Literal)
         && !u.is_override
         && !u.is_test;
     documented_nothing as u32
@@ -1789,11 +1789,10 @@ mod tests {
     }
 
     #[test]
-    fn ceremony_needs_the_documentation_and_spares_the_override() {
+    fn ceremony_fires_on_a_documented_literal_declaration() {
         use crate::lang::Lang;
         const DOC: &str = "/// Whether the fast path is available.\n///\n/// Three lines.\n";
-
-        // FIRES: nullary, one bare literal, documented at length.
+        // Nullary, one bare literal, documented at length.
         assert_eq!(
             ceremony_in(
                 Lang::Rust,
@@ -1802,6 +1801,8 @@ mod tests {
             ),
             1,
         );
+        // Python keeps the docstring INSIDE the body, so a documented
+        // stub reads as two literals unless the docstring is set aside.
         assert_eq!(
             ceremony_in(
                 Lang::Python,
@@ -1810,6 +1811,23 @@ mod tests {
             ),
             1,
         );
+        // A bare string that is a RETURN VALUE still counts, which is
+        // why the docstring rule is a per-pack fact rather than a guess
+        // about any leading string.
+        assert_eq!(
+            ceremony_in(
+                Lang::Rust,
+                "a.rs",
+                &format!("{DOC}pub fn kind() -> &'static str {{ \"user\" }}\n")
+            ),
+            1,
+        );
+    }
+
+    #[test]
+    fn ceremony_needs_the_documentation_and_spares_the_override() {
+        use crate::lang::Lang;
+        const DOC: &str = "/// Whether the fast path is available.\n///\n/// Three lines.\n";
 
         // SILENT — and each of these is why the rule has the shape it
         // has, measured against 512,927 human declarations.
@@ -1853,6 +1871,32 @@ mod tests {
                 &format!("{DOC}pub fn ready(x: u32) -> bool {{ true }}\n")
             ),
             0,
+        );
+
+        // A body that is documentation and nothing else is a decorator
+        // target, an abstract method or a protocol stub. Click's
+        // `@click.group()` over a docstring-only `def cli():` was two of
+        // the gold corpus's remaining false positives.
+        assert_eq!(
+            ceremony_in(
+                Lang::Python,
+                "a.py",
+                "@click.group()\ndef cli():\n    \"\"\"Docs.\n\n    More docs.\n    \"\"\"\n"
+            ),
+            0,
+            "a decorator supplies the behaviour",
+        );
+        // But a bare string that is a RETURN VALUE still counts, which
+        // is why the docstring rule is a per-pack fact rather than a
+        // guess about any leading string.
+        assert_eq!(
+            ceremony_in(
+                Lang::Rust,
+                "a.rs",
+                &format!("{DOC}pub fn kind() -> &'static str {{ \"user\" }}\n")
+            ),
+            1,
+            "Rust has no docstring; the string is the value",
         );
 
         // A stub returning `true` is how a fixture is written.
