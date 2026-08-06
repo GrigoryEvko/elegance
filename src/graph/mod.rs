@@ -508,6 +508,9 @@ fn module_components(f: &GraphFacts) -> Vec<Box<str>> {
         Lang::Python => "__init__",
         Lang::Rust => "mod",
         Lang::TypeScript | Lang::Tsx | Lang::JavaScript => "index",
+        // Penlight writes the rule down at run.lua:37 —
+        // `package.path = "lua/?.lua;lua/?/init.lua"`.
+        Lang::Lua => "init",
         _ => "",
     };
     let crate_root =
@@ -717,6 +720,29 @@ mod tests {
                 unresolved: 1
             }
         );
+    }
+
+    #[test]
+    fn a_lua_directory_entry_point_answers_to_its_directory() {
+        // `package.path` is `?.lua;?/init.lua`, so `require 'vm'` names
+        // vm/init.lua and reaches vm/vm.lua only in its absence.
+        // Reading init as an ordinary module sent all 71 of
+        // lua-language-server's `require 'vm'` to the submodule and
+        // left the entry point with no importers at all.
+        let files = [
+            file(Lang::Lua, "script/luarocks/cmd.lua", &[]),
+            file(Lang::Lua, "script/luarocks/cmd/init.lua", &[]),
+            file(Lang::Lua, "script/main.lua", &["vm", "luarocks.cmd"]),
+            file(Lang::Lua, "script/vm/init.lua", &[]),
+            file(Lang::Lua, "script/vm/vm.lua", &[]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        assert_eq!(res.internal, 2, "both requires name files in this tree");
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[2][0], Some(idx("script/vm/init.lua")));
+        // And `?.lua` is searched first, so the plain file still wins
+        // where a directory of the same name also has an entry point.
+        assert_eq!(targets[2][1], Some(idx("script/luarocks/cmd.lua")));
     }
 
     #[test]

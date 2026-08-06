@@ -110,7 +110,12 @@ pub fn pack() -> Pack {
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
-        test_path: |p| p.contains("/spec/") || p.contains("/test/") || p.ends_with("_spec.lua"),
+        test_path: |p| {
+            p.contains("/spec/")
+                || p.contains("/test/")
+                || p.contains("/tests/")
+                || p.ends_with("_spec.lua")
+        },
         // Read the WHOLE callee, not its trailing segment: busted spells
         // every assertion `assert.same`, `assert.is_true`, `assert.falsy`,
         // and stripping to the last segment left `same`/`is_true`/`falsy`,
@@ -146,14 +151,25 @@ fn name_node(node: Node) -> Option<Node> {
 
 /// Is this call the import form? Spelled against the WHOLE callee, not
 /// its trailing component, so a `config.require(...)` of somebody's own
-/// is not read as a module edge.
+/// is not read as a module edge. `pcall(require, "x")` is the same
+/// dependency written to tolerate its absence.
 fn requires(call: Node, src: &[u8]) -> bool {
-    call.child_by_field_name("name")
-        .and_then(|n| n.utf8_text(src).ok())
-        == Some("require")
+    let text = |n: Node| n.utf8_text(src).ok();
+    match call.child_by_field_name("name").and_then(text) {
+        Some("require") => true,
+        Some("pcall" | "xpcall") => {
+            let mut cursor = call.walk();
+            call.child_by_field_name("arguments")
+                .and_then(|a| a.named_children(&mut cursor).next())
+                .and_then(text)
+                == Some("require")
+        }
+        _ => false,
+    }
 }
 
-/// `require "x"` and `require("x")` are the only import form.
+/// `require "x"`, `require("x")` and `pcall(require, "x")` — the target
+/// is the first string argument in every spelling.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     if !requires(node, src) {
         return Vec::new();
@@ -323,5 +339,26 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
             Sem::None
         }
         _ => sem,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_tests_directory_is_test_code_like_a_test_directory() {
+        // Penlight files its suite under tests/, and matching only
+        // /test/ left 43 of its 115 modules counted as production.
+        let is_test = super::pack().test_path;
+        for p in [
+            "Penlight/tests/test-pretty.lua",
+            "lua-language-server/test/main.lua",
+            "Penlight/spec/utils_spec.lua",
+            "kong/kong/plugins/acl/handler_spec.lua",
+        ] {
+            assert!(is_test(p), "{p}");
+        }
+        for p in ["kong/kong/router/init.lua", "Penlight/lua/pl/latest.lua"] {
+            assert!(!is_test(p), "{p}");
+        }
     }
 }

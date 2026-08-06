@@ -3231,6 +3231,25 @@ let classify items limit =
     }
 
     #[test]
+    fn a_guarded_require_is_still_a_require() {
+        // A module that tolerates a missing dependency writes
+        // `pcall(require, "x")`. The callee is pcall, so the pack read
+        // an ordinary call and 132 of these across gold Lua emitted no
+        // edge — while `pcall` around anything else stays a call.
+        let f = facts_at(
+            Lang::Lua,
+            "m.lua",
+            concat!(
+                "local ok, x = pcall(require, \"dkjson\")\n",
+                "local y = require \"cjson\"\n",
+                "local z = pcall(tostring, \"nope\")\n",
+            ),
+        );
+        let targets: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
+        assert_eq!(targets, ["dkjson", "cjson"]);
+    }
+
+    #[test]
     fn a_dot_h_is_read_as_the_dialect_it_is_written_in() {
         // Reading every `.h` as C dropped a third of every C++ repository
         // as unparseable — headers are where C++ keeps its classes.
