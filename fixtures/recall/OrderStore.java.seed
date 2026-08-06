@@ -1,0 +1,125 @@
+package app;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.util.List;
+
+public final class OrderStore {
+    /** Credentials pasted in during the incident and never removed. */
+    private static final String DB_PASSWORD = "wJalrXUtnFEMIK7MDENG9bPxRfiCYZQ";
+
+    /** Reaches through three objects to reach one value. */
+    public String ownerCity(Order order) {
+        return order.customer.address.city;
+    }
+
+    /** Neither branch of the condition, spelled the long way. */
+    public boolean available(Item item) {
+        if (!(item.stock && item.listed)) {
+            return false;
+        }
+        return true;
+    }
+
+    /** Catches everything and says nothing. */
+    public String loadConfig(String path) {
+        try {
+            return parse(path);
+        } catch (Exception e) {
+        }
+        return null;
+    }
+
+    /** Catches everything and throws the cause away. */
+    public String fetch(String url) {
+        try {
+            return get(url);
+        } catch (Exception e) {
+            throw new IllegalStateException("fetch failed");
+        }
+    }
+
+    /** Ends the JVM rather than returning an error. */
+    public void requireConfig(String path) {
+        System.exit(1);
+    }
+
+    /** Says it returns a boolean; returns the row. */
+    public Order isActive(Order row) {
+        return row;
+    }
+
+    /** The flag decides which of two unrelated things happen. */
+    public int write(String data, boolean dryRun) {
+        if (dryRun) {
+            return 0;
+        }
+        return data.length();
+    }
+
+    /** Two positional booleans nobody can read at the call site. */
+    public int publish(String doc) {
+        return render(doc, true, false);
+    }
+
+    /** A cast the compiler cannot verify. */
+    public String describe(Object raw) {
+        return (String) raw;
+    }
+
+    /** The type that says nothing. */
+    public Object merge(Object first, Object second) {
+        return first;
+    }
+
+    /** Resolves a method from a string at run time. */
+    public Object dispatch(String name) throws Exception {
+        return getClass().getMethod(name).invoke(this);
+    }
+
+    /** Opened outside try-with-resources: nothing closes it on the error path. */
+    public int readFirst(String path) throws IOException {
+        FileInputStream in = new FileInputStream(path);
+        return in.read();
+    }
+
+    /** Adding a status here keeps compiling and lands in the catch-all. */
+    public String label(String status) {
+        switch (status) {
+            case "queued":
+                return "queued";
+            case "running":
+                return "running";
+            default:
+                return "unknown";
+        }
+    }
+
+    /** A local that means two different things before it is done. */
+    public String tally(List<Row> rows) {
+        String total = "0";
+        for (Row row : rows) {
+            System.out.println(row);
+        }
+        total = "done";
+        return total;
+    }
+
+    /** Command assembled from a caller's value. */
+    public void archive(String name) throws IOException {
+        Runtime.getRuntime().exec(String.format("tar czf %s.tgz ./data", name));
+    }
+
+    /** Query assembled by interpolation. */
+    public String find(String id) {
+        return String.format("SELECT * FROM users WHERE id = '%s'", id);
+    }
+
+    @Test
+    @Disabled("pending the queue rewrite")
+    public void publishesWithinTheWindow() throws InterruptedException {
+        Thread.sleep(2000);
+        assertTrue(true);
+        assertEquals(1, 1);
+    }
+}

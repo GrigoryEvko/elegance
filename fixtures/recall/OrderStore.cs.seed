@@ -1,0 +1,175 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading.Tasks;
+
+namespace App
+{
+    public sealed class OrderStore
+    {
+        /// Credentials pasted in during the incident and never removed.
+        private const string DbPassword = "wJalrXUtnFEMIK7MDENG9bPxRfiCYZQ";
+
+        /// Reaches through three objects to reach one value.
+        public string OwnerCity(Order order)
+        {
+            return order.Customer.Address.City;
+        }
+
+        /// Neither branch of the condition, spelled the long way.
+        public bool Available(Item item)
+        {
+            if (!(item.Stock && item.Listed))
+            {
+                return false;
+            }
+            return true;
+        }
+
+        /// Catches everything and says nothing.
+        public string LoadConfig(string path)
+        {
+            try
+            {
+                return Parse(path);
+            }
+            catch (Exception e)
+            {
+            }
+            return null;
+        }
+
+        /// Catches everything and throws the cause away.
+        public string Fetch(string url)
+        {
+            try
+            {
+                return Get(url);
+            }
+            catch (Exception e)
+            {
+                throw new InvalidOperationException("fetch failed");
+            }
+        }
+
+        /// Ends the process rather than returning an error.
+        public void RequireConfig(string path)
+        {
+            Environment.Exit(1);
+        }
+
+        /// Says it returns a boolean; returns the row.
+        public Order IsActive(Order row)
+        {
+            return row;
+        }
+
+        /// The flag decides which of two unrelated things happen.
+        public int Write(string data, bool dryRun)
+        {
+            if (dryRun)
+            {
+                return 0;
+            }
+            return data.Length;
+        }
+
+        /// Two positional booleans nobody can read at the call site.
+        public int Publish(string doc)
+        {
+            return Render(doc, true, false);
+        }
+
+        /// A cast the compiler cannot verify.
+        public string Describe(object raw)
+        {
+            return (string)raw;
+        }
+
+        /// The type that says nothing.
+        public object Merge(object first, dynamic second)
+        {
+            return first;
+        }
+
+        /// Resolves a member from a string at run time.
+        public object Dispatch(string name)
+        {
+            return GetType().GetMethod(name).Invoke(this, null);
+        }
+
+        /// Opened outside `using`: nothing releases it on the error path.
+        public int ReadFirst(string path)
+        {
+            var stream = new FileStream(path, FileMode.Open);
+            return stream.ReadByte();
+        }
+
+        /// Adding a status here keeps compiling and lands in the catch-all.
+        public string Label(string status)
+        {
+            switch (status)
+            {
+                case "queued":
+                    return "queued";
+                case "running":
+                    return "running";
+                default:
+                    return "unknown";
+            }
+        }
+
+        /// A local that means two different things before it is done.
+        public string Tally(int[] rows)
+        {
+            var total = "0";
+            foreach (var row in rows)
+            {
+                Console.WriteLine(row);
+            }
+            total = "done";
+            return total;
+        }
+
+        /// Warms the cache; nothing here is awaited.
+        private async Task Warm(string url)
+        {
+            await Get(url);
+        }
+
+        /// Parks the thread pool inside an async unit, and starts a
+        /// coroutine nobody awaits.
+        public async Task<string> Refresh(string url)
+        {
+            Thread.Sleep(2000);
+            Warm(url);
+            return await Get(url);
+        }
+
+        /// Command assembled from a caller's value.
+        public void Archive(string name)
+        {
+            Process.Start("/bin/sh", $"-c tar czf {name}.tgz ./data");
+        }
+
+        /// Query assembled by interpolation.
+        public string Find(string id)
+        {
+            return $"SELECT * FROM users WHERE id = '{id}'";
+        }
+
+        [Fact]
+        public void PublishesWithinTheWindow()
+        {
+            Thread.Sleep(2000);
+            Assert.True(true);
+            Assert.Equal(1, 1);
+        }
+
+        [Fact(Skip = "pending the queue rewrite")]
+        public void RewritesTheQueue()
+        {
+            Assert.True(false);
+        }
+    }
+}

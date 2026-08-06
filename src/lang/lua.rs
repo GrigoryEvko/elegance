@@ -39,11 +39,21 @@ const KINDS: &[(&str, Sem)] = &[
     ("goto_statement", Sem::Goto),
 ];
 
-const DEF_SITES: &[(&str, &str)] = &[("function_declaration", "name")];
+/// The grammar labels an assignment's target list with no field, so the
+/// binding is the first named child. `local x = 1` wraps the same
+/// `assignment_statement` in a `variable_declaration`, which is why one
+/// entry covers both a fresh local and a rebound global.
+const DEF_SITES: &[(&str, &str)] = &[
+    ("function_declaration", "name"),
+    ("assignment_statement", ""),
+];
 
 /// `x = ...` again. Lua has no compound assignment, so every rebinding
 /// of a name that is already bound arrives through this one kind.
-const REASSIGNS: &[(&str, &str)] = &[("assignment_statement", "left")];
+const REASSIGNS: &[(&str, &str)] = &[("assignment_statement", "")];
+
+/// `a.b` — the only member access the language has. `a:b()` is a call.
+const ATTR: (&str, &str) = ("dot_index_expression", "table");
 
 pub fn pack() -> Pack {
     let ts: tree_sitter::Language = tree_sitter_lua::LANGUAGE.into();
@@ -51,20 +61,22 @@ pub fn pack() -> Pack {
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
     let reassigns = super::def_table(&ts, REASSIGNS);
+    let attr = super::attr_site(&ts, ATTR.0, ATTR.1);
     Pack {
         lang: Lang::Lua,
         ts,
         kind_names: kinds,
         def_site_names: DEF_SITES,
         reassign_names: REASSIGNS,
-        attr_name: None,
+        attr_name: Some(ATTR),
         sems,
         def_sites,
         reassigns,
-        attr: None,
+        attr,
         scope_sep: ".",
         return_type_field: "",
         bool_op_field: "operator",
+        call_target_fields: &["name"],
         types_declared: false,
         record_keys,
         // `pcall` is the whole error story and there is no scope guard,
@@ -93,7 +105,7 @@ pub fn pack() -> Pack {
         loses_context: |_, _| false,
         panicky,
         declares_test,
-        names_test,
+        names_test: declares_test,
         is_test_code: |_, _| false,
         test_path: |p| p.contains("/spec/") || p.contains("/test/") || p.ends_with("_spec.lua"),
         asserty: |call, src| callee_text(call, src).is_some_and(super::assertish),
@@ -115,7 +127,12 @@ pub fn pack() -> Pack {
 /// unit; an anonymous `function()` assigned to a field does not, and is
 /// measured as the lambda it is.
 fn name_node(node: Node) -> Option<Node> {
-    node.child_by_field_name("name")
+    node.child_by_field_name("name").or_else(|| {
+        // A promoted test takes its name from the call's first
+        // argument, which is PROSE rather than an identifier.
+        let args = node.parent().filter(|p| p.kind() == "arguments")?;
+        args.named_child(0).filter(|n| n.kind() == "string")
+    })
 }
 
 /// `require "x"` and `require("x")` are the only import form.
@@ -224,16 +241,22 @@ fn record_keys(node: Node, src: &[u8]) -> Option<Vec<Box<str>>> {
 }
 
 /// busted and its ancestors all spell a test the same way: a call to
-/// `it` or `describe` taking a name and a function.
-fn declares_test(node: Node, src: &[u8]) -> bool {
+/// `it` or `describe` taking a name and a function. The test is that
+/// FUNCTION — the same shape jest gives TypeScript — so the evidence is
+/// read from the call the body was handed to, and `refine` promotes the
+/// body to a unit so there is something to judge.
+fn declaring_test<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let args = node.parent().filter(|p| p.kind() == "arguments")?;
+    let call = args.parent().filter(|c| c.kind() == "function_call")?;
     matches!(
-        callee_text(node, src),
-        Some("it" | "describe" | "test" | "spec")
-    ) && first_string(node, src).is_some()
+        callee_text(call, src),
+        Some("it" | "describe" | "test" | "spec" | "context")
+    )
+    .then_some(args)
 }
 
-fn names_test(node: Node, src: &[u8]) -> bool {
-    declares_test(node, src)
+fn declares_test(node: Node, src: &[u8]) -> bool {
+    declaring_test(node, src).is_some()
 }
 
 /// `pending("...")` is busted's skip.
@@ -269,6 +292,9 @@ fn unit_docs(node: Node, src: &[u8]) -> u32 {
 /// sequence a condition.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
+        // A busted test is an anonymous function handed to `it`; without
+        // promoting it there is no unit for the test metrics to judge.
+        Sem::Lambda if declaring_test(node, src).is_some() => Sem::FnDef,
         Sem::BoolOp => match super::field_text_is(node, "operator", src) {
             Some("and" | "or") => Sem::BoolOp,
             _ => Sem::None,

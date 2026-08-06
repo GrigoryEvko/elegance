@@ -155,21 +155,25 @@
 "public docs" = { rate = 0.39 }
 
 [lua]
-"cognitive" = { hi = 68.0 }
-"cyclomatic" = { hi = 35.0 }
+"cognitive" = { hi = 65.0 }
+"cyclomatic" = { hi = 34.0 }
 "depth" = { hi = 5.0 }
-"length" = { hi = 146.0 }
+"length" = { hi = 155.0 }
 "params" = { hi = 5.0 }
 "expr depth" = { hi = 12.0 }
+"demeter" = { hi = 1.0 }
+"live span" = { hi = 106.0 }
 "magic numbers" = { hi = 5.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
 "comment ratio" = { lo = 0.00, hi = 0.41 }
+"terse name" = { hi = 20.0 }
 "abbreviated" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
+"repurposed" = { hi = 1.0 }
 "magic strings" = { hi = 4.0 }
 "commented code" = { hi = 2.0 }
 "asserts" = { rate = 0.09 }
-"public docs" = { rate = 0.24 }
+"public docs" = { rate = 0.19 }
 
 [rb]
 "cognitive" = { hi = 30.0 }
@@ -179,30 +183,35 @@
 "params" = { hi = 4.0 }
 "expr depth" = { hi = 11.0 }
 "demeter" = { hi = 4.0 }
+"live span" = { hi = 25.0 }
 "magic numbers" = { hi = 1.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
 "comment ratio" = { lo = 0.00, hi = 0.64 }
 "abbreviated" = { hi = 1.0 }
+"wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 4.0 }
 "asserts" = { rate = 0.00 }
 "public docs" = { rate = 0.35 }
 
 [pl]
-"cognitive" = { hi = 31.0 }
-"cyclomatic" = { hi = 18.0 }
-"depth" = { hi = 4.0 }
-"length" = { hi = 93.0 }
+"cognitive" = { hi = 25.0 }
+"cyclomatic" = { hi = 15.0 }
+"depth" = { hi = 3.0 }
+"length" = { hi = 79.0 }
 "expr depth" = { hi = 13.0 }
+"demeter" = { hi = 7.0 }
+"live span" = { hi = 67.0 }
 "magic numbers" = { hi = 3.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
 "comment ratio" = { lo = 0.00, hi = 0.74 }
+"terse name" = { hi = 20.0 }
 "abbreviated" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 1.0 }
-"skipped tests" = { hi = 3.0 }
+"skipped tests" = { hi = 4.0 }
 "asserts" = { rate = 0.02 }
-"public docs" = { rate = 0.16 }
+"public docs" = { rate = 0.08 }
 
 [php]
 "cognitive" = { hi = 32.0 }
@@ -211,6 +220,7 @@
 "length" = { hi = 104.0 }
 "params" = { hi = 6.0 }
 "expr depth" = { hi = 14.0 }
+"live span" = { hi = 76.0 }
 "magic numbers" = { hi = 3.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
 "comment ratio" = { lo = 0.00, hi = 0.63 }
@@ -230,6 +240,7 @@
 "length" = { hi = 58.0 }
 "params" = { hi = 5.0 }
 "expr depth" = { hi = 10.0 }
+"live span" = { hi = 43.0 }
 "magic numbers" = { hi = 3.0 }
 "comment ratio" = { lo = 0.05, hi = 0.83 }
 "loose types" = { hi = 1.0 }
@@ -240,7 +251,7 @@
 "interface width" = { hi = 27.0 }
 "magic strings" = { hi = 1.0 }
 "skipped tests" = { hi = 1.0 }
-"cohesion" = { hi = 13.0 }
+"cohesion" = { hi = 11.0 }
 "asserts" = { rate = 0.12 }
 "public docs" = { rate = 0.16 }
 
@@ -252,6 +263,7 @@
 "params" = { hi = 5.0 }
 "expr depth" = { hi = 14.0 }
 "demeter" = { hi = 1.0 }
+"live span" = { hi = 41.0 }
 "magic numbers" = { hi = 1.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
 "comment ratio" = { lo = 0.00, hi = 0.70 }
@@ -261,7 +273,7 @@
 "loop depth" = { hi = 1.0 }
 "interface width" = { hi = 26.0 }
 "magic strings" = { hi = 1.0 }
-"asserts" = { rate = 0.21 }
+"asserts" = { rate = 0.22 }
 "public docs" = { rate = 0.15 }
 
 [swift]
@@ -272,7 +284,7 @@
 "params" = { hi = 6.0 }
 "expr depth" = { hi = 17.0 }
 "demeter" = { hi = 2.0 }
-"live span" = { hi = 25.0 }
+"live span" = { hi = 61.0 }
 "magic numbers" = { hi = 7.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
 "comment ratio" = { lo = 0.00, hi = 0.65 }
@@ -286,13 +298,14 @@
 "public docs" = { rate = 0.50 }
 
 [scala]
-"cognitive" = { hi = 10.0 }
-"cyclomatic" = { hi = 10.0 }
+"cognitive" = { hi = 7.0 }
+"cyclomatic" = { hi = 7.0 }
 "depth" = { hi = 3.0 }
-"length" = { hi = 63.0 }
+"length" = { hi = 54.0 }
 "params" = { hi = 3.0 }
 "expr depth" = { hi = 12.0 }
 "demeter" = { hi = 1.0 }
+"live span" = { hi = 20.0 }
 "magic numbers" = { hi = 2.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
 "comment ratio" = { lo = 0.00, hi = 0.83 }
@@ -301,15 +314,16 @@
 "loop depth" = { hi = 1.0 }
 "interface width" = { hi = 9.0 }
 "magic strings" = { hi = 1.0 }
-"asserts" = { rate = 0.23 }
-"public docs" = { rate = 0.08 }
+"sleepy test" = { hi = 1.0 }
+"asserts" = { rate = 0.07 }
+"public docs" = { rate = 0.06 }
 
 [ex]
-"cognitive" = { hi = 7.0 }
-"cyclomatic" = { hi = 12.0 }
+"cognitive" = { hi = 5.0 }
+"cyclomatic" = { hi = 8.0 }
 "depth" = { hi = 2.0 }
-"length" = { hi = 46.0 }
-"params" = { hi = 6.0 }
+"length" = { hi = 91.0 }
+"params" = { hi = 5.0 }
 "expr depth" = { hi = 14.0 }
 "magic numbers" = { hi = 1.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
@@ -326,6 +340,7 @@
 "length" = { hi = 49.0 }
 "params" = { hi = 6.0 }
 "expr depth" = { hi = 18.0 }
+"live span" = { hi = 32.0 }
 "magic numbers" = { hi = 9.0 }
 "comment ratio" = { lo = 0.02, hi = 0.76 }
 "loose types" = { hi = 3.0 }

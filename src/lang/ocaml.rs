@@ -64,6 +64,7 @@ pub fn pack() -> Pack {
         scope_sep: ".",
         return_type_field: "",
         bool_op_field: "operator",
+        call_target_fields: &["function"],
         types_declared: true,
         // Anonymous records exist, but a record literal is checked
         // against a declared type — there is no undeclared shape.

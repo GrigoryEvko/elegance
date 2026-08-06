@@ -80,11 +80,22 @@ const DEF_SITES: &[(&str, &str)] = &[
     ("method_declaration_statement", "name"),
     ("class_statement", "name"),
     ("package_statement", "name"),
+    // `my $x = ...` is an assignment whose left side declares. Without
+    // it the live map held no definition row for any lexical, so the
+    // repurposing check had nothing to compare a rewrite against.
+    ("assignment_expression", "left"),
 ];
 
 /// `$x = ...` again. The compound operators (`+=`, `//=`) live on this
 /// same node and stay exempt as collecting updates.
 const REASSIGNS: &[(&str, &str)] = &[("assignment_expression", "left")];
+
+/// The ONLY member access an object has here. A blessed hash reaches
+/// its fields with `->{k}`, whose receiver the grammar leaves unfielded,
+/// and every accessor a class generates is a method — so `->` chains
+/// ARE the data links Demeter is about, and there is no fluent-builder
+/// spelling to confuse them with.
+const ATTR: (&str, &str) = ("method_call_expression", "invocant");
 
 pub fn pack() -> Pack {
     let ts: tree_sitter::Language = ts_parser_perl::LANGUAGE.into();
@@ -92,26 +103,31 @@ pub fn pack() -> Pack {
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
     let reassigns = super::def_table(&ts, REASSIGNS);
+    let attr = super::attr_site(&ts, ATTR.0, ATTR.1);
     Pack {
         lang: Lang::Perl,
         ts,
         kind_names: kinds,
         def_site_names: DEF_SITES,
         reassign_names: REASSIGNS,
-        attr_name: None,
+        attr_name: Some(ATTR),
         sems,
         def_sites,
         reassigns,
-        attr: None,
+        attr,
         scope_sep: "::",
         return_type_field: "",
         bool_op_field: "operator",
+        call_target_fields: &["function"],
         types_declared: false,
         record_keys,
         // A filehandle closes when its lexical goes out of scope, and
         // that is the idiom; there is no scope-guard statement to miss.
         unguarded_resource: |_, _| false,
-        is_async: |node, _| node.kind() == "async_block_expression",
+        // Future::AsyncAwait's `async sub` is the ecosystem's async and
+        // the grammar reads it, so the keyword at the head decides —
+        // the same rule every other language here uses.
+        is_async: super::declared_async,
         refine,
         name_node,
         composed_name: |_, _| None,
@@ -129,7 +145,7 @@ pub fn pack() -> Pack {
         negation_operand,
         catch_sin: |_, _| None,
         swallows_error,
-        loses_context: |_, _| false,
+        loses_context,
         panicky,
         declares_test,
         names_test: declares_test,
@@ -149,7 +165,13 @@ pub fn pack() -> Pack {
 }
 
 fn name_node(node: Node) -> Option<Node> {
-    node.child_by_field_name("name")
+    node.child_by_field_name("name").or_else(|| {
+        // A promoted `subtest` body takes its name from the string
+        // beside it in the argument list — prose rather than an
+        // identifier, the way a Zig test label is.
+        let list = node.parent().filter(|p| p.kind() == "list_expression")?;
+        list.named_child(0).filter(|n| n.kind() == "string_literal")
+    })
 }
 
 /// `use Foo::Bar;` and `require Foo::Bar;`. A `use` of a pragma —
@@ -199,11 +221,18 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
             .ok()?;
         Some(text.trim_start_matches(['$', '@', '%', ':']).to_string())
     };
+    // Nothing declares a type, so a boolean DEFAULT is the only thing
+    // in a signature that marks a parameter as a switch.
+    let boolish = node
+        .child_by_field_name("default")
+        .and_then(|v| v.utf8_text(src).ok())
+        .is_some_and(|t| matches!(t.trim(), "true" | "false"));
     let info = |name: String, optional: bool, kw_splat: bool| ParamInfo {
         name: name.into(),
         optional,
         typed: false,
         kw_splat,
+        boolish,
         ..Default::default()
     };
     match node.kind() {
@@ -258,9 +287,18 @@ fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
         )
 }
 
-/// `!$x`, and the low-precedence `not $x`.
-fn negation_operand<'t>(node: Node<'t>, _src: &[u8]) -> Option<Node<'t>> {
-    (node.kind() == "logical_not_expression").then(|| node.child_by_field_name("operand"))?
+/// `!$x`, and the low-precedence `not $x`. Both arrive as the generic
+/// unary node — the grammar has a `logical_not_expression` kind and
+/// does not use it for either spelling, which left this language with
+/// no negations at all.
+fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let text = node.utf8_text(src).ok()?;
+    let negated = matches!(node.kind(), "unary_expression" | "logical_not_expression")
+        && (text.starts_with('!') || text.starts_with("not "));
+    // The FIRST NAMED child, not the `operand` field: `!( ... )` keeps
+    // its parentheses inside that field, so the field's first child is
+    // the `(` token and every parenthesised negation read as one.
+    negated.then(|| node.named_child(0))?
 }
 
 /// An `eval` whose error is never examined: no `$@` in the statements
@@ -270,7 +308,12 @@ fn swallows_error(node: Node, src: &[u8]) -> bool {
     if node.kind() != "eval_expression" {
         return false;
     }
-    let Some(parent) = node.parent() else {
+    // Only a BARE eval statement. `my $ok = eval { ... }` hands the
+    // caller a value to test and `eval { ...; 1 } or do { ... }` handles
+    // the failure in the same statement — both keep the error in the
+    // story, and counting them put this rung-2 gate over its ceiling on
+    // the gold corpus at 1.6%.
+    let Some(parent) = node.parent().filter(|p| p.kind() == "expression_statement") else {
         return false;
     };
     let mut sib = parent.next_named_sibling();
@@ -284,10 +327,54 @@ fn swallows_error(node: Node, src: &[u8]) -> bool {
     true
 }
 
-/// Test::More and its family. `subtest` names a group; the individual
-/// assertions are counted by `asserty` rather than as declarations.
+/// A `try { } catch ($e) { }` that raises a NEW error and never
+/// mentions the one it caught. `die $e` and an interpolated `$e` both
+/// keep the cause; only a fresh `die "..."` throws it away.
+fn loses_context(node: Node, src: &[u8]) -> bool {
+    if node.kind() != "try_statement" {
+        return false;
+    }
+    let Some(bound) = node
+        .child_by_field_name("catch_expr")
+        .and_then(|n| n.utf8_text(src).ok())
+    else {
+        return false;
+    };
+    let Some(body) = node.child_by_field_name("catch_block") else {
+        return false;
+    };
+    let mut stack = vec![body];
+    let mut rethrows = false;
+    while let Some(n) = stack.pop() {
+        if callee_text(n, src).is_some_and(is_a_raise) {
+            if n.utf8_text(src).is_ok_and(|t| t.contains(bound)) {
+                return false;
+            }
+            rethrows = true;
+            continue;
+        }
+        let mut cursor = n.walk();
+        stack.extend(n.named_children(&mut cursor));
+    }
+    rethrows
+}
+
+fn is_a_raise(name: &str) -> bool {
+    matches!(name, "die" | "croak" | "confess" | "throw")
+}
+
+/// Test::More and its family. `subtest 'name' => sub { ... }` hands the
+/// test to an anonymous sub, so the SUB is the unit to judge and the
+/// evidence lives on the call it was passed to — the shape jest gives
+/// TypeScript and busted gives Lua.
+fn declaring_test<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let list = node.parent().filter(|p| p.kind() == "list_expression")?;
+    let call = list.parent()?;
+    matches!(callee_text(call, src), Some("subtest")).then_some(list)
+}
+
 fn declares_test(node: Node, src: &[u8]) -> bool {
-    matches!(callee_text(node, src), Some("subtest"))
+    declaring_test(node, src).is_some()
 }
 
 fn skips_test(node: Node, src: &[u8]) -> bool {
@@ -358,6 +445,9 @@ fn record_keys(node: Node, src: &[u8]) -> Option<Vec<Box<str>>> {
 /// low-precedence spellings and arrive as their own kind.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
+        // The anonymous sub handed to `subtest` IS the test; without
+        // promoting it there is no unit for the test metrics to judge.
+        Sem::Lambda if declaring_test(node, src).is_some() => Sem::FnDef,
         Sem::BoolOp if node.kind() == "binary_expression" => {
             match super::field_text_is(node, "operator", src) {
                 Some("&&" | "||" | "//") => Sem::BoolOp,

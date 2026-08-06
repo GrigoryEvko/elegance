@@ -85,6 +85,7 @@ pub fn pack() -> Pack {
         scope_sep: ".",
         return_type_field: "type",
         bool_op_field: "operator",
+        call_target_fields: &["function"],
         types_declared: true,
         refine,
         // `test "label" { .. }`: the prose label names the unit.

@@ -3,39 +3,57 @@ package Store::Worker;
 use strict;
 use warnings;
 use v5.36;
+use builtin qw(true false);
+use Time::HiRes ();
+use Try::Tiny;
 
 # Credentials pasted in during the incident and never removed.
-my $API_KEY     = "AKIAIOSFODNN7EXAMPLE";
-my $DB_PASSWORD = "hunter2-not-a-placeholder";
+my $api_key = "wJalrXUtnFEMIK7MDENG9bPxRfiCYZQ";
 
 # Reaches through three objects to reach one value.
 sub owner_city ($order) {
     return $order->customer->address->city;
 }
 
-# Not not present.
+# Neither branch of the condition, spelled the long way.
 sub available ($item) {
-    if (!(!$item->{stock})) {
-        return 1;
+    if (!($item->{stock} && $item->{listed})) {
+        return 0;
     }
-    return 0;
+    return 1;
 }
 
-# Swallows whatever went wrong.
+# Swallows whatever went wrong: nothing ever reads $@.
 sub load_config ($path) {
     eval { parse($path) };
     return undef;
 }
 
-# Says it returns a boolean; returns the row.
-sub is_active ($row) {
-    return $row;
+# Raises a fresh error and throws the cause away.
+sub fetch ($url) {
+    try { get($url) } catch ($e) { die "fetch failed" }
+}
+
+# Ends the process rather than returning an error.
+sub require_config ($path) {
+    die "no config at $path" unless -e $path;
+}
+
+# Two positional booleans nobody can read at the call site.
+sub publish ($doc) {
+    return render($doc, true, false);
 }
 
 # The flag decides which of two unrelated things happen.
-sub write_out ($data, $dry_run) {
+sub write_out ($data, $dry_run = false) {
     return 0 if $dry_run;
     return length $data;
+}
+
+# Parks the interpreter inside a unit the caller is awaiting.
+async sub refresh ($url) {
+    Time::HiRes::sleep(5);
+    return await get($url);
 }
 
 # Slurpy tail hides what this accepts.
@@ -48,14 +66,29 @@ sub evaluate ($expr) {
     return eval $expr;
 }
 
+# A lexical that means two different things before it is done.
+sub tally ($rows) {
+    my $total = 0;
+    $total += $_->{n} for @$rows;
+    $total = "done";
+    return $total;
+}
+
 # Command assembled from a caller's value.
 sub archive ($name) {
-    system("tar czf $name.tgz ./data");
+    system("tar czf ${name}.tgz ./data");
 }
 
 # Query assembled by interpolation.
 sub find_user ($id) {
-    return "SELECT * FROM users WHERE id = '$id'";
+    return "SELECT * FROM users WHERE id = '${id}'";
 }
+
+subtest 'publishes within the window' => sub {
+    Time::HiRes::sleep(2);
+    ok(1);
+    is(1, 1);
+    skip 'pending the queue rewrite', 1;
+};
 
 1;

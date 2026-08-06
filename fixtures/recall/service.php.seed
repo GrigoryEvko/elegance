@@ -4,23 +4,19 @@ namespace App;
 
 final class Store
 {
-    // Credentials pasted in during the incident and never removed.
-    private const API_KEY = 'AKIAIOSFODNN7EXAMPLE';
-    private const DB_PASSWORD = 'hunter2-not-a-placeholder';
-
     /** Reaches through three objects to reach one value. */
     public function ownerCity(Order $order): string
     {
         return $order->customer->address->city;
     }
 
-    /** Not not present. */
+    /** Neither branch of the condition, spelled the long way. */
     public function available(Item $item): bool
     {
-        if (!(!$item->stock)) {
-            return true;
+        if (!($item->stock && $item->listed)) {
+            return false;
         }
-        return false;
+        return true;
     }
 
     /** Catches everything and says nothing. */
@@ -31,6 +27,31 @@ final class Store
         } catch (\Throwable $e) {
         }
         return null;
+    }
+
+    /** Catches the widest class there is and throws the cause away. */
+    public function fetch(string $url): string
+    {
+        try {
+            return $this->get($url);
+        } catch (\Exception $e) {
+            throw new \RuntimeException('fetch failed');
+        }
+    }
+
+    /** Credentials pasted in during the incident and never removed. */
+    public function connect(): void
+    {
+        $apiKey = 'wJalrXUtnFEMIK7MDENG9bPxRfiCYZQ';
+        $this->client = new Client($apiKey);
+    }
+
+    /** Stops the process rather than returning an error. */
+    public function requireConfig(string $path): void
+    {
+        if (!file_exists($path)) {
+            die('no config');
+        }
     }
 
     /** Says it returns a boolean; returns the row. */
@@ -46,6 +67,12 @@ final class Store
             return 0;
         }
         return strlen($data);
+    }
+
+    /** Two positional booleans nobody can read at the call site. */
+    public function publish(string $doc): int
+    {
+        return $this->write($doc, true, false);
     }
 
     /** A cast the checker cannot verify. */
@@ -71,15 +98,48 @@ final class Store
     {
     }
 
+    /** Adding a status here keeps compiling and lands in the catch-all. */
+    public function label(string $status): string
+    {
+        switch ($status) {
+            case 'queued':
+                return 'queued';
+            case 'running':
+                return 'running';
+            default:
+                return 'unknown';
+        }
+    }
+
+    /** A local that means two different things before it is done. */
+    public function tally(array $rows): string
+    {
+        $total = 0;
+        foreach ($rows as $row) {
+            $total += $row->n;
+        }
+        $total = 'done';
+        return $total;
+    }
+
     /** Command assembled from a caller's value. */
     public function archive(string $name): void
     {
-        shell_exec('tar czf ' . $name . '.tgz ./data');
+        exec("tar czf {$name}.tgz ./data");
     }
 
     /** Query assembled by interpolation. */
     public function find(string $id): string
     {
-        return "SELECT * FROM users WHERE id = '$id'";
+        return "SELECT * FROM users WHERE id = '{$id}'";
+    }
+
+    /** A test that sleeps, asserts a constant, and is switched off. */
+    public function testPublishesWithinTheWindow(): void
+    {
+        sleep(2);
+        $this->assertTrue(true);
+        $this->assertSame(1, 1);
+        $this->markTestSkipped('pending the queue rewrite');
     }
 }

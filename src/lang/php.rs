@@ -38,6 +38,9 @@ const KINDS: &[(&str, Sem)] = &[
     ("switch_statement", Sem::Match),
     ("match_expression", Sem::Match),
     ("case_statement", Sem::CaseArm),
+    // The catch-all arm is its own kind here, and leaving it unmapped
+    // left every `switch` looking exhaustive to the wildcard check.
+    ("default_statement", Sem::CaseArm),
     ("match_conditional_expression", Sem::CaseArm),
     ("match_default_expression", Sem::CaseArm),
     ("try_statement", Sem::Try),
@@ -71,6 +74,11 @@ const DEF_SITES: &[(&str, &str)] = &[
     ("class_declaration", "name"),
     ("interface_declaration", "name"),
     ("trait_declaration", "name"),
+    // A variable is BORN at its first assignment: there is no `var`.
+    // Without this the live map held no definition row for any local,
+    // so the repurposing check had nothing to compare a rewrite
+    // against and every span read zero.
+    ("assignment_expression", "left"),
 ];
 
 const REASSIGNS: &[(&str, &str)] = &[("assignment_expression", "left")];
@@ -102,6 +110,7 @@ pub fn pack() -> Pack {
         scope_sep: "::",
         return_type_field: "return_type",
         bool_op_field: "operator",
+        call_target_fields: &["function", "name"],
         types_declared: true,
         record_keys,
         // A resource closes when the last reference drops; there is no
@@ -128,8 +137,8 @@ pub fn pack() -> Pack {
         negation_operand,
         catch_sin,
         swallows_error,
-        loses_context: |_, _| false,
-        panicky: |_, _| false,
+        loses_context,
+        panicky,
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
@@ -140,7 +149,15 @@ pub fn pack() -> Pack {
         interfaces,
         skips_test,
         magic_exempt: &["array_creation_expression", "enum_declaration"],
-        assign_kinds: &["assignment_expression", "augmented_assignment_expression"],
+        assign_kinds: &[
+            "assignment_expression",
+            "augmented_assignment_expression",
+            // `const API_KEY = '...'` and `private string $token = '...'`
+            // are the two places a class keeps a value under a name, and
+            // both are where a pasted credential lands.
+            "const_element",
+            "property_element",
+        ],
     }
 }
 
@@ -237,10 +254,42 @@ fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "catch_clause" {
         return None;
     }
+    // Emptiness is the wider sin and is asked first. It is answered
+    // here rather than through `swallows_error`, which the core
+    // consults on `if` nodes for the languages where an error is a
+    // value — a catch clause never reaches it.
+    if swallows_error(node, src) {
+        return Some(super::CatchSin::Swallowed);
+    }
     let types = node.child_by_field_name("type")?;
     let text = types.utf8_text(src).ok()?;
     let broad = text.contains("Throwable") || text.trim_matches('\\') == "Exception";
     broad.then_some(super::CatchSin::Broad)
+}
+
+/// `die()` and `exit()` stop the process where an error belonged: no
+/// caller gets a chance to answer, and nothing above sees why.
+fn panicky(call: Node, src: &[u8]) -> bool {
+    matches!(callee_text(call, src), Some("die" | "exit"))
+}
+
+/// A catch that binds the error, throws a NEW one, and never mentions
+/// the original: the chain that explains WHY is gone, and `getPrevious`
+/// has nothing to return.
+fn loses_context(node: Node, src: &[u8]) -> bool {
+    if node.kind() != "catch_clause" {
+        return false;
+    }
+    let Some(bound) = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(src).ok())
+    else {
+        return false;
+    };
+    let Some(body) = node.child_by_field_name("body") else {
+        return false;
+    };
+    super::rethrows_without_cause(body, "throw_expression", bound.trim_start_matches('$'), src)
 }
 
 /// A catch whose body is empty silences the error entirely.

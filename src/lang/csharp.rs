@@ -73,6 +73,10 @@ const KINDS: &[(&str, Sem)] = &[
 ];
 
 const DEF_SITES: &[(&str, &str)] = &[
+    // A local's declarator is its birth. Without it the live map held
+    // no definition row for any local, so the repurposing check had
+    // nothing to compare a rewrite against.
+    ("variable_declarator", "name"),
     ("method_declaration", "name"),
     ("constructor_declaration", "name"),
     ("local_function_statement", "name"),
@@ -111,6 +115,7 @@ pub fn pack() -> Pack {
         scope_sep: ".",
         return_type_field: "returns",
         bool_op_field: "operator",
+        call_target_fields: &["function"],
         types_declared: true,
         record_keys: |_, _| None,
         unguarded_resource,
@@ -134,7 +139,7 @@ pub fn pack() -> Pack {
         catch_sin,
         swallows_error,
         loses_context,
-        panicky: |_, _| false,
+        panicky,
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
@@ -239,6 +244,11 @@ fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "catch_clause" {
         return None;
     }
+    // Emptiness is the wider sin and is asked first: the core consults
+    // `swallows_error` on `if` nodes only, so a catch answers both here.
+    if swallows_error(node, src) {
+        return Some(super::CatchSin::Swallowed);
+    }
     let Some(decl) = node.child_by_field_name("type").or_else(|| {
         let mut c = node.walk();
         node.named_children(&mut c)
@@ -264,47 +274,88 @@ fn swallows_error(node: Node, src: &[u8]) -> bool {
         .is_empty()
 }
 
+/// `Environment.Exit` stops the process where an exception belonged: no
+/// caller answers, and no `finally` above it runs.
+fn panicky(call: Node, src: &[u8]) -> bool {
+    matches!(callee_text(call, src), Some("Exit" | "FailFast"))
+}
+
 /// `throw new X(...)` inside a catch, with the caught exception never
 /// passed on, drops the stack that explains the failure. `throw;` alone
 /// preserves it and is the correct form.
+///
+/// Asked of the CATCH, not of the throw: the core consults this hook on
+/// handler nodes, and a `throw` is a jump it never reaches — which left
+/// the check dead for the language it was written for.
 fn loses_context(node: Node, src: &[u8]) -> bool {
-    if node.kind() != "throw_statement" {
+    if node.kind() != "catch_clause" {
         return false;
     }
-    let text = node.utf8_text(src).unwrap_or("");
-    text.contains("new ") && !text.contains(", e") && !text.contains("(e)") && in_catch(node)
-}
-
-fn in_catch(node: Node) -> bool {
-    let mut cur = node.parent();
-    while let Some(n) = cur {
-        if n.kind() == "catch_clause" {
-            return true;
-        }
-        if n.kind() == "method_declaration" {
-            return false;
-        }
-        cur = n.parent();
-    }
-    false
+    let Some(bound) = node
+        .child_by_field_name("catch_declaration")
+        .or_else(|| {
+            let mut c = node.walk();
+            node.named_children(&mut c)
+                .find(|n| n.kind() == "catch_declaration")
+        })
+        .and_then(|d| d.child_by_field_name("name"))
+        .and_then(|n| n.utf8_text(src).ok())
+    else {
+        return false;
+    };
+    let Some(body) = node.child_by_field_name("body") else {
+        return false;
+    };
+    super::rethrows_without_cause(body, "throw_statement", bound, src)
 }
 
 /// A disposable created outside `using` has nothing releasing it on the
 /// error path.
+///
+/// Judged on the CONSTRUCTION, because the core consults this hook on
+/// calls; it used to name `local_declaration_statement`, a kind that
+/// never reaches it, so the check was unreachable.
 fn unguarded_resource(node: Node, src: &[u8]) -> bool {
-    if node.kind() != "local_declaration_statement" {
+    if node.kind() != "object_creation_expression" {
         return false;
     }
-    let text = node.utf8_text(src).unwrap_or("");
-    let opens = [
-        "new FileStream",
-        "new StreamReader",
-        "new StreamWriter",
-        "new SqlConnection",
-        "new HttpClient",
-        "new MemoryStream",
+    const OPENS: &[&str] = &[
+        "FileStream",
+        "StreamReader",
+        "StreamWriter",
+        "SqlConnection",
+        "HttpClient",
     ];
-    opens.iter().any(|o| text.contains(o)) && !text.trim_start().starts_with("using")
+    let opens = node
+        .utf8_text(src)
+        .ok()
+        .and_then(|t| t.strip_prefix("new "))
+        .is_some_and(|rest| OPENS.iter().any(|o| rest.starts_with(o)));
+    opens && !guarded_by_using(node)
+}
+
+/// Is this construction inside a `using` — the statement form, the
+/// declaration form, or a `using var` local?
+fn guarded_by_using(node: Node) -> bool {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        match n.kind() {
+            "using_statement" => return true,
+            "local_declaration_statement" => return first_token_is_using(n),
+            "block" | "method_declaration" => return false,
+            _ => cur = n.parent(),
+        }
+    }
+    false
+}
+
+/// `using var s = new FileStream(...)` — the keyword is the first
+/// anonymous token of the declaration.
+fn first_token_is_using(decl: Node) -> bool {
+    let mut cursor = decl.walk();
+    decl.children(&mut cursor)
+        .next()
+        .is_some_and(|c| c.kind() == "using")
 }
 
 /// xUnit, NUnit and MSTest all mark a test with an attribute.
@@ -313,8 +364,8 @@ fn declares_test(node: Node, src: &[u8]) -> bool {
         return false;
     }
     attrs(node, src).is_some_and(|a| {
-        a.contains("[Fact]")
-            || a.contains("[Theory]")
+        a.contains("[Fact")
+            || a.contains("[Theory")
             || a.contains("[Test")
             || a.contains("[TestMethod]")
     })
@@ -332,8 +383,18 @@ fn attrs<'a>(node: Node, src: &'a [u8]) -> Option<&'a str> {
         .ok()
 }
 
+/// `Assert.Equal`, `Assert.True`, `value.Should().Be(...)`: every
+/// assertion library here names the assertion on the RECEIVER, so
+/// reading the trailing member alone (`Equal`, `True`) found none of
+/// them and the whole assertion family read zero.
 fn asserty(call: Node, src: &[u8]) -> bool {
-    callee_text(call, src).is_some_and(|t| super::assertish(t) || t.starts_with("Should"))
+    let Some(f) = call.child_by_field_name("function") else {
+        return false;
+    };
+    f.utf8_text(src).is_ok_and(|text| {
+        text.split('.')
+            .any(|seg| super::assertish(seg) || seg.starts_with("Should"))
+    })
 }
 
 fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {

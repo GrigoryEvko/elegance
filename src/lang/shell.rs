@@ -85,6 +85,7 @@ pub fn pack() -> Pack {
         // No declared return types, and no operator field on `list`.
         return_type_field: "",
         bool_op_field: "",
+        call_target_fields: &["name"],
         types_declared: false,
         refine,
         name_node: |_| None,

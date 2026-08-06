@@ -64,6 +64,10 @@ const KINDS: &[(&str, Sem)] = &[
 ];
 
 const DEF_SITES: &[(&str, &str)] = &[
+    // A local's declarator is its birth. Without it the live map held
+    // no definition row for any local, so the repurposing check had
+    // nothing to compare a rewrite against.
+    ("variable_declarator", "name"),
     ("method_declaration", "name"),
     ("constructor_declaration", "name"),
     ("class_declaration", "name"),
@@ -100,6 +104,7 @@ pub fn pack() -> Pack {
         scope_sep: ".",
         return_type_field: "type",
         bool_op_field: "operator",
+        call_target_fields: &["name"],
         types_declared: true,
         // A record or a class declares the shape; there is no anonymous
         // map literal standing in for one.
@@ -126,7 +131,7 @@ pub fn pack() -> Pack {
         catch_sin,
         swallows_error,
         loses_context,
-        panicky: |_, _| false,
+        panicky,
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
@@ -222,15 +227,30 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 /// `catch (Exception e)` reaches every checked failure at once, and
-/// `Throwable` reaches the errors the JVM raises for itself.
+/// `Throwable` reaches the errors the JVM raises for itself. Emptiness
+/// is the wider sin and is asked first — the core consults
+/// `swallows_error` on `if` nodes only, so a catch answers both here.
 fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "catch_clause" {
         return None;
     }
-    let text = node.child_by_field_name("parameter")?.utf8_text(src).ok()?;
+    if swallows_error(node, src) {
+        return Some(super::CatchSin::Swallowed);
+    }
+    let text = caught(node)?.utf8_text(src).ok()?;
     let broad =
         text.contains("Throwable") || text.contains("Exception ") || text.contains("Error ");
     broad.then_some(super::CatchSin::Broad)
+}
+
+/// The `catch (Type e)` parameter. The grammar fields it under no name,
+/// so `child_by_field_name("parameter")` answered None for every catch
+/// in the language and both handler checks read zero.
+fn caught<'t>(clause: Node<'t>) -> Option<Node<'t>> {
+    let mut cursor = clause.walk();
+    clause
+        .named_children(&mut cursor)
+        .find(|c| c.kind() == "catch_formal_parameter")
 }
 
 /// A catch whose body is empty, or whose only statement prints, silences
@@ -247,48 +267,72 @@ fn swallows_error(node: Node, src: &[u8]) -> bool {
     inner.is_empty()
 }
 
-/// Rethrowing without the cause loses the stack that explains it.
-fn loses_context(node: Node, src: &[u8]) -> bool {
-    if node.kind() != "throw_statement" {
-        return false;
-    }
-    let text = node.utf8_text(src).unwrap_or("");
-    text.contains("new ") && !text.contains(", e") && !text.contains("(e)") && parent_is_catch(node)
+/// `System.exit` ends the JVM where an exception belonged: no caller
+/// gets to answer, and no `finally` above it runs.
+fn panicky(call: Node, src: &[u8]) -> bool {
+    matches!(callee_text(call, src), Some("exit" | "halt"))
+        && call
+            .utf8_text(src)
+            .is_ok_and(|t| t.starts_with("System.") || t.starts_with("Runtime"))
 }
 
-fn parent_is_catch(node: Node) -> bool {
-    let mut cur = node.parent();
-    while let Some(n) = cur {
-        if n.kind() == "catch_clause" {
-            return true;
-        }
-        if n.kind() == "method_declaration" {
-            return false;
-        }
-        cur = n.parent();
+/// Rethrowing without the cause loses the stack that explains it. Asked
+/// of the CATCH, not of the throw: the core consults this hook on
+/// handler nodes, and a `throw` is a jump it never reaches — which left
+/// the check dead for the language it was written for.
+fn loses_context(node: Node, src: &[u8]) -> bool {
+    if node.kind() != "catch_clause" {
+        return false;
     }
-    false
+    // `catch (IOException e)` — the binding is the last word.
+    let Some(bound) = caught(node)
+        .and_then(|p| p.utf8_text(src).ok())
+        .and_then(|t| t.split_whitespace().last())
+    else {
+        return false;
+    };
+    let Some(body) = node.child_by_field_name("body") else {
+        return false;
+    };
+    super::rethrows_without_cause(body, "throw_statement", bound, src)
 }
 
 /// A resource opened outside `try (...)` has nothing closing it on the
 /// error path — which is exactly why the construct was added.
+///
+/// Judged on the CONSTRUCTION, because the core consults this hook on
+/// calls; it used to name `local_variable_declaration`, a kind that
+/// never reaches it, so the check was unreachable for the one language
+/// whose scope guard is a syntax.
 fn unguarded_resource(node: Node, src: &[u8]) -> bool {
-    if node.kind() != "local_variable_declaration" {
+    if node.kind() != "object_creation_expression" {
         return false;
     }
-    let text = node.utf8_text(src).unwrap_or("");
-    let opens = [
-        "new FileInputStream",
-        "new FileOutputStream",
-        "new Socket",
-        "new FileReader",
-        "new FileWriter",
-        "newInputStream",
+    const OPENS: &[&str] = &[
+        "FileInputStream",
+        "FileOutputStream",
+        "Socket",
+        "FileReader",
+        "FileWriter",
+        "RandomAccessFile",
     ];
-    opens.iter().any(|o| text.contains(o))
-        && node
-            .parent()
-            .is_none_or(|p| p.kind() != "resource_specification")
+    let opens = node
+        .utf8_text(src)
+        .ok()
+        .and_then(|t| t.strip_prefix("new "))
+        .is_some_and(|rest| OPENS.iter().any(|o| rest.starts_with(o)));
+    if !opens {
+        return false;
+    }
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        match n.kind() {
+            "resource_specification" => return false,
+            "method_declaration" | "class_body" => break,
+            _ => cur = n.parent(),
+        }
+    }
+    true
 }
 
 /// JUnit and TestNG both mark a test with an annotation.

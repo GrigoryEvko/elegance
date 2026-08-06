@@ -428,6 +428,17 @@ pub struct Pack {
     pub return_type_field: &'static str,
     /// Field holding a boolean operator's operator token (for sequence dedup).
     pub bool_op_field: &'static str,
+    /// Fields that may hold a call's TARGET, in the order to try them.
+    ///
+    /// The core reads a callee to answer four questions — is this a
+    /// sleep, does it reach a shell, does it spawn something whose
+    /// handle is dropped, does it park an async unit — and it read them
+    /// through a hardcoded `function`/`macro` pair. Ruby fields a call's
+    /// target as `method`, Java and Lua as `name`, Elixir as `target`,
+    /// so all four questions answered "no" in those languages whatever
+    /// the code said. An EMPTY list means the grammar fields nothing and
+    /// the target is the first named child (Swift).
+    pub call_target_fields: &'static [&'static str],
     /// Does this language have type syntax at all? JavaScript does not,
     /// so "untyped" there is a fact about the language, not the code.
     pub types_declared: bool,
@@ -579,6 +590,17 @@ impl Pack {
         self.attr
     }
 
+    /// The node naming a call's target, per this grammar's spelling.
+    pub fn call_target<'t>(&self, call: Node<'t>) -> Option<Node<'t>> {
+        match self.call_target_fields.is_empty() {
+            true => call.named_child(0),
+            false => self
+                .call_target_fields
+                .iter()
+                .find_map(|f| call.child_by_field_name(f)),
+        }
+    }
+
     /// Field holding the bound pattern when this node defines locals.
     pub fn def_field(&self, kind_id: u16) -> Option<&'static str> {
         self.def_sites
@@ -664,6 +686,9 @@ impl Pack {
         }
         field(&mut bad, self.return_type_field);
         field(&mut bad, self.bool_op_field);
+        for f in self.call_target_fields {
+            field(&mut bad, f);
+        }
         bad
     }
 }
@@ -1835,6 +1860,388 @@ let classify items limit =
             "shelled out",
             "system() takes a `const char*`, so an assembled command reaches it through a separate string and `.c_str()` — C's data flow with one more hop",
         ),
+        // Ruby. Concurrency, types and casts are all library or
+        // convention here, so the families that read a DECLARATION have
+        // nothing to read.
+        (
+            Lang::Ruby,
+            "blocking async",
+            "no async declaration: Thread and Fiber are objects, and nothing marks a method as running on an executor",
+        ),
+        (
+            Lang::Ruby,
+            "unmanaged",
+            "`File.open` with a block closes at the end of it, and the block IS the idiom — there is no guard to omit",
+        ),
+        (
+            Lang::Ruby,
+            "dropped tasks",
+            "`Thread.new` returns a thread nobody is required to join; the language has no spawn that hands back a handle to lose",
+        ),
+        (
+            Lang::Ruby,
+            "casts",
+            "no cast syntax: `Integer(x)` and `to_i` are conversions the receiver defines, not an override of a checker",
+        ),
+        (
+            Lang::Ruby,
+            "suppressions",
+            "`rubocop:disable` configures a style linter; there is no type checker to silence",
+        ),
+        (Lang::Ruby, "loose types", "no type syntax to be loose in"),
+        (
+            Lang::Ruby,
+            "untyped params",
+            "untyped is the language, not the code",
+        ),
+        (
+            Lang::Ruby,
+            "lying name",
+            "no declared return types to lie against, and no receiver-mutability marker for a lying getter",
+        ),
+        (Lang::Ruby, "conditional hook", "no call-order identity"),
+        (
+            Lang::Ruby,
+            "unawaited coroutine",
+            "no coroutine object exists: a method call runs",
+        ),
+        // Lua. The smallest surface here: no classes, no types, no
+        // exceptions and no match. Most of these are absences of syntax
+        // rather than of a pack hook.
+        (
+            Lang::Lua,
+            "swallowed",
+            "`pcall` returns a status PAIR; an ignored error is an unused value, not an empty handler block",
+        ),
+        (
+            Lang::Lua,
+            "broad catch",
+            "no catch construct at all, so no catch is wider than another",
+        ),
+        (Lang::Lua, "lost context", "no exception chain to break"),
+        (
+            Lang::Lua,
+            "blocking async",
+            "coroutines are a library of ordinary functions; nothing declares a unit async",
+        ),
+        (
+            Lang::Lua,
+            "unmanaged",
+            "no scope-guard statement exists; a file closes on the line that remembers to",
+        ),
+        (Lang::Lua, "dropped tasks", "no spawn form"),
+        (Lang::Lua, "casts", "no cast syntax"),
+        (
+            Lang::Lua,
+            "suppressions",
+            "luacheck directives configure a linter, not a type checker",
+        ),
+        (
+            Lang::Lua,
+            "wildcard match",
+            "no match or switch construct: a dispatch table is an ordinary table lookup",
+        ),
+        (
+            Lang::Lua,
+            "kw opacity",
+            "no keyword arguments; `...` is positional and the idiom is to pass a table",
+        ),
+        (
+            Lang::Lua,
+            "flag params",
+            "a parameter carries neither a type nor a default, so nothing in a signature marks a switch",
+        ),
+        (Lang::Lua, "loose types", "no type syntax to be loose in"),
+        (
+            Lang::Lua,
+            "untyped params",
+            "untyped is the language, not the code",
+        ),
+        (
+            Lang::Lua,
+            "lying name",
+            "no declared return types to lie against",
+        ),
+        (Lang::Lua, "conditional hook", "no call-order identity"),
+        (
+            Lang::Lua,
+            "unawaited coroutine",
+            "`coroutine.create` returns an inert object by design and resuming it is the caller's job — the idiom, not the defect",
+        ),
+        // Perl.
+        (
+            Lang::Perl,
+            "broad catch",
+            "`catch ($e)` binds whatever died into a lexical; there is no class to name, so no catch is narrower than another",
+        ),
+        (
+            Lang::Perl,
+            "unmanaged",
+            "a lexical filehandle closes when it goes out of scope; there is no guard statement to omit",
+        ),
+        (
+            Lang::Perl,
+            "dropped tasks",
+            "`fork` returns a pid to the parent and 0 to the child — a branch, not a handle",
+        ),
+        (
+            Lang::Perl,
+            "casts",
+            "no cast syntax; a sigil decides how a value is read",
+        ),
+        (
+            Lang::Perl,
+            "suppressions",
+            "`## no critic` configures Perl::Critic, a style linter, and there is no type checker to silence",
+        ),
+        (
+            Lang::Perl,
+            "wildcard match",
+            "no switch: `given`/`when` was made experimental and then removed",
+        ),
+        (Lang::Perl, "loose types", "no type syntax to be loose in"),
+        (
+            Lang::Perl,
+            "untyped params",
+            "untyped is the language, not the code",
+        ),
+        (
+            Lang::Perl,
+            "lying name",
+            "no declared return types to lie against",
+        ),
+        (Lang::Perl, "conditional hook", "no call-order identity"),
+        (
+            Lang::Perl,
+            "unawaited coroutine",
+            "Future::AsyncAwait runs an async sub eagerly to its first await — the call RUNS, which is the TypeScript verdict",
+        ),
+        // PHP.
+        (
+            Lang::Php,
+            "blocking async",
+            "Fibers are objects a scheduler drives; nothing declares a function async",
+        ),
+        (
+            Lang::Php,
+            "unmanaged",
+            "a resource closes when its last reference drops; there is no scope-guard statement whose absence is the finding",
+        ),
+        (Lang::Php, "dropped tasks", "no spawn form"),
+        (
+            Lang::Php,
+            "kw opacity",
+            "`...$args` is a positional variadic; named arguments are written at the CALL site and hide nothing",
+        ),
+        (Lang::Php, "conditional hook", "no call-order identity"),
+        (
+            Lang::Php,
+            "unawaited coroutine",
+            "no await syntax; a Fiber is started explicitly",
+        ),
+        // Java.
+        (
+            Lang::Java,
+            "blocking async",
+            "concurrency is Executor, Future and virtual threads — nothing in the language marks a method async",
+        ),
+        (
+            Lang::Java,
+            "dropped tasks",
+            "a task goes to an Executor that owns it; the discarded value is a Future, which is the opposite failure and unrecognized",
+        ),
+        (
+            Lang::Java,
+            "suppressions",
+            "`@SuppressWarnings` is a declaration the compiler reads, not a checker-comment",
+        ),
+        (Lang::Java, "kw opacity", "no kwargs"),
+        (Lang::Java, "untyped params", "every parameter typed"),
+        (Lang::Java, "conditional hook", "no call-order identity"),
+        (Lang::Java, "unawaited coroutine", "no await syntax"),
+        // C#.
+        (
+            Lang::CSharp,
+            "dropped tasks",
+            "`Task.Run` is the spawn and fire-and-forget is a documented pattern (`_ = ...`); the evidence this metric reads is a call named `spawn`, which the language has not got",
+        ),
+        (
+            Lang::CSharp,
+            "suppressions",
+            "`#pragma warning disable` is a compiler directive, not a checker-comment",
+        ),
+        (
+            Lang::CSharp,
+            "kw opacity",
+            "named arguments are written at the CALL site; there is no keyword-splat parameter",
+        ),
+        (Lang::CSharp, "untyped params", "every parameter typed"),
+        (Lang::CSharp, "conditional hook", "no call-order identity"),
+        (
+            Lang::CSharp,
+            "unawaited coroutine",
+            "an async method RUNS synchronously to its first await — the TypeScript verdict, and CS4014 already owns it",
+        ),
+        // Swift.
+        (
+            Lang::Swift,
+            "unmanaged",
+            "ARC releases on the last reference and `defer` covers the rest; there is no unclosed-handle shape to find",
+        ),
+        (
+            Lang::Swift,
+            "dropped tasks",
+            "`Task { }` is an initializer, not a call named spawn, and an unstructured task is the documented way to leave structured concurrency",
+        ),
+        (
+            Lang::Swift,
+            "suppressions",
+            "`swiftlint:disable` configures a style linter; there is no type checker to silence",
+        ),
+        (Lang::Swift, "untyped params", "every parameter typed"),
+        (Lang::Swift, "conditional hook", "no call-order identity"),
+        (
+            Lang::Swift,
+            "unawaited coroutine",
+            "an async function RUNS to its first suspension; the compiler already refuses an unawaited call",
+        ),
+        // Scala.
+        (
+            Lang::Scala,
+            "blocking async",
+            "Future, ZIO and cats-effect are libraries; nothing in the language marks a def async",
+        ),
+        (
+            Lang::Scala,
+            "unmanaged",
+            "`Using` and `Resource` are combinators that OWN the handle; a resource outside one is passed to something else, not leaked",
+        ),
+        (Lang::Scala, "dropped tasks", "no spawn form"),
+        (
+            Lang::Scala,
+            "casts",
+            "`asInstanceOf` is a method call, judged as spooky; there is no cast syntax",
+        ),
+        (
+            Lang::Scala,
+            "suppressions",
+            "`@nowarn` is an annotation the compiler reads, not a checker-comment",
+        ),
+        (
+            Lang::Scala,
+            "kw opacity",
+            "named arguments are written at the CALL site; there is no keyword-splat parameter",
+        ),
+        (Lang::Scala, "untyped params", "every parameter typed"),
+        (Lang::Scala, "conditional hook", "no call-order identity"),
+        (
+            Lang::Scala,
+            "unawaited coroutine",
+            "a Future is running the moment it is constructed — the TypeScript verdict",
+        ),
+        // Elixir. The homoiconic language: `def` is a call, so most of
+        // what looks like syntax elsewhere is a name here.
+        (
+            Lang::Elixir,
+            "blocking async",
+            "concurrency is processes and Task; nothing marks a function async",
+        ),
+        (
+            Lang::Elixir,
+            "unmanaged",
+            "a process owns its resources and dies with them — the supervision tree's job, not a scope guard's",
+        ),
+        (
+            Lang::Elixir,
+            "dropped tasks",
+            "`spawn` returns a pid the caller is EXPECTED to drop: a process is owned by its supervisor, not by whoever started it",
+        ),
+        (Lang::Elixir, "casts", "no cast syntax"),
+        (
+            Lang::Elixir,
+            "suppressions",
+            "`# credo:disable-for-next-line` configures a style linter; dialyzer is directed by `@dialyzer` attributes, not comments",
+        ),
+        (
+            Lang::Elixir,
+            "demeter",
+            "`order.customer.address` is a chain of zero-arity CALLS — every field access is one — and a call ends a Demeter descent by definition",
+        ),
+        (
+            Lang::Elixir,
+            "kw opacity",
+            "options travel as an ordinary keyword LIST argument; there is no splat parameter",
+        ),
+        (Lang::Elixir, "loose types", "no type syntax to be loose in"),
+        (
+            Lang::Elixir,
+            "untyped params",
+            "untyped is the language, not the code",
+        ),
+        (
+            Lang::Elixir,
+            "lying name",
+            "no declared return types to lie against",
+        ),
+        (Lang::Elixir, "conditional hook", "no call-order identity"),
+        (
+            Lang::Elixir,
+            "repurposed",
+            "rebinding is the norm and carries none of the meaning it does elsewhere: `x = transform(x)` is a pipeline written without `|>`",
+        ),
+        (
+            Lang::Elixir,
+            "unawaited coroutine",
+            "no await syntax; `Task.await` is an ordinary function on a struct",
+        ),
+        // Solidity. A transaction is atomic and single-threaded, and a
+        // contract talks to no operating system, so three whole families
+        // have nothing to describe.
+        (
+            Lang::Solidity,
+            "lost context",
+            "a revert carries a selector and its arguments; there is no cause to attach, so nothing can be dropped",
+        ),
+        (
+            Lang::Solidity,
+            "blocking async",
+            "execution is single-threaded and atomic per transaction",
+        ),
+        (
+            Lang::Solidity,
+            "unmanaged",
+            "there is no handle to leak: a contract's state is storage and outlives every call into it",
+        ),
+        (Lang::Solidity, "dropped tasks", "no concurrency at all"),
+        (
+            Lang::Solidity,
+            "suppressions",
+            "`solhint-disable` configures a style linter; the compiler has no comment that silences it",
+        ),
+        (
+            Lang::Solidity,
+            "wildcard match",
+            "no switch in Solidity itself; Yul's `switch` is assembly, already judged as spooky",
+        ),
+        (Lang::Solidity, "kw opacity", "no kwargs"),
+        (Lang::Solidity, "untyped params", "every parameter typed"),
+        (Lang::Solidity, "conditional hook", "no call-order identity"),
+        (Lang::Solidity, "unawaited coroutine", "no async"),
+        (
+            Lang::Solidity,
+            "sleepy test",
+            "there is no clock to sleep on: a transaction is atomic, and Forge moves time with `vm.warp`",
+        ),
+        (
+            Lang::Solidity,
+            "built query",
+            "there is no database; a contract's only store is its own storage",
+        ),
+        (
+            Lang::Solidity,
+            "shelled out",
+            "the EVM has no operating system to hand a command to",
+        ),
     ];
 
     /// Languages whose detector matrix has NOT been audited yet.
@@ -1848,18 +2255,7 @@ let classify items limit =
     /// It may only ever SHRINK. Adding a language to it to make a build
     /// pass would be the exact evasion the matrix exists to prevent, so
     /// the test below pins its length.
-    const PENDING_PARITY: &[Lang] = &[
-        Lang::Perl,
-        Lang::Php,
-        Lang::Ruby,
-        Lang::Lua,
-        Lang::Java,
-        Lang::CSharp,
-        Lang::Swift,
-        Lang::Scala,
-        Lang::Elixir,
-        Lang::Solidity,
-    ];
+    const PENDING_PARITY: &[Lang] = &[];
 
     #[test]
     fn the_language_table_is_indexed_by_the_enum() {
@@ -1874,7 +2270,7 @@ let classify items limit =
     #[test]
     fn the_unaudited_language_list_only_shrinks() {
         assert!(
-            PENDING_PARITY.len() <= 10,
+            PENDING_PARITY.is_empty(),
             "a language was ADDED to the unaudited list — audit it instead"
         );
     }

@@ -59,6 +59,10 @@ const KINDS: &[(&str, Sem)] = &[
 ];
 
 const DEF_SITES: &[(&str, &str)] = &[
+    // A local's declaration is its birth. Without it the live map held
+    // no definition row for any local, so the repurposing check had
+    // nothing to compare a rewrite against.
+    ("variable_declaration", "name"),
     ("function_definition", "name"),
     ("contract_declaration", "name"),
     ("interface_declaration", "name"),
@@ -89,6 +93,7 @@ pub fn pack() -> Pack {
         scope_sep: ".",
         return_type_field: "return_type",
         bool_op_field: "operator",
+        call_target_fields: &["function"],
         types_declared: true,
         record_keys: |_, _| None,
         // There is no handle to leak: a contract's state is storage and
@@ -111,7 +116,7 @@ pub fn pack() -> Pack {
         is_override: |_, _| false,
         spooky,
         negation_operand,
-        catch_sin: |_, _| None,
+        catch_sin,
         swallows_error,
         loses_context: |_, _| false,
         panicky,
@@ -123,7 +128,7 @@ pub fn pack() -> Pack {
         is_hook: |_, _| false,
         return_arity,
         interfaces,
-        skips_test: |_, _| false,
+        skips_test,
         magic_exempt: &["enum_declaration"],
         assign_kinds: &[
             "variable_declaration_statement",
@@ -211,6 +216,30 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 /// signals an invariant the code believed could not break.
 fn panicky(call: Node, src: &[u8]) -> bool {
     matches!(callee_text(call, src), Some("assert"))
+}
+
+/// `catch { }` names no error and reaches every revert the callee can
+/// produce; `catch Error(string memory reason)` names one. Emptiness is
+/// the wider sin and is asked first — the core consults `swallows_error`
+/// on `if` nodes only, so a catch answers both here.
+fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
+    if node.kind() != "catch_clause" {
+        return None;
+    }
+    if swallows_error(node, src) {
+        return Some(super::CatchSin::Swallowed);
+    }
+    let named = node.child_by_field_name("error").is_some()
+        || node.utf8_text(src).is_ok_and(|t| {
+            t.trim_start().starts_with("catch ") && !t.trim_start().starts_with("catch {")
+        });
+    (!named).then_some(super::CatchSin::Broad)
+}
+
+/// Forge switches a test off with `vm.skip(true)`.
+fn skips_test(node: Node, src: &[u8]) -> bool {
+    callee_text(node, src) == Some("skip")
+        && node.utf8_text(src).is_ok_and(|t| t.starts_with("vm."))
 }
 
 /// An empty `catch` after an external call means the failure of another

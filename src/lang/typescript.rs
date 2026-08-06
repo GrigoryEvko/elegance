@@ -102,6 +102,7 @@ pub fn pack(dialect: Dialect) -> Pack {
         scope_sep: ".",
         return_type_field: "return_type",
         bool_op_field: "operator",
+        call_target_fields: &["function"],
         types_declared: true,
         refine,
         name_node: test_label,

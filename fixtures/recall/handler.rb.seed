@@ -1,7 +1,6 @@
 module Store
   # Credentials pasted in during the incident and never removed.
-  API_KEY = "AKIAIOSFODNN7EXAMPLE"
-  DB_PASSWORD = "hunter2-not-a-placeholder"
+  DB_PASSWORD = "s3cretPassw0rdValue99"
 
   class Orders
     # Reaches through three objects to reach one value.
@@ -9,10 +8,10 @@ module Store
       order.customer.address.city
     end
 
-    # Not not present.
+    # Neither branch of the condition, spelled the long way.
     def available?(item)
-      return true if !(!item.stock)
-      false
+      return false if !(item.stock && item.listed)
+      true
     end
 
     # Rescues everything and says nothing.
@@ -21,22 +20,27 @@ module Store
     rescue
     end
 
-    # Rescues the widest class there is.
+    # Rescues the widest class there is, and throws the cause away.
     def fetch(url)
       Net::HTTP.get(url)
     rescue Exception => e
-      nil
+      raise LoadError, "fetch failed"
     end
 
-    # Says it returns a boolean; returns the row.
-    def is_active(row)
-      row
+    # Ends the process rather than returning an error.
+    def require_config(path)
+      abort("no config at #{path}")
     end
 
     # The flag decides which of two unrelated things happen.
-    def write(data, dry_run)
+    def write(data, dry_run = false)
       return 0 if dry_run
       data.length
+    end
+
+    # Two positional booleans nobody can read at the call site.
+    def publish(doc)
+      render(doc, true, false)
     end
 
     # Method resolved from a string at run time.
@@ -47,6 +51,41 @@ module Store
     # Keyword splat hides what this accepts.
     def configure(**opts)
       @opts = opts
+    end
+
+    # Adding a status here keeps compiling and lands in the catch-all.
+    def label(status)
+      case status
+      when :queued then "queued"
+      when :running then "running"
+      else "unknown"
+      end
+    end
+
+    # A local that means two different things before it is done.
+    def tally(rows)
+      total = 0
+      rows.each { |r| total += r.count }
+      total = "done"
+      total
+    end
+
+    # Query assembled by interpolation.
+    def find(id)
+      "SELECT * FROM users WHERE id = '#{id}'"
+    end
+
+    # Command assembled from a caller's value.
+    def archive(name)
+      system("tar czf #{name}.tgz ./data")
+    end
+
+    # A test that sleeps, asserts a constant, and is switched off.
+    def test_publishes_within_the_window
+      sleep 2
+      assert(true)
+      assert_equal(1, 1)
+      skip("pending the queue rewrite")
     end
   end
 end

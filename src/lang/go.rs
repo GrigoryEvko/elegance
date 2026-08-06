@@ -76,6 +76,7 @@ pub fn pack() -> Pack {
         scope_sep: ".",
         return_type_field: "result",
         bool_op_field: "operator",
+        call_target_fields: &["function"],
         types_declared: true,
         refine,
         name_node: |_| None,
@@ -108,29 +109,7 @@ pub fn pack() -> Pack {
         names_test,
         is_test_code: |_, _| false,
         test_path: |p| p.ends_with("_test.go"),
-        // Go's stdlib has no assert, so projects grow their own helpers
-        // (esbuild: assertEqual, assertEqualStrings, assertLog) and
-        // testify is called through an `assert`/`require` package name.
-        // Without this the assertion metrics read 0 for every Go unit.
-        asserty: |call, src| {
-            let Some(f) = call.child_by_field_name("function") else {
-                return false;
-            };
-            let text = |n: Node| n.utf8_text(src).unwrap_or("");
-            // `expectXxx` too: it is Go's dominant table-test convention
-            // (esbuild's tests are 4200 expectPrinted/expectParseError
-            // calls against 2 files using assert* directly). The capital
-            // is required, or a production `expectedValue()` would read
-            // as an assertion — same rule the Zig pack uses.
-            let helper = |n: &str| super::assertish(n) || super::expectish(n);
-            match f.kind() {
-                "identifier" => helper(text(f)),
-                "selector_expression" => f
-                    .child_by_field_name("operand")
-                    .is_some_and(|pkg| helper(text(pkg))),
-                _ => false,
-            }
-        },
+        asserty,
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
         return_arity,
@@ -323,6 +302,31 @@ fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {
         .filter(|f| f.kind() == "identifier")
         .and_then(|f| f.utf8_text(src).ok())
         == Some(unit_name)
+}
+
+/// Go's stdlib has no assert, so projects grow their own helpers
+/// (esbuild: assertEqual, assertEqualStrings, assertLog) and testify is
+/// called through an `assert`/`require` package name. Without this the
+/// assertion metrics read 0 for every Go unit.
+///
+/// `expectXxx` counts too: it is Go's dominant table-test convention
+/// (esbuild's tests are 4200 expectPrinted/expectParseError calls
+/// against 2 files using assert* directly). The capital is required, or
+/// a production `expectedValue()` would read as an assertion — the same
+/// rule the Zig pack uses.
+fn asserty(call: Node, src: &[u8]) -> bool {
+    let Some(f) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let text = |n: Node| n.utf8_text(src).unwrap_or("");
+    let helper = |n: &str| super::assertish(n) || super::expectish(n);
+    match f.kind() {
+        "identifier" => helper(text(f)),
+        "selector_expression" => f
+            .child_by_field_name("operand")
+            .is_some_and(|pkg| helper(text(pkg))),
+        _ => false,
+    }
 }
 
 /// Go convention: exported means capitalized.

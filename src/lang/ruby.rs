@@ -67,6 +67,11 @@ const DEF_SITES: &[(&str, &str)] = &[
     ("singleton_method", "name"),
     ("class", "name"),
     ("module", "name"),
+    // A local is BORN at its first assignment — the language has no
+    // declaration keyword. Without this the live map held no definition
+    // row for any Ruby local, so every span read zero and the
+    // repurposing check had nothing to compare a rewrite against.
+    ("assignment", "left"),
 ];
 
 /// `x = ...` again; `x += ...` is `operator_assignment` and stays exempt
@@ -95,6 +100,7 @@ pub fn pack() -> Pack {
         scope_sep: "#",
         return_type_field: "",
         bool_op_field: "operator",
+        call_target_fields: &["method"],
         types_declared: false,
         record_keys,
         // `File.open` with a block closes at the end of it, and that is
@@ -119,7 +125,7 @@ pub fn pack() -> Pack {
         negation_operand,
         catch_sin,
         swallows_error,
-        loses_context: |_, _| false,
+        loses_context,
         panicky,
         declares_test,
         names_test: declares_test,
@@ -189,8 +195,19 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         optional,
         kw_splat,
         typed: false,
+        // Nothing declares a type here, so the DEFAULT is the only
+        // evidence a parameter is a switch — `def write(data,
+        // dry_run: false)` says as plainly as an annotation would.
+        boolish: defaults_to_a_boolean(node, src),
         ..Default::default()
     })
+}
+
+/// Does this parameter default to `true` or `false`?
+fn defaults_to_a_boolean(node: Node, src: &[u8]) -> bool {
+    node.child_by_field_name("value")
+        .and_then(|v| v.utf8_text(src).ok())
+        .is_some_and(|t| matches!(t.trim(), "true" | "false"))
 }
 
 /// Direct recursion, and `self.name` which is the same call written out.
@@ -256,9 +273,17 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 
 /// `rescue => e` with no class catches StandardError, and bare `rescue`
 /// with no class at all is the same reach with less written down.
+///
+/// Emptiness is asked FIRST, and answered here rather than through
+/// `swallows_error` — that hook is consulted on `if` nodes, for the
+/// languages where an error is a value, and Ruby's rescue never
+/// reaches it. The wider sin is the one that vanishes the error.
 fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "rescue" {
         return None;
+    }
+    if swallows_error(node, src) {
+        return Some(super::CatchSin::Swallowed);
     }
     let has_class = node.child_by_field_name("exceptions").is_some();
     let text = node.utf8_text(src).unwrap_or("");
@@ -281,6 +306,43 @@ fn swallows_error(node: Node, src: &[u8]) -> bool {
     };
     let text = body.utf8_text(src).unwrap_or("").trim();
     text.is_empty() || text == "nil"
+}
+
+/// A rescue that binds the error, raises a NEW one, and never mentions
+/// the original. `raise` with no arguments re-raises `$!` and keeps
+/// everything; `raise Wrapped, "...: #{e.message}"` mentions the
+/// binding and keeps the cause; only the third form loses it.
+fn loses_context(node: Node, src: &[u8]) -> bool {
+    if node.kind() != "rescue" {
+        return false;
+    }
+    let Some(bound) = node
+        .child_by_field_name("variable")
+        .and_then(|v| v.utf8_text(src).ok())
+        .map(|t| t.trim_start_matches("=>").trim())
+    else {
+        return false;
+    };
+    let Some(body) = node.child_by_field_name("body") else {
+        return false;
+    };
+    let mut stack = vec![body];
+    let mut rethrows = false;
+    while let Some(n) = stack.pop() {
+        if n.kind() == "call" && callee_text(n, src) == Some("raise") {
+            let Some(args) = n.child_by_field_name("arguments") else {
+                return false;
+            };
+            if args.utf8_text(src).is_ok_and(|t| super::mentions(t, bound)) {
+                return false;
+            }
+            rethrows = true;
+            continue;
+        }
+        let mut cursor = n.walk();
+        stack.extend(n.named_children(&mut cursor));
+    }
+    rethrows
 }
 
 /// RSpec and minitest between them cover the corpus: `it`, `describe`

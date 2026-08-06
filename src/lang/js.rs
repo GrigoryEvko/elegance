@@ -75,6 +75,7 @@ pub fn pack() -> Pack {
         // is structurally inapplicable, not merely unimplemented.
         return_type_field: "",
         bool_op_field: "operator",
+        call_target_fields: &["function"],
         types_declared: false,
         refine: typescript::refine,
         name_node: typescript::test_label,

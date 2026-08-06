@@ -56,6 +56,10 @@ const KINDS: &[(&str, Sem)] = &[
 ];
 
 const DEF_SITES: &[(&str, &str)] = &[
+    // `let`/`var` is where a local is born. Without it the live map
+    // held no definition row for any local, so the repurposing check
+    // had nothing to compare a rewrite against.
+    ("property_declaration", "name"),
     ("function_declaration", "name"),
     ("class_declaration", "name"),
     ("protocol_declaration", "name"),
@@ -89,6 +93,7 @@ pub fn pack() -> Pack {
         scope_sep: ".",
         return_type_field: "return_type",
         bool_op_field: "",
+        call_target_fields: &[],
         types_declared: true,
         record_keys: |_, _| None,
         // ARC releases on the last reference and `defer` covers the
@@ -112,7 +117,7 @@ pub fn pack() -> Pack {
         negation_operand,
         catch_sin,
         swallows_error,
-        loses_context: |_, _| false,
+        loses_context,
         panicky,
         declares_test,
         names_test: declares_test,
@@ -230,10 +235,15 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     }
 }
 
-/// `catch { }` with no pattern reaches every thrown error.
+/// `catch { }` with no pattern reaches every thrown error. Emptiness
+/// is the wider sin and is asked first — the core consults
+/// `swallows_error` on `if` nodes only, so a catch answers both here.
 fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "catch_block" {
         return None;
+    }
+    if swallows_error(node, src) {
+        return Some(super::CatchSin::Swallowed);
     }
     let text = node.utf8_text(src).unwrap_or("");
     let head = text.split('{').next().unwrap_or("").trim();
@@ -253,6 +263,41 @@ fn swallows_error(node: Node, src: &[u8]) -> bool {
         .trim_end_matches('}')
         .trim()
         .is_empty()
+}
+
+/// A catch that throws a NEW error and never names the one it caught.
+/// `catch { }` binds the error implicitly as `error`, so that is the
+/// name to look for when no pattern is written.
+fn loses_context(node: Node, src: &[u8]) -> bool {
+    if node.kind() != "catch_block" {
+        return false;
+    }
+    let bound = node
+        .child_by_field_name("error")
+        .and_then(|p| p.utf8_text(src).ok())
+        .map(|t| {
+            t.trim_start_matches("let ")
+                .trim_start_matches("var ")
+                .trim()
+        })
+        .unwrap_or("error");
+    let mut cursor = node.walk();
+    let mut stack: Vec<Node> = node.named_children(&mut cursor).collect();
+    let mut rethrows = false;
+    while let Some(n) = stack.pop() {
+        // `throw` and `return` share one kind; the keyword separates them.
+        let text = n.utf8_text(src).unwrap_or("");
+        if n.kind() == "control_transfer_statement" && text.starts_with("throw") {
+            if super::mentions(text, bound) {
+                return false;
+            }
+            rethrows = true;
+            continue;
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    rethrows
 }
 
 /// `fatalError` stops the process, and a force-unwrap makes the same

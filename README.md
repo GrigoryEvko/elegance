@@ -494,7 +494,7 @@ The Perl grammar is `ts-parser-perl` 1.2.1. `tree-sitter-perl` stops at
 Blocks are its control flow, so `each` and `map` count as iteration;
 otherwise Ruby contains no loops.
 
-**Lua reads cognitive p99 = 68**, four times Python's. It has no classes,
+**Lua reads cognitive p99 = 65**, three and a half times Python's. It has no classes,
 so the class family is structurally silent: a method is a function in a
 table and `self` is a calling convention.
 
@@ -511,7 +511,7 @@ C# splits a method signature across `#if` in the same way C does, and
 those files fall below the confidence bar and are counted in the header.
 The `serilog` corpus candidate parsed at 86% for this reason.
 
-**Elixir's cognitive p99 is 6**, level with OCaml and the lowest here.
+**Elixir's cognitive p99 is 5**, below OCaml's 6 and the lowest here.
 The language is homoiconic, so `def`, `if` and `case` are calls rather
 than syntax and this pack classifies them by the name being called.
 `Enum.each` is a function, so iteration reads as a call the way it does

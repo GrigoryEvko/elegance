@@ -42,6 +42,9 @@ const KINDS: &[(&str, Sem)] = &[
     ("floating_point_literal", Sem::NumLit),
     ("string", Sem::StrLit),
     ("interpolated_string", Sem::StrLit),
+    // The whole `s"..."` expression, interpolator included: the inner
+    // node alone is never what an argument list holds.
+    ("interpolated_string_expression", Sem::StrLit),
     ("character_literal", Sem::StrLit),
     ("boolean_literal", Sem::BoolLit),
     ("return_expression", Sem::Jump),
@@ -49,6 +52,11 @@ const KINDS: &[(&str, Sem)] = &[
 ];
 
 const DEF_SITES: &[(&str, &str)] = &[
+    // `val`/`var` is where a local is born. Without it the live map
+    // held no definition row for any local, so the repurposing check
+    // had nothing to compare a rewrite against.
+    ("val_definition", "pattern"),
+    ("var_definition", "pattern"),
     ("function_definition", "name"),
     ("function_declaration", "name"),
     ("class_definition", "name"),
@@ -84,6 +92,7 @@ pub fn pack() -> Pack {
         scope_sep: ".",
         return_type_field: "return_type",
         bool_op_field: "operator",
+        call_target_fields: &["function"],
         types_declared: true,
         // A case class declares the shape, and that is the idiom.
         record_keys: |_, _| None,
@@ -106,9 +115,9 @@ pub fn pack() -> Pack {
         is_override,
         spooky,
         negation_operand,
-        catch_sin: |_, _| None,
+        catch_sin,
         swallows_error: |_, _| false,
-        loses_context: |_, _| false,
+        loses_context,
         panicky,
         declares_test,
         names_test: declares_test,
@@ -128,6 +137,7 @@ pub fn pack() -> Pack {
 
 fn name_node(node: Node) -> Option<Node> {
     node.child_by_field_name("name")
+        .or_else(|| test_label(node))
 }
 
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
@@ -188,6 +198,73 @@ fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
         )
 }
 
+/// `catch { case e: Exception => ... }`. The arms are where the width
+/// lives: a `Throwable`, an `Exception` or a bare `_` reaches
+/// everything the runtime can raise, and an arm whose body is `()` or
+/// empty makes it vanish.
+fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
+    if node.kind() != "catch_clause" {
+        return None;
+    }
+    let mut broad = false;
+    for arm in case_arms(node) {
+        let pattern = arm
+            .child_by_field_name("pattern")
+            .and_then(|p| p.utf8_text(src).ok())
+            .unwrap_or("");
+        let reaches_everything =
+            pattern.contains("Throwable") || pattern.contains("Exception") || pattern == "_";
+        if !reaches_everything {
+            continue;
+        }
+        let body = arm
+            .child_by_field_name("body")
+            .and_then(|b| b.utf8_text(src).ok())
+            .unwrap_or("")
+            .trim();
+        if body.is_empty() || body == "()" {
+            return Some(super::CatchSin::Swallowed);
+        }
+        broad = true;
+    }
+    broad.then_some(super::CatchSin::Broad)
+}
+
+/// A catch arm that throws a NEW exception and never names the one it
+/// bound: the stack that explains the failure is gone.
+fn loses_context(node: Node, src: &[u8]) -> bool {
+    if node.kind() != "catch_clause" {
+        return false;
+    }
+    case_arms(node).into_iter().any(|arm| {
+        let Some(bound) = arm
+            .child_by_field_name("pattern")
+            .and_then(|p| p.child_by_field_name("pattern"))
+            .and_then(|n| n.utf8_text(src).ok())
+        else {
+            return false;
+        };
+        arm.child_by_field_name("body")
+            .is_some_and(|body| super::rethrows_without_cause(body, "throw_expression", bound, src))
+    })
+}
+
+/// The `case` arms of a catch, which the grammar wraps in a case_block.
+fn case_arms<'t>(clause: Node<'t>) -> Vec<Node<'t>> {
+    let mut cursor = clause.walk();
+    let Some(block) = clause
+        .named_children(&mut cursor)
+        .find(|c| c.kind() == "case_block")
+    else {
+        return Vec::new();
+    };
+    let mut inner = block.walk();
+    block
+        .named_children(&mut inner)
+        .filter(|c| c.kind() == "case_clause")
+        .collect()
+}
+
 fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let text = node.utf8_text(src).ok()?;
     (node.kind() == "prefix_expression" && text.starts_with('!')).then(|| node.named_child(0))?
@@ -198,13 +275,31 @@ fn panicky(call: Node, src: &[u8]) -> bool {
     matches!(callee_text(call, src), Some("error" | "require" | "assume"))
 }
 
-/// ScalaTest and munit name a test with a string, so a declaration is
-/// a call taking one.
+/// ScalaTest and munit both write `test("name") { body }`: a call whose
+/// CALLEE is itself a call carrying the name, and whose argument is the
+/// block that is the test. `refine` promotes the whole thing to a unit,
+/// because the block alone is not a node the ontology opens.
 fn declares_test(node: Node, src: &[u8]) -> bool {
+    let Some(inner) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if inner.kind() != "call_expression" {
+        return false;
+    }
     matches!(
-        callee_text(node, src),
+        callee_text(inner, src),
         Some("test" | "it" | "property" | "check")
-    )
+    ) && test_label(node).is_some()
+}
+
+/// A declared test's name is the string its first call carries — prose
+/// rather than an identifier, exactly as a Zig test label is.
+fn test_label(node: Node) -> Option<Node> {
+    let args = node
+        .child_by_field_name("function")?
+        .child_by_field_name("arguments")?;
+    args.named_child(0)
+        .filter(|n| matches!(n.kind(), "string" | "interpolated_string_expression"))
 }
 
 fn skips_test(node: Node, src: &[u8]) -> bool {
@@ -267,6 +362,10 @@ fn unit_docs(node: Node, src: &[u8]) -> u32 {
 /// sequence a condition are boolean.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
+        // `test("name") { ... }` — the block is the test body, and the
+        // grammar gives it no node of its own, so the CALL becomes the
+        // unit the test metrics judge.
+        Sem::Call if declares_test(node, src) => Sem::FnDef,
         Sem::BoolOp => match super::field_text_is(node, "operator", src) {
             Some("&&" | "||") => Sem::BoolOp,
             _ => Sem::None,

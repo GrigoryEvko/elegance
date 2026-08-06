@@ -619,8 +619,9 @@ impl Extractor<'_> {
         self.record_shape(node);
         match sem {
             Sem::Call => self.record_call(node, ctx),
-            // Catch nodes and error-as-value If checks are one family.
-            Sem::If | Sem::Catch => self.record_error_handling(node, sem, ctx.unit),
+            // Catch nodes, error-as-value If checks and the Try forms
+            // that carry their own handler are one family.
+            Sem::If | Sem::Catch | Sem::Try => self.record_error_handling(node, sem, ctx.unit),
             Sem::NumLit if self.is_magic(node) => {
                 self.facts.units[ctx.unit].magic_numbers += 1;
             }
@@ -641,9 +642,12 @@ impl Extractor<'_> {
             _ => {}
         }
         self.record_ctrl(node, sem, ctx);
-        // A TypeDef can also be spooky (Python metaclasses); the arm above
-        // returns before this, so it is checked here for both.
-        if matches!(sem, Sem::Call | Sem::TypeDef) && (self.pack.spooky)(node, sem, self.src) {
+        // Asked of EVERY node, because what escapes the language is
+        // not always a call: Python's metaclass is a TypeDef, Perl's
+        // `eval "..."` is the same node as its try block, and
+        // Solidity's `assembly { }` is a statement with no Sem at all.
+        // Each pack gates on the sem or kind it cares about.
+        if (self.pack.spooky)(node, sem, self.src) {
             self.facts
                 .spooky_lines
                 .push(node.start_position().row as u32 + 1);
@@ -774,10 +778,17 @@ impl Extractor<'_> {
     /// languages hand us a Catch node; error-as-value languages swallow
     /// in an If (`if err != nil { }`), which the pack recognizes.
     fn record_error_handling(&mut self, node: Node, sem: Sem, unit_idx: usize) {
-        if sem == Sem::If {
+        // Some languages have no handler NODE at all: Go swallows in an
+        // `if err != nil {}` and Perl in an `eval` whose `$@` nobody
+        // reads, so the pack is asked about the construct standing in
+        // for one. A Catch answers through `catch_sin` instead, whose
+        // Swallowed verdict states the same fact once.
+        if sem != Sem::Catch {
             let swallowed = (self.pack.swallows_error)(node, self.src);
             self.facts.units[unit_idx].swallowed += swallowed as u16;
-            return;
+            if sem == Sem::If {
+                return;
+            }
         }
         let lost = (self.pack.loses_context)(node, self.src);
         let unit = &mut self.facts.units[unit_idx];
@@ -841,7 +852,7 @@ impl Extractor<'_> {
     /// asks for, so `f(x, strict=True)` is not a trap however many
     /// booleans follow.
     fn bare_boolean_arguments(&self, call: Node) -> usize {
-        call_arguments(call)
+        call_arguments(self.pack, call)
             .into_iter()
             .filter(|a| self.pack.table_sem(*a) == Sem::BoolLit)
             .count()
@@ -925,7 +936,7 @@ impl Extractor<'_> {
     /// test is green by construction. A literal in SECOND position is
     /// the expected value of a real comparison and is fine.
     fn asserts_a_literal(&self, call: Node) -> bool {
-        let [only] = call_arguments(call)[..] else {
+        let [only] = call_arguments(self.pack, call)[..] else {
             return false;
         };
         self.is_literal(only)
@@ -1056,9 +1067,12 @@ impl Extractor<'_> {
     }
 
     fn enclosing_scope_is_class(&self, node: Node) -> bool {
-        if self.preceding_scope(node).is_some() {
-            return true;
-        }
+        // Ancestors first. A file-level `package Foo;` governs
+        // everything after it, but a SUB in between still ends the
+        // class scope: a local inside one is a local, not an attribute
+        // of a type. Asking the preceding scope first made every
+        // rewrite in every Perl sub read as a class attribute, which
+        // is the exemption, so `repurposed` was dead for the language.
         let mut anc = node.parent();
         while let Some(a) = anc {
             match self.sem_of(a) {
@@ -1067,7 +1081,7 @@ impl Extractor<'_> {
                 _ => anc = a.parent(),
             }
         }
-        false
+        self.preceding_scope(node).is_some()
     }
 
     /// Base name of a scope-forming node: the pack's name_node hook wins,
@@ -1320,8 +1334,16 @@ impl Extractor<'_> {
         let Some(path) = self.callee_text(call) else {
             return false;
         };
-        let segs: Vec<&str> = path.split(['.', ':']).filter(|s| !s.is_empty()).collect();
-        let Some(last) = segs.last() else {
+        // Case-folded: the same standard call is `time.sleep` in one
+        // language and `Thread.Sleep` in the next, and a table that
+        // spells only the lowercase one reads zero for the other.
+        let lowered: Vec<String> = path
+            .split(['.', ':'])
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
+        let segs: Vec<&str> = lowered.iter().map(String::as_str).collect();
+        let Some(last) = path.rsplit(['.', ':']).find(|s| !s.is_empty()) else {
             return false;
         };
         if last.len() > 4 && last.ends_with("Sync") {
@@ -1338,6 +1360,10 @@ impl Extractor<'_> {
             // Python's `time.sleep` exactly: `tokio::time::sleep` is
             // three segments and stays exempt.
             ["time", "sleep"] => true,
+            // Perl's standard sub-second sleep. `Time::HiRes` parks the
+            // interpreter exactly as `time.sleep` parks Python's, and
+            // the ecosystem has no async-aware sleep to confuse it with.
+            ["time", "hires", "sleep" | "usleep" | "nanosleep"] => true,
             // The synchronous filesystem, spelled by its qualifier:
             // `tokio::fs` names its runtime and stays exempt — the
             // asyncio.sleep lesson, applied to files. (Bare `fs::read`
@@ -1351,10 +1377,7 @@ impl Extractor<'_> {
 
     /// Whole text of a call's target: `time.sleep`, `std::thread::sleep`.
     fn callee_text(&self, call: Node) -> Option<&str> {
-        let f = call
-            .child_by_field_name("function")
-            .or_else(|| call.child_by_field_name("macro"))?;
-        f.utf8_text(self.src).ok()
+        self.pack.call_target(call)?.utf8_text(self.src).ok()
     }
 
     /// Last segment of a call's target: `sleep` for `time.sleep`,
@@ -1445,10 +1468,10 @@ impl Extractor<'_> {
         // down. Descending into an ARRAY instead would flag the
         // remedy: vscode's `exec(['stash', 'list', `--format=${F}`])`
         // passes a list, which reaches no shell at all.
-        let assembled = call_arguments(call).iter().any(|arg| {
+        let assembled = call_arguments(self.pack, call).iter().any(|arg| {
             self.is_assembled_string(*arg)
                 || (self.pack.table_sem(*arg) == Sem::Call
-                    && call_arguments(*arg)
+                    && call_arguments(self.pack, *arg)
                         .iter()
                         .any(|inner| self.is_assembled_string(*inner)))
         });
@@ -1472,7 +1495,7 @@ impl Extractor<'_> {
     /// thing. The built-query detector still reports the line, so the
     /// finding is not lost — only the wrong name for it is.
     fn hands_over_a_query(&self, call: Node) -> bool {
-        call_arguments(call).iter().any(|arg| {
+        call_arguments(self.pack, call).iter().any(|arg| {
             arg.utf8_text(self.src)
                 .is_ok_and(|text| starts_a_statement(text.trim_start_matches(['f', 'r', 'b'])))
         })
@@ -1491,16 +1514,20 @@ impl Extractor<'_> {
     fn reaches_a_shell(&self, call: Node) -> bool {
         let always = matches!(
             self.callee_trailing_name(call),
-            Some("system" | "popen" | "exec" | "execSync" | "spawnSync")
+            Some("system" | "popen" | "exec" | "execSync" | "spawnSync" | "shell")
         );
         if always {
             return true;
         }
-        let args = call_arguments(call);
+        let args = call_arguments(self.pack, call);
         let text = |n: Node| n.utf8_text(self.src).unwrap_or("");
         args.iter().any(|a| {
             let t = text(*a);
-            t.contains("shell=True") || t.trim_matches(['"', '\'']) == "-c"
+            // `-c` alone, or `-c` with the command riding in the same
+            // string — Java and C# hand the shell one argument, and a
+            // rule that only knew the separated form saw neither.
+            let bare = t.trim_start_matches('$').trim_matches(['"', '\'']);
+            t.contains("shell=True") || bare == "-c" || bare.starts_with("-c ")
         })
     }
 
@@ -1533,16 +1560,21 @@ impl Extractor<'_> {
     /// Is this literal an argument of a formatting call — `Sprintf`,
     /// `format!`, `"...".format(...)`? Those spell interpolation as a
     /// call, so the literal itself carries no interpolation node.
+    ///
+    /// Three ancestors, not one: a grammar may wrap the literal in an
+    /// `argument` node AND that in an `arguments` list before reaching
+    /// the call, which is how PHP and C# spell every call there is.
     fn inside_a_format_call(&self, node: Node) -> bool {
-        let Some(parent) = node.parent() else {
-            return false;
-        };
-        let call = match self.pack.table_sem(parent) == Sem::Call {
-            true => Some(parent),
-            false => parent
-                .parent()
-                .filter(|g| self.pack.table_sem(*g) == Sem::Call),
-        };
+        let mut call = None;
+        let mut anc = node.parent();
+        for _ in 0..3 {
+            let Some(a) = anc else { break };
+            if self.pack.table_sem(a) == Sem::Call {
+                call = Some(a);
+                break;
+            }
+            anc = a.parent();
+        }
         call.and_then(|c| self.callee_trailing_name(c))
             .is_some_and(|name| {
                 matches!(
@@ -1721,7 +1753,8 @@ impl Extractor<'_> {
         };
         // Only chain roots: a parent of the same kind means we are one of
         // its links and will be counted from the top.
-        if node.kind_id() != attr_kind || node.parent().is_some_and(|p| p.kind_id() == attr_kind) {
+        if node.kind_id() != attr_kind || outer_node(node).is_some_and(|p| p.kind_id() == attr_kind)
+        {
             return;
         }
         let mut links = 0u16;
@@ -1729,7 +1762,7 @@ impl Extractor<'_> {
         while base.kind_id() == attr_kind {
             links += 1;
             match base.child_by_field_name(object_field) {
-                Some(inner) => base = inner,
+                Some(inner) => base = bare_argument(inner),
                 None => break,
             }
         }
@@ -1803,10 +1836,18 @@ impl Extractor<'_> {
         while let Some((n, depth)) = stack.pop() {
             let mut cursor = n.walk();
             for child in n.named_children(&mut cursor) {
-                if self.pack.table_sem(child) == Sem::CaseArm {
-                    labels.push(arm_label(child, self.src));
-                } else if depth < 1 && self.pack.table_sem(child) != Sem::Match {
-                    stack.push((child, depth + 1));
+                match self.pack.table_sem(child) {
+                    Sem::CaseArm => labels.push(arm_label(child, self.src)),
+                    // A match's `else` IS its catch-all arm. Ruby,
+                    // Elixir and Lua spell it with the same node a
+                    // branch uses, so the kind table cannot separate
+                    // them and the POSITION has to: an else directly
+                    // under a match answers every label nobody wrote.
+                    Sem::Else if depth == 0 => labels.push("default".into()),
+                    _ if depth < 1 && self.pack.table_sem(child) != Sem::Match => {
+                        stack.push((child, depth + 1))
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1984,6 +2025,12 @@ impl Extractor<'_> {
             "type: ignore",
             "pyright: ignore",
             "mypy: disable",
+            // PHP's checkers are separate programs, but these are the
+            // same act: an inline comment telling a type checker to
+            // stop looking. `nolint` and `#[allow]` are NOT here —
+            // those configure a linter's style rules, not a type.
+            "phpstan-ignore",
+            "psalm-suppress",
         ];
         let Ok(text) = node.utf8_text(self.src) else {
             return;
@@ -2081,9 +2128,7 @@ impl Extractor<'_> {
     /// form whose target is decidable within one file. Method and
     /// qualified calls are deliberately out: their receivers need types.
     fn callee_simple_name(&self, call: Node) -> Option<&str> {
-        let f = call
-            .child_by_field_name("function")
-            .or_else(|| call.child_by_field_name("macro"))?;
+        let f = self.pack.call_target(call)?;
         if self.pack.table_sem(f) != Sem::Ident {
             return None;
         }
@@ -2230,16 +2275,29 @@ fn vendor_key(value: &str) -> bool {
 /// a fielded list, a Rust macro's token tree, and Zig's — which nests
 /// arguments DIRECTLY under the call, where the function field is the
 /// only child that is not one.
-fn call_arguments<'t>(call: Node<'t>) -> Vec<Node<'t>> {
+fn call_arguments<'t>(pack: &Pack, call: Node<'t>) -> Vec<Node<'t>> {
     // A fielded list, plus Rust macros' token tree.
-    let list = call.child_by_field_name("arguments").or_else(|| {
-        let mut cursor = call.walk();
-        call.named_children(&mut cursor)
-            .find(|c| matches!(c.kind(), "token_tree" | "arguments"))
-    });
+    let mut list = call
+        .child_by_field_name("arguments")
+        .or_else(|| holder_child(call));
+    // Swift wraps the list a second time: `call_suffix > value_arguments`.
+    while let Some(suffix) = list.filter(|l| l.kind() == "call_suffix") {
+        list = holder_child(suffix);
+    }
     if let Some(list) = list {
+        // Perl fields `f($x)`'s arguments as the ARGUMENT, and only
+        // `f($x, $y)` as a list. A wrapper carries no meaning of its
+        // own, so a node the ontology recognises IS the single
+        // argument — reading its children instead handed `ok(1)` back
+        // as no arguments at all.
+        if pack.table_sem(list) != Sem::None {
+            return vec![bare_argument(list)];
+        }
         let mut cursor = list.walk();
-        return list.named_children(&mut cursor).collect();
+        return list
+            .named_children(&mut cursor)
+            .map(bare_argument)
+            .collect();
     }
     // REPEATED `argument` fields: OCaml spells `f a b c` with one field
     // per argument, so child_by_field_name would return only the first
@@ -2257,15 +2315,61 @@ fn call_arguments<'t>(call: Node<'t>) -> Vec<Node<'t>> {
         }
     }
     if !fielded.is_empty() {
-        return fielded;
+        return fielded.into_iter().map(bare_argument).collect();
     }
-    // Zig nests arguments DIRECTLY under the call; the function field
-    // is the only child that is not one.
+    // Zig and Solidity nest arguments DIRECTLY under the call; the
+    // function field is the only child that is not one.
     let func = call.child_by_field_name("function");
     let mut cursor = call.walk();
     call.named_children(&mut cursor)
         .filter(|n| func.is_none_or(|f| f.id() != n.id()))
+        .map(bare_argument)
         .collect()
+}
+
+/// The first ancestor that spells MORE than this node does. Solidity
+/// stacks an `expression` around every link of a member chain, so the
+/// question "is my parent another link" has to look past them.
+fn outer_node<'t>(node: Node<'t>) -> Option<Node<'t>> {
+    let mut up = node.parent();
+    while let Some(p) = up.filter(|p| p.byte_range() == node.byte_range()) {
+        up = p.parent();
+    }
+    up
+}
+
+/// The child that HOLDS a call's arguments, when no field names it:
+/// a Rust macro's token tree, and the two list nodes Swift stacks.
+fn holder_child<'t>(node: Node<'t>) -> Option<Node<'t>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).find(|c| {
+        matches!(
+            c.kind(),
+            "token_tree" | "arguments" | "value_arguments" | "call_suffix"
+        )
+    })
+}
+
+/// What a node WRAPS. PHP, C#, Solidity and Swift each put a node of
+/// their own around every argument, and Solidity wraps every expression
+/// in an `expression` besides, so the metrics that ask what something
+/// IS — a bare boolean, a literal assertion subject, the receiver of a
+/// member access — saw a wrapper and answered no.
+///
+/// A wrapper that adds NO TOKENS is transparent: `argument [true]`
+/// spans exactly its child. `(true)` spans two characters more and
+/// stays, because a parenthesis is something the author wrote.
+fn bare_argument<'t>(mut node: Node<'t>) -> Node<'t> {
+    while node.named_child_count() == 1 {
+        let Some(inner) = node.named_child(0) else {
+            break;
+        };
+        if inner.start_byte() != node.start_byte() || inner.end_byte() != node.end_byte() {
+            break;
+        }
+        node = inner;
+    }
+    node
 }
 
 /// A class needs at least this many methods before "do they hang
@@ -2384,7 +2488,9 @@ fn starts_a_statement(raw: &str) -> bool {
         ("create table", ""),
     ];
     let body = raw
-        .trim_start_matches(|c: char| c.is_ascii_alphabetic())
+        // A prefix sigil belongs to the syntax, not the statement: `f`
+        // and `s` are alphabetic, `$` is C#'s and is not.
+        .trim_start_matches(|c: char| c.is_ascii_alphabetic() || c == '$')
         .trim_start_matches(['"', '\'', '`'])
         .trim_start()
         .to_ascii_lowercase();
@@ -2407,8 +2513,11 @@ fn interpolates_a_value(raw: &str) -> bool {
     let lower = raw.to_ascii_lowercase();
     let mut at = 0;
     while let Some(open) = next_hole(&lower, at) {
-        // Quotes around the hole are the author's, not the syntax's.
-        let mut before = lower[..open].trim_end_matches(['$', ' ', '\t', '\'', '"']);
+        // Quotes around the hole are the author's, not the syntax's;
+        // the sigil in front of it belongs to the language. Ruby and
+        // Elixir write `#{...}`, and without the `#` every interpolated
+        // query in both read as splicing into nothing.
+        let mut before = lower[..open].trim_end_matches(['$', '#', ' ', '\t', '\'', '"']);
         while before.ends_with([' ', '\'', '"']) {
             before = before.trim_end_matches([' ', '\'', '"']);
         }
@@ -2439,14 +2548,13 @@ fn interpolates_a_value(raw: &str) -> bool {
 /// templates and `format!`, or a printf verb for `Sprintf`.
 fn next_hole(lower: &str, from: usize) -> Option<usize> {
     let brace = lower[from..].find('{').map(|i| from + i);
+    // Swift spells the hole `\(...)`, with no brace anywhere.
+    let escaped = lower[from..].find("\\(").map(|i| from + i);
     let printf = lower[from..].match_indices('%').find_map(|(i, _)| {
         let verb = lower[from + i + 1..].chars().next()?;
         matches!(verb, 's' | 'd' | 'v' | 'q' | 'x').then_some(from + i)
     });
-    match (brace, printf) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    }
+    [brace, escaped, printf].into_iter().flatten().min()
 }
 
 /// Does this string node carry an interpolation, as the grammar
@@ -2455,11 +2563,29 @@ fn next_hole(lower: &str, from: usize) -> Option<usize> {
 fn interpolates(node: Node) -> bool {
     let mut cursor = node.walk();
     node.named_children(&mut cursor).any(|c| {
-        matches!(
-            c.kind(),
-            "interpolation" | "template_substitution" | "string_interpolation"
-        )
+        is_a_hole(c) || {
+            // Perl hangs `$x` under the literal's `string_content`
+            // rather than beside it, so the hole is a grandchild.
+            let mut inner = c.walk();
+            c.named_children(&mut inner).any(is_a_hole)
+        }
     })
+}
+
+/// One interpolation hole, as its grammar names it. PHP and Perl give
+/// the hole no node of its own — the spliced VARIABLE sits in the
+/// literal — which is why both languages read as carrying no
+/// interpolation at all, and their built-query gate never fired.
+fn is_a_hole(node: Node) -> bool {
+    matches!(
+        node.kind(),
+        "interpolation"
+            | "template_substitution"
+            | "string_interpolation"
+            | "interpolated_expression"
+            | "variable_name"
+            | "scalar"
+    )
 }
 
 /// Does this comment line promise work that has not happened? Only

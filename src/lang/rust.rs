@@ -71,6 +71,7 @@ pub fn pack() -> Pack {
         scope_sep: "::",
         return_type_field: "return_type",
         bool_op_field: "operator",
+        call_target_fields: &["function", "macro"],
         types_declared: true,
         refine,
         name_node: |_| None,

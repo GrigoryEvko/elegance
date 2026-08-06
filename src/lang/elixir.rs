@@ -61,6 +61,7 @@ pub fn pack() -> Pack {
         scope_sep: ".",
         return_type_field: "",
         bool_op_field: "operator",
+        call_target_fields: &["target"],
         types_declared: false,
         record_keys,
         // A process owns its resources and dies with them; that is the
@@ -83,9 +84,9 @@ pub fn pack() -> Pack {
         is_override: |_, _| false,
         spooky,
         negation_operand,
-        catch_sin: |_, _| None,
+        catch_sin,
         swallows_error,
-        loses_context: |_, _| false,
+        loses_context,
         panicky,
         declares_test,
         names_test: declares_test,
@@ -129,6 +130,9 @@ fn name_node(node: Node) -> Option<Node> {
         "call" => first.child_by_field_name("target"),
         // `def run do`, and `defmodule Foo do`.
         "identifier" | "alias" => Some(first),
+        // `test "keeps the total" do` — the name is PROSE, the way a
+        // Zig test label is.
+        "string" => Some(first),
         // `def run(x) when is_list(x)` — the guard wraps the head.
         "binary_operator" => first
             .child_by_field_name("left")
@@ -162,9 +166,21 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 /// a name — `def handle(%User{id: id})` destructures. Only the plain
 /// identifiers are read; the rest are shapes rather than parameters.
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
-    if node.kind() != "identifier" {
-        return None;
-    }
+    // `dry_run \\ false` — a default is a binary operator wrapping the
+    // name, and the value beside it is the only thing in a head that
+    // marks a parameter as a switch.
+    let (holder, boolish) = match node.kind() {
+        "identifier" => (node, false),
+        "binary_operator" => {
+            let name = node.child_by_field_name("left")?;
+            let default = node.child_by_field_name("right")?;
+            if name.kind() != "identifier" {
+                return None;
+            }
+            (name, default.kind() == "boolean")
+        }
+        _ => return None,
+    };
     let parent = node.parent()?;
     if parent.kind() != "arguments" {
         return None;
@@ -176,8 +192,9 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         return None;
     }
     Some(ParamInfo {
-        name: node.utf8_text(src).ok()?.into(),
+        name: holder.utf8_text(src).ok()?.into(),
         typed: false,
+        boolish,
         ..Default::default()
     })
 }
@@ -204,8 +221,15 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         return None;
     }
     let text = node.utf8_text(src).ok()?;
-    (text.starts_with('!') || text.starts_with("not "))
-        .then(|| node.child_by_field_name("operand"))?
+    let negated = text.starts_with('!') || text.starts_with("not ");
+    let operand = negated.then(|| node.child_by_field_name("operand"))??;
+    // `not (a and b)` — the parentheses arrive as a one-child `block`,
+    // which is a GROUP here rather than a body, and leaving it wrapped
+    // hid every De Morgan candidate in the language.
+    match operand.kind() == "block" && operand.named_child_count() == 1 {
+        true => operand.named_child(0),
+        false => Some(operand),
+    }
 }
 
 /// `raise` leaves by the exception path; a bang-suffixed function is
@@ -214,14 +238,96 @@ fn panicky(call: Node, src: &[u8]) -> bool {
     target_text(call, src).is_some_and(|t| matches!(t, "raise" | "throw" | "exit"))
 }
 
-/// A `rescue` block with an empty body, or one that matches everything
-/// and does nothing with it.
-fn swallows_error(node: Node, src: &[u8]) -> bool {
-    if node.kind() != "rescue_block" {
-        return false;
+/// The `rescue` block of a `try`, which the grammar hangs inside the
+/// try's do_block rather than beside it. Every handler check below is
+/// asked of the TRY, because that is the node the ontology names — a
+/// rescue_block carries no Sem of its own and the core never reaches it.
+fn rescue_block<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if target_text(node, src) != Some("try") {
+        return None;
     }
-    node.utf8_text(src)
-        .is_ok_and(|t| t.trim().trim_start_matches("rescue").trim().is_empty())
+    let mut cursor = node.walk();
+    let body = node
+        .named_children(&mut cursor)
+        .find(|c| c.kind() == "do_block")?;
+    let mut inner = body.walk();
+    body.named_children(&mut inner)
+        .find(|c| c.kind() == "rescue_block")
+}
+
+/// The `->` arms of a rescue.
+fn rescue_arms<'t>(block: Node<'t>) -> Vec<Node<'t>> {
+    let mut cursor = block.walk();
+    block
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() == "stab_clause")
+        .collect()
+}
+
+/// A `rescue` with no arms at all, or whose only arm does nothing.
+fn swallows_error(node: Node, src: &[u8]) -> bool {
+    let Some(block) = rescue_block(node, src) else {
+        return false;
+    };
+    let arms = rescue_arms(block);
+    arms.is_empty()
+        || arms.iter().all(|arm| {
+            arm.child_by_field_name("right")
+                .and_then(|b| b.utf8_text(src).ok())
+                .is_none_or(|t| matches!(t.trim(), "" | "nil" | ":ok"))
+        })
+}
+
+/// `rescue e ->` binds every exception the runtime can raise;
+/// `rescue e in RuntimeError ->` names one and is the narrow form.
+fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
+    let block = rescue_block(node, src)?;
+    let broad = rescue_arms(block).iter().any(|arm| {
+        arm.child_by_field_name("left")
+            .and_then(|l| l.utf8_text(src).ok())
+            .is_some_and(|t| !t.contains(" in "))
+    });
+    broad.then_some(super::CatchSin::Broad)
+}
+
+/// A rescue arm that raises a NEW error and never names the one it
+/// bound: the stacktrace that explains the failure is gone.
+fn loses_context(node: Node, src: &[u8]) -> bool {
+    let Some(block) = rescue_block(node, src) else {
+        return false;
+    };
+    rescue_arms(block).iter().any(|arm| {
+        let Some(bound) = arm
+            .child_by_field_name("left")
+            .and_then(|l| l.named_child(0))
+            .and_then(|n| n.utf8_text(src).ok())
+        else {
+            return false;
+        };
+        let Some(body) = arm.child_by_field_name("right") else {
+            return false;
+        };
+        raises_without(body, bound, src)
+    })
+}
+
+/// Does this body `raise` something that never mentions `bound`?
+fn raises_without(body: Node, bound: &str, src: &[u8]) -> bool {
+    let mut stack = vec![body];
+    let mut raises = false;
+    while let Some(n) = stack.pop() {
+        if target_text(n, src) == Some("raise") {
+            let text = n.utf8_text(src).unwrap_or("");
+            if super::mentions(text, bound) {
+                return false;
+            }
+            raises = true;
+            continue;
+        }
+        let mut cursor = n.walk();
+        stack.extend(n.named_children(&mut cursor));
+    }
+    raises
 }
 
 /// ExUnit declares a test with `test "name" do`.
@@ -232,9 +338,14 @@ fn declares_test(node: Node, src: &[u8]) -> bool {
     )
 }
 
+/// `@tag :skip` is an attribute written ABOVE the test, so the sibling
+/// is where the evidence lives — the test's own text never holds it.
 fn skips_test(node: Node, src: &[u8]) -> bool {
-    node.utf8_text(src)
-        .is_ok_and(|t| t.contains("@tag :skip") || t.contains("@tag :pending"))
+    let tagged = |n: Node| {
+        n.utf8_text(src)
+            .is_ok_and(|t| t.starts_with("@tag :skip") || t.starts_with("@tag :pending"))
+    };
+    tagged(node) || node.prev_named_sibling().is_some_and(tagged)
 }
 
 fn asserty(call: Node, src: &[u8]) -> bool {
@@ -283,26 +394,33 @@ fn record_keys(node: Node, src: &[u8]) -> Option<Vec<Box<str>>> {
     (!keys.is_empty()).then_some(keys)
 }
 
-/// The whole ontology, decided by the name being called. A `call` is
-/// the only structural node the grammar offers, so every keyword this
-/// language appears to have is recognised here or not at all.
+/// Which construct a call IS, decided by the name being called. A
+/// `call` is the only structural node the grammar offers, so every
+/// keyword this language appears to have is recognised here or not at
+/// all.
+fn called_construct(target: Option<&str>) -> Sem {
+    match target {
+        Some("def" | "defp" | "defmacro" | "defmacrop" | "defdelegate" | "defguard") => Sem::FnDef,
+        Some("defmodule" | "defprotocol" | "defimpl" | "defstruct" | "defexception") => {
+            Sem::TypeDef
+        }
+        // ExUnit's `test "name" do` is a call, and promoting it is what
+        // gives the test metrics a unit to judge.
+        Some("test" | "property" | "describe") => Sem::FnDef,
+        Some("if" | "unless") => Sem::If,
+        Some("case" | "cond" | "with" | "receive") => Sem::Match,
+        // `for` is a comprehension, which is this language's loop.
+        Some("for") => Sem::Loop,
+        Some("try") => Sem::Try,
+        Some("import" | "alias" | "require" | "use") => Sem::Import,
+        _ => Sem::Call,
+    }
+}
+
+/// The rest of the ontology: the operators the grammar does name.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
-        Sem::Call => match target_text(node, src) {
-            Some("def" | "defp" | "defmacro" | "defmacrop" | "defdelegate" | "defguard") => {
-                Sem::FnDef
-            }
-            Some("defmodule" | "defprotocol" | "defimpl" | "defstruct" | "defexception") => {
-                Sem::TypeDef
-            }
-            Some("if" | "unless") => Sem::If,
-            Some("case" | "cond" | "with" | "receive") => Sem::Match,
-            // `for` is a comprehension, which is this language's loop.
-            Some("for") => Sem::Loop,
-            Some("try") => Sem::Try,
-            Some("import" | "alias" | "require" | "use") => Sem::Import,
-            _ => Sem::Call,
-        },
+        Sem::Call => called_construct(target_text(node, src)),
         // `and`/`or`/`&&`/`||` sequence a condition; `|>`, `<>`, `++`
         // and every comparison share the node and do not.
         Sem::BoolOp => match super::field_text_is(node, "operator", src) {

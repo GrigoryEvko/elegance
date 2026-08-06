@@ -1,0 +1,82 @@
+package app
+
+import scala.sys.process.Process
+
+object OrderStore {
+  /** Credentials pasted in during the incident and never removed. */
+  val dbPassword = "wJalrXUtnFEMIK7MDENG9bPxRfiCYZQ"
+
+  /** Reaches through three objects to reach one value. */
+  def ownerCity(order: Order): String = order.customer.address.city
+
+  /** Neither branch of the condition, spelled the long way. */
+  def available(item: Item): Boolean = {
+    if (!(item.stock && item.listed)) {
+      return false
+    }
+    true
+  }
+
+  /** Catches everything and says nothing. */
+  def loadConfig(path: String): String = {
+    try { parse(path) } catch { case e: Exception => () }
+    null
+  }
+
+  /** Catches everything and throws the cause away. */
+  def fetch(url: String): String = {
+    try { get(url) } catch { case e: Exception => throw new IllegalStateException("fetch failed") }
+  }
+
+  /** Leaves by the exception door rather than returning an error. */
+  def requireConfig(path: String): Unit = sys.error("no config at " + path)
+
+  /** Says it returns a boolean; returns the row. */
+  def isActive(row: Order): Order = row
+
+  /** The flag decides which of two unrelated things happen. */
+  def write(data: String, dryRun: Boolean): Int = {
+    if (dryRun) {
+      return 0
+    }
+    data.length
+  }
+
+  /** Two positional booleans nobody can read at the call site. */
+  def publish(doc: String): Int = render(doc, true, false)
+
+  /** The type that says nothing, and the cast that goes with it. */
+  def describe(raw: Any): String = raw.asInstanceOf[String]
+
+  /** Resolves a method from a string at run time. */
+  def dispatch(name: String): Object =
+    getDeclaredMethod(name).invoke(this)
+
+  /** Adding a status here keeps compiling and lands in the catch-all. */
+  def label(status: String): String = status match {
+    case "queued" => "queued"
+    case "running" => "running"
+    case _ => "unknown"
+  }
+
+  /** A local that means two different things before it is done. */
+  def tally(rows: Seq[Int]): String = {
+    var total = "0"
+    total = "done"
+    total
+  }
+
+  /** Command assembled from a caller's value. */
+  def archive(name: String): Int =
+    Process(Seq("/bin/sh", "-c", s"tar czf ${name}.tgz ./data")).!
+
+  /** Query assembled by interpolation. */
+  def find(id: String): String = s"SELECT * FROM users WHERE id = '${id}'"
+
+  test("publishes within the window") {
+    Thread.sleep(2000)
+    assert(true)
+    assertEquals(1, 1)
+    ignore("pending the queue rewrite")
+  }
+}

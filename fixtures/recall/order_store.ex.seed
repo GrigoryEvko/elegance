@@ -1,0 +1,79 @@
+defmodule App.OrderStore do
+  @moduledoc "Orders, and everything that goes wrong with them."
+
+  # Credentials pasted in during the incident and never removed.
+  @database_url "postgres://admin:s3cr3t9xQ@db.internal/prod"
+
+  @doc "Neither branch of the condition, spelled the long way."
+  def available?(item) do
+    if not (item.stock and item.listed) do
+      false
+    else
+      true
+    end
+  end
+
+  @doc "Rescues everything and says nothing."
+  def load_config(path) do
+    try do
+      parse(path)
+    rescue
+      e -> nil
+    end
+  end
+
+  @doc "Rescues everything and throws the cause away."
+  def fetch(url) do
+    try do
+      get(url)
+    rescue
+      e -> raise "fetch failed"
+    end
+  end
+
+  @doc "Leaves by the exception door rather than returning :error."
+  def require_config(path) do
+    raise ArgumentError, message: "no config at #{path}"
+  end
+
+  @doc "The flag decides which of two unrelated things happen."
+  def write(data, dry_run \\ false) do
+    if dry_run, do: 0, else: byte_size(data)
+  end
+
+  @doc "Two positional booleans nobody can read at the call site."
+  def publish(doc) do
+    render(doc, true, false)
+  end
+
+  @doc "Resolves a function from a term at run time."
+  def dispatch(name, args) do
+    apply(__MODULE__, name, args)
+  end
+
+  @doc "Adding a status here keeps compiling and lands in the catch-all."
+  def label(status) do
+    case status do
+      :queued -> "queued"
+      :running -> "running"
+      _ -> "unknown"
+    end
+  end
+
+  @doc "Command assembled from a caller's value."
+  def archive(name) do
+    System.shell("tar czf #{name}.tgz ./data")
+  end
+
+  @doc "Query assembled by interpolation."
+  def find(id) do
+    "SELECT * FROM users WHERE id = '#{id}'"
+  end
+
+  @tag :skip
+  test "publishes within the window" do
+    :timer.sleep(2000)
+    assert true
+    assert_receive :published
+  end
+end
