@@ -1221,6 +1221,25 @@ struct Carried<'a> {
     /// asked. Ranking must not depend on it: a load-bearing file is a
     /// reason to be careful, not evidence of a bigger overage.
     cost: Option<String>,
+    /// How many OTHER bodies make the identical claim, to the digit.
+    /// Five copies of a generated locale file each read `demeter 35>2`,
+    /// and a list that named all five said one thing five times.
+    alike: usize,
+}
+
+impl Carried<'_> {
+    /// What this entry claims, exactly: which budgets, at which values.
+    /// Two bodies with the same claim are one finding about a repeated
+    /// shape, however many files it was pasted into.
+    fn claim(&self) -> Vec<(usize, u32)> {
+        let mut claim: Vec<(usize, u32)> = self
+            .findings
+            .iter()
+            .map(|(m, o)| (*m, o.value.to_bits()))
+            .collect();
+        claim.sort_unstable();
+        claim
+    }
 }
 
 /// Metric names and values one entry lists before the line stops being
@@ -1332,7 +1351,7 @@ impl Costs {
     /// would put the entry back where the grouping found it. Measured
     /// over the reference tree's 391 over-budget bodies: a load-bearing
     /// file covers 4.1% of them, an untested body 7.9%, a repeated
-    /// finding 44.5%.
+    /// finding 44.5%, an identical claim elsewhere 64.2%.
     fn of(&self, g: &Carried) -> Option<String> {
         let at = g.at;
         if let Some(n) = self.heavy.get(&at.path) {
@@ -1341,8 +1360,15 @@ impl Costs {
         if self.untested.contains(&at.label()) {
             return Some("no test names it".to_string());
         }
-        let (m, n) = self.repeated(g)?;
-        (n >= REPEATED).then(|| format!("{n} {} findings in this one file", METRICS[m].name))
+        if let Some((m, n)) = self.repeated(g).filter(|(_, n)| *n >= REPEATED) {
+            return Some(format!("{n} {} findings in this one file", METRICS[m].name));
+        }
+        // Last, and commonest: the entry stands for bodies the list
+        // collapsed, so the count has to be said somewhere.
+        match g.alike {
+            0 => None,
+            n => Some(format!("{n} more bodies carry these same numbers")),
+        }
     }
 }
 
@@ -1405,6 +1431,7 @@ fn ranked_units(agg: &Agg, rungs: std::ops::RangeInclusive<u8>, k: usize) -> Vec
                 worst: distance(&findings[0]),
                 findings,
                 cost: None,
+                alike: 0,
             }
         })
         .collect();
@@ -1414,9 +1441,18 @@ fn ranked_units(agg: &Agg, rungs: std::ops::RangeInclusive<u8>, k: usize) -> Vec
             .then_with(|| b.findings.len().cmp(&a.findings.len()))
             .then_with(|| (&a.at.path, a.at.line).cmp(&(&b.at.path, b.at.line)))
     });
+    let mut class: HashMap<Vec<(usize, u32)>, usize> = HashMap::new();
+    for g in &bodies {
+        *class.entry(g.claim()).or_default() += 1;
+    }
     let mut seen_file: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    bodies.retain(|g| seen_file.insert(&g.at.path));
+    let mut seen_claim: std::collections::HashSet<Vec<(usize, u32)>> =
+        std::collections::HashSet::new();
+    bodies.retain(|g| seen_file.insert(&g.at.path) && seen_claim.insert(g.claim()));
     bodies.truncate(k);
+    for g in &mut bodies {
+        g.alike = class[&g.claim()] - 1;
+    }
     bodies
 }
 
@@ -3514,6 +3550,38 @@ mod tests {
             clause(costs(&[], &[], REPEATED - 1)),
             "nothing",
             "a handful is not a house style"
+        );
+    }
+
+    /// Six copies of one generated locale file each read `demeter
+    /// 35>2`, and with the per-metric cap gone they filled the gold
+    /// Lua corpus's top five with one claim stated five times — the
+    /// thing the grouping was built to stop, arriving from the other
+    /// direction. A body whose claim is already on the list is
+    /// collapsed into it, and the entry says how many it stands for so
+    /// nothing goes quiet. The numbers must match to the digit: three
+    /// meridian bodies over the same three budgets at different values
+    /// are three functions to open.
+    #[test]
+    fn bodies_making_the_identical_claim_are_one_entry_that_counts_them() {
+        let mut agg = Agg::complete();
+        for path in ["en-us.lua", "es-419.lua", "ja-jp.lua"] {
+            agg.offenders[metric("demeter")].push(over((path, 1, ""), 35.0, 2.0));
+        }
+        agg.offenders[metric("demeter")].push(over(("zh-cn.lua", 1, ""), 34.0, 2.0));
+
+        let bodies = ranked_units(&agg, GATES, SHOW_RANKED);
+        assert_eq!(bodies.len(), 2, "one entry per distinct claim");
+        assert_eq!(bodies[0].alike, 2, "and it stands for the copies");
+        assert_eq!(bodies[1].alike, 0, "a different value is a different body");
+        let costs = Costs {
+            heavy: HashMap::new(),
+            untested: std::collections::HashSet::new(),
+            repeats: HashMap::new(),
+        };
+        assert_eq!(
+            costs.of(&bodies[0]).as_deref(),
+            Some("2 more bodies carry these same numbers")
         );
     }
 

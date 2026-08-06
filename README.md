@@ -108,11 +108,19 @@ does:
         17 files import this one
 ```
 
-Three facts can be true — the file is load-bearing, no test names the
-body, the same finding fills the file — and only the rarest is printed,
-because a clause per fact puts the entry back where the grouping found
-it. All three are rung-7 inputs the report already computed and then
-summarized as a count.
+Four facts can be true — the file is load-bearing, no test names the
+body, the same finding fills the file, other bodies make the identical
+claim — and only the rarest is printed, because a clause per fact puts
+the entry back where the grouping found it. The first three are rung-7
+inputs the report already computed and then summarized as a count.
+
+The fourth exists because dropping the per-metric cap let one claim fill
+a list from the other direction: six copies of a generated locale file
+each read `demeter 35>2`, and five of them took the gold Lua corpus's
+whole front page. Bodies whose numbers match to the digit are collapsed
+into one entry that says how many it stands for. Different values are
+different bodies — three functions over the same three budgets at
+different numbers are three functions to open.
 
 ### Machine output
 
