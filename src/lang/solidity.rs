@@ -122,7 +122,20 @@ pub fn pack() -> Pack {
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
-        test_path: |p| p.contains("/test/") || p.ends_with(".t.sol"),
+        // Forge puts tests under /test/ or in *.t.sol; a PROPERTY FUZZER
+        // puts them somewhere else entirely. Echidna and the rest of the
+        // crytic toolchain read a harness contract whose `assert` IS the
+        // property under test — that assert failing is the finding the
+        // fuzzer exists to produce, not a panic where an error belonged.
+        // All five gold `unwraps` findings in Solidity were one such
+        // directory, v3-core/audits/tob/contracts/crytic/echidna, and
+        // every one was an invariant.
+        test_path: |p| {
+            p.contains("/test/")
+                || p.ends_with(".t.sol")
+                || p.contains("/echidna/")
+                || p.contains("/crytic/")
+        },
         asserty,
         is_hook: |_, _| false,
         return_arity,

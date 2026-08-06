@@ -3002,6 +3002,40 @@ let classify items limit =
         }
     }
 
+    /// A property fuzzer's harness is test code wherever it is filed.
+    ///
+    /// Echidna reads a contract whose `assert` IS the property under
+    /// test: that assert failing is the finding the fuzzer exists to
+    /// produce. All five gold Solidity `unwraps` findings sat in one
+    /// crytic/echidna directory and every one was an invariant, so the
+    /// cell's whole reading was a path the test predicate did not know.
+    #[test]
+    fn a_fuzz_harness_is_test_code_wherever_it_is_filed() {
+        let harness = "contract E {\n function check_invariant() public {\n assert(a < b);\n assert(c < d);\n assert(e < f);\n }\n}\n";
+        let fuzzed = facts_at(
+            Lang::Solidity,
+            "audits/tob/contracts/crytic/echidna/E2E_swap.sol",
+            harness,
+        );
+        assert!(fuzzed.is_test_file, "a crytic/echidna path is a harness");
+        // `unwraps` is emitted only for a unit that is not test code,
+        // so this flag is what silences the invariant.
+        assert!(
+            fuzzed
+                .units
+                .iter()
+                .filter(|u| !u.is_module)
+                .all(|u| u.is_test),
+            "a fuzzed invariant is the subject, not a panic where an error belonged"
+        );
+        // Restraint: the same three asserts in ordinary contract code
+        // are still counted, so this exempts a directory and not a rule.
+        let shipped = facts_at(Lang::Solidity, "contracts/Pool.sol", harness);
+        assert!(!shipped.is_test_file);
+        assert!(shipped.units.iter().all(|u| !u.is_test));
+        assert_eq!(shipped.units.iter().map(|u| u.unwraps).sum::<u16>(), 3);
+    }
+
     #[test]
     fn a_member_kind_is_a_method_wherever_the_parse_left_it() {
         // The ancestor walk is only as good as the parse. All three
