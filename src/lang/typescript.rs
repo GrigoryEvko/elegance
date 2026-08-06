@@ -44,6 +44,9 @@ const KINDS: &[(&str, Sem)] = &[
     ("new_expression", Sem::Call),
     ("comment", Sem::Comment),
     ("import_statement", Sem::Import),
+    // `export ... from "./x"` depends on ./x exactly as an import does;
+    // one without a source emits nothing.
+    ("export_statement", Sem::Import),
     ("identifier", Sem::Ident),
     ("property_identifier", Sem::Ident),
     ("shorthand_property_identifier", Sem::Ident),
@@ -226,7 +229,9 @@ pub(super) fn return_arity(node: Node, src: &[u8]) -> u16 {
 }
 
 /// `import d, { a, b as c }, * as ns from "./x"` — one edge, every
-/// bound local collected.
+/// bound local collected. A re-export reads the same way: `export { a }
+/// from "./x"` is the barrel depending on ./x. Without a source there
+/// is no dependency, so `export function f()` yields nothing.
 pub(super) fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let text = |n: Node| n.utf8_text(src).unwrap_or("");
     let Some(source) = node.child_by_field_name("source") else {
@@ -238,14 +243,14 @@ pub(super) fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
         let mut cursor = n.walk();
         for child in n.named_children(&mut cursor) {
             match child.kind() {
-                "import_clause" | "named_imports" => stack.push(child),
+                "import_clause" | "named_imports" | "export_clause" => stack.push(child),
                 "identifier" => names.push(text(child).into()),
-                "namespace_import" => {
+                "namespace_import" | "namespace_export" => {
                     if let Some(id) = child.named_child(0) {
                         names.push(text(id).into());
                     }
                 }
-                "import_specifier" => {
+                "import_specifier" | "export_specifier" => {
                     let bound = child
                         .child_by_field_name("alias")
                         .or_else(|| child.child_by_field_name("name"));

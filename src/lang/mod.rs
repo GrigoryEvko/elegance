@@ -3196,6 +3196,41 @@ let classify items limit =
     }
 
     #[test]
+    fn a_re_export_is_an_import() {
+        // A barrel file states its dependencies with `export ... from`
+        // and nothing else. Reading only `import` left immer's
+        // internal.ts with eleven re-exports and no edges at all, so
+        // the eight modules it fronts read as orphans and the whole
+        // repository as 91% deletable.
+        const SRC: &str = concat!(
+            "export * from \"./leaf\";\n",
+            "export { two as second } from \"./leaf2\";\n",
+            "export * as ns from \"./leaf3\";\n",
+            "export function own() {}\n",
+            "export default own;\n",
+        );
+        for (lang, path) in [(Lang::TypeScript, "barrel.ts"), (Lang::Tsx, "barrel.tsx")]
+            .into_iter()
+            .chain([(Lang::JavaScript, "barrel.js")])
+        {
+            let f = facts_at(lang, path, SRC);
+            let targets: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
+            assert_eq!(
+                targets,
+                ["./leaf", "./leaf2", "./leaf3"],
+                "{path}: an export without a source depends on nothing"
+            );
+            let bound: Vec<&str> = f
+                .imports
+                .iter()
+                .flat_map(|i| &i.names)
+                .map(|n| &**n)
+                .collect();
+            assert_eq!(bound, ["second", "ns"], "{path}");
+        }
+    }
+
+    #[test]
     fn a_dot_h_is_read_as_the_dialect_it_is_written_in() {
         // Reading every `.h` as C dropped a third of every C++ repository
         // as unparseable — headers are where C++ keeps its classes.

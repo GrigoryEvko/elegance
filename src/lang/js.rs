@@ -34,6 +34,7 @@ const KINDS: &[(&str, Sem)] = &[
     ("new_expression", Sem::Call),
     ("comment", Sem::Comment),
     ("import_statement", Sem::Import),
+    ("export_statement", Sem::Import),
     ("identifier", Sem::Ident),
     ("property_identifier", Sem::Ident),
     ("shorthand_property_identifier", Sem::Ident),
