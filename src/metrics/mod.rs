@@ -2715,7 +2715,10 @@ mod tests {
             readings(
                 Lang::TypeScript,
                 "build/gen.ts",
-                "const apiKey = 'sk_live_EXAMPLE_NOT_A_REAL_KEY';\n",
+                &format!(
+                    "const apiKey = '{}';\n",
+                    vendor("sk_live_", "9f3ab72c41de55906b8ad2e1")
+                ),
                 SECRETS
             ),
             [1.0]

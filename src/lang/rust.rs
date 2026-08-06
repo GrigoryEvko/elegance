@@ -30,6 +30,7 @@ const KINDS: &[(&str, Sem)] = &[
     ("line_comment", Sem::Comment),
     ("block_comment", Sem::Comment),
     ("use_declaration", Sem::Import),
+    ("mod_item", Sem::Import),
     ("identifier", Sem::Ident),
     ("field_identifier", Sem::Ident),
     ("type_identifier", Sem::Ident),
@@ -201,6 +202,30 @@ fn type_arity(t: Node, src: &[u8]) -> u16 {
 
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let mut out = Vec::new();
+    // `mod x;` IS the dependency here. It pulls x.rs into the module
+    // tree, and `x::run()` afterwards needs no `use` at all — so a
+    // graph built from `use` alone called 45 of this repository's 60
+    // files orphans, including every mode `main` dispatches to.
+    //
+    // Only the DECLARATION form: an inline `mod tests { .. }` is this
+    // file's own text rather than an edge to another file, and a
+    // `#[cfg(test)]` one is scaffolding, which is the rule `use` edges
+    // already follow.
+    if node.kind() == "mod_item"
+        && node.child_by_field_name("body").is_none()
+        && !preceding_attr_contains(node, src, "cfg(test")
+        && let Some(name) = node.child_by_field_name("name")
+        && let Ok(text) = name.utf8_text(src)
+    {
+        // `self::` because a mod declaration is relative to the module
+        // that declares it: `mod x;` in src/main.rs is src/x, and in
+        // src/a/b.rs it is src/a/b/x. Resolving it as a bare root
+        // instead would suffix-match any file called x anywhere.
+        out.push(super::ImportInfo {
+            target: format!("self::{text}").into(),
+            names: Vec::new(),
+        });
+    }
     if node.kind() == "use_declaration"
         && !in_cfg_test_mod(node, src)
         && let Some(arg) = node.child_by_field_name("argument")

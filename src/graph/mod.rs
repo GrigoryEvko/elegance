@@ -119,6 +119,9 @@ struct Index {
     /// suffix index (`attr.validators` matches [..,"attr","validators"]).
     modules: HashMap<Vec<Box<str>>, usize>,
     by_last: HashMap<Box<str>, Vec<CompEntry>>,
+    /// Every file's module components, by file index — what a `crate::`
+    /// path has to be anchored against.
+    file_comps: Vec<Vec<Box<str>>>,
     /// Directory component vectors (Go packages; representative file).
     dirs: HashMap<Box<str>, Vec<CompEntry>>,
     basenames: HashMap<Box<str>, usize>,
@@ -154,10 +157,12 @@ impl Index {
             crate_roots: HashMap::new(),
             rust_exports: HashMap::new(),
             file_crate_root: Vec::new(),
+            file_comps: Vec::new(),
         };
         for (i, f) in files.iter().enumerate() {
             idx.paths.entry(f.path.clone()).or_insert(i);
             let comps = module_components(f);
+            idx.file_comps.push(comps.clone());
             if let Some(last) = comps.last() {
                 idx.by_last
                     .entry(last.clone())
@@ -290,6 +295,23 @@ impl Index {
     /// re-exporting root, which would manufacture hub cycles), then to
     /// the crate root.
     fn rust_crate(&self, i: usize, rest: &[&str]) -> Class {
+        // `crate::a::b` names exactly <crate root>/a/b. Suffix matching
+        // it instead picks whichever file happens to end in the same
+        // segment, and this repository holds two called `metrics` —
+        // src/metrics/mod.rs and src/graph/metrics.rs — so every
+        // `crate::metrics::` edge landed on the wrong one and the real
+        // module read as an orphan.
+        if let Some(root) = self.file_crate_root[i]
+            && let Some(root_comps) = self.file_comps.get(root)
+        {
+            for probe in [rest, &rest[..rest.len().saturating_sub(1)]] {
+                let mut candidate = root_comps.clone();
+                candidate.extend(probe.iter().map(|s| Box::<str>::from(*s)));
+                if let Some(&m) = self.modules.get(&candidate) {
+                    return Class::Internal(m);
+                }
+            }
+        }
         let minus_leaf = &rest[..rest.len().saturating_sub(1)];
         if let Some(m) = self.suffix(rest).or_else(|| self.suffix(minus_leaf)) {
             return Class::Internal(m);
@@ -564,6 +586,34 @@ mod tests {
                 unresolved: 0
             }
         );
+    }
+
+    #[test]
+    fn a_crate_path_lands_on_the_module_it_names_not_a_namesake() {
+        // Two modules can share a last segment — this repository holds
+        // src/metrics/mod.rs and src/graph/metrics.rs — and matching a
+        // `crate::` path by its last segment picked whichever was
+        // scanned first. Every `crate::metrics::` edge went to the
+        // wrong file, and the real module read as an orphan with no
+        // importers at all.
+        let files = [
+            file(Lang::Rust, "src/main.rs", &["self::metrics", "self::graph"]),
+            file(Lang::Rust, "src/metrics/mod.rs", &[]),
+            file(Lang::Rust, "src/graph/mod.rs", &["self::metrics"]),
+            file(Lang::Rust, "src/graph/metrics.rs", &[]),
+            file(Lang::Rust, "src/rollup.rs", &["crate::metrics::METRICS"]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        assert_eq!(res.unresolved, 0, "every edge resolves");
+
+        // `mod metrics;` in main.rs is src/metrics, and the same
+        // declaration inside src/graph/mod.rs is src/graph/metrics.
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[0][0], Some(idx("src/metrics/mod.rs")));
+        assert_eq!(targets[2][0], Some(idx("src/graph/metrics.rs")));
+        // And a crate path from a third file anchors at the crate root,
+        // so it reaches the module rather than the namesake.
+        assert_eq!(targets[4][0], Some(idx("src/metrics/mod.rs")));
     }
 
     #[test]
