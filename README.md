@@ -269,7 +269,7 @@ its annotation and the tuples its returns ship.
 
 | | |
 | :--- | :--- |
-| `cohesion` | LCOM4: how many disconnected groups a class's methods fall into. One is cohesive; more means several objects sharing a name. Methods touching no member are excluded |
+| `cohesion` | LCOM4: how many disconnected groups a class's methods fall into. One is cohesive; more means several objects sharing a name. Methods touching no member are excluded. Eleven of its sixteen languages declare too few classes in all of gold to hold a percentile, so they inherit the MEDIAN of the five that do |
 | `and name` | a conjunction confesses two responsibilities |
 | `feature envy` | a method living in another object's data belongs there |
 

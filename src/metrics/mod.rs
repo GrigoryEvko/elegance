@@ -606,7 +606,19 @@ pub const METRICS: &[MetricDef] = &[
     // CommandCenter, which registers 192 commands in one class. Both
     // are TRUE readings of the same number; only a person can say
     // which one wanted fixing, which is exactly what a suspicion is.
-    MetricDef { name: "cohesion",      rung: 4, lo: None, hi: Some(1.0), fmt: Fmt::Int, calib: Calib::P99 },
+    //
+    // The default is 5, the MEDIAN of the per-language gold p99s that
+    // exist — py 3, ts 4, rs 5, php 6, java 11 — which is the same
+    // construction the doc-length defaults use and for the same reason.
+    // It used to be 1, a number no corpus chose, and eleven of the
+    // sixteen measuring languages inherited it: gold declares 45
+    // JavaScript classes in total, 18 Solidity, 14 C# and 12 CUDA, two
+    // orders under the 200 a percentile needs, so those cells never
+    // pin. At hi = 1 they read 83 to 444 violations per thousand
+    // measured classes while the five calibrated ones read 6 to 12 — a
+    // rung-4 suspicion admired code trips on a third of its Scala
+    // classes is measuring the budget, not the code.
+    MetricDef { name: "cohesion",      rung: 4, lo: None, hi: Some(5.0), fmt: Fmt::Int, calib: Calib::P99 },
     // An SQL statement ASSEMBLED from values rather than written: an
     // f-string, a template literal, a Sprintf. The oldest
     // vulnerability there is, and the one whose remedy — a parameter
@@ -1434,6 +1446,42 @@ mod tests {
                 "CUDA lost a pinned budget — the corpus or the scoping rule regressed"
             );
         }
+    }
+
+    #[test]
+    fn an_unmeasured_default_is_the_middle_of_the_measured_ones() {
+        // A default nobody chose reads exactly like a measured budget.
+        // `cohesion` inherited hi = 1 in eleven of its sixteen
+        // measuring languages — gold declares 45 JavaScript classes in
+        // all, 18 Solidity, 14 C# and 12 CUDA, two orders under the 200
+        // a percentile needs — and at that budget admired code failed
+        // on 83 to 444 of every thousand classes it measured, against 6
+        // to 12 in the five languages that DO pin. The default is now
+        // the median of the pinned ones, which is the same construction
+        // the doc-length defaults already use.
+        use crate::lang::{LANGS, Lang};
+        let cal = LangBudgets::calibrated();
+        let mut measured: Vec<f32> = LANGS
+            .iter()
+            .filter(|l| is_pinned(**l, COHESION))
+            .filter_map(|l| cal.for_lang(*l).0[COHESION].1)
+            .collect();
+        assert!(
+            measured.len() >= 3,
+            "too few pinned languages for a median: {measured:?}"
+        );
+        measured.sort_by(f32::total_cmp);
+        assert_eq!(
+            Budgets::defaults().0[COHESION].1,
+            Some(measured[measured.len() / 2]),
+            "the cohesion default drifted from the middle of {measured:?}"
+        );
+        // Restraint, and the reason this is not a blanket rule: a
+        // language whose corpus DOES speak keeps its own answer, and a
+        // cell measuring nothing at all borrows nothing. Go declares 29
+        // interfaces in all of gold and is honestly on the default.
+        assert!(is_pinned(Lang::TypeScript, COHESION));
+        assert!(!is_pinned(Lang::Go, INTERFACE_WIDTH));
     }
 
     #[test]
