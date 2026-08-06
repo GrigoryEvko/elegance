@@ -1166,6 +1166,65 @@ fn destructures(kind: &str) -> bool {
 /// A build- or tool-configuration file: `vite.config.ts`,
 /// `jest.config.js`, `rollup.config.mjs`. Named after what it
 /// configures, and run once by the tool it configures.
+/// Is this declaration an anonymous function EXPRESSION rather than a
+/// named declaration?
+///
+/// A one-expression lambda is a forwarder by definition — that is what a
+/// lambda IS — and it exists to adapt a callback's shape: `decode:
+/// (str) => BigInt(str)`, `lookupLanguageModel: id => models.get(id)`.
+/// Fowler's Middle Man is about a NAME that promises a layer and
+/// delivers a hop, and a lambda has no name of its own to be shallow
+/// about; the one it reports comes from the property it was bound to.
+///
+/// A kind list rather than a pack hook, because it names the same
+/// construct in every grammar that has one and no pack has a say in the
+/// answer. A grammar that renamed its lambda node would silently widen
+/// this metric rather than break it, which is why the list is here in
+/// the open and not spelled inside a rule.
+pub(crate) fn is_a_lambda(kind: &str) -> bool {
+    matches!(
+        kind,
+        "arrow_function"
+            | "function_expression"
+            | "generator_function"
+            | "lambda"
+            | "lambda_expression"
+            | "lambda_literal"
+            | "closure_expression"
+            | "anonymous_function"
+            | "anonymous_function_creation_expression"
+            | "fun_literal"
+            | "block_argument"
+            | "do_block"
+            | "anon_fn"
+    )
+}
+
+/// Does the declaration MARK itself an override of someone else's
+/// signature? Java and Kotlin write `@Override`, C#, Swift, Scala and
+/// TypeScript a leading `override` modifier.
+///
+/// Read from the declaration HEAD — everything before the body — so a
+/// body that happens to mention the word cannot answer for it. Where a
+/// language marks nothing, this says nothing: Rust's trait impls and
+/// Go's interface satisfaction leave no token to read, and inventing
+/// one from the surrounding type would be the over-broad rule
+/// `Pack::is_override` already is for `ceremony`.
+pub(crate) fn declares_an_override(node: Node, src: &[u8]) -> bool {
+    let start = node.start_byte();
+    let end = node
+        .child_by_field_name("body")
+        .map_or(node.end_byte(), |b| b.start_byte());
+    let Some(head) = src
+        .get(start..end)
+        .and_then(|h| std::str::from_utf8(h).ok())
+    else {
+        return false;
+    };
+    head.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '@'))
+        .any(|word| word == "@Override" || word == "override")
+}
+
 pub(crate) fn config_file(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);

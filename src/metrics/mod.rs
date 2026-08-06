@@ -290,7 +290,19 @@ pub const METRICS: &[MetricDef] = &[
     MetricDef { name: "spooky",        rung: 3, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
     // A layer that only forwards adds interface without abstraction
     // (Ousterhout's shallow wrapper, Fowler's Middle Man).
-    MetricDef { name: "pass-through",  rung: 3, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
+    //
+    // Rung 4, demoted from 3, and the number is why. Three exclusions
+    // took gold from 13,474 findings to 9,470 — a declared override, a
+    // lambda, a constructor re-declaring its superclass's — and every
+    // one of them was a forward the language DEMANDED. What remains is
+    // still 4.8% of Scala's units and 2.1% of Java's, and the largest
+    // shape left is a type-instantiation family: http4s writes `year`,
+    // `yearMonth`, `zoneOffset` each forwarding to the same encoder
+    // with a different type parameter, where the TYPE is the content
+    // and the tool cannot see it without resolution. A suspicion at
+    // that rate belongs beside `feature envy` and `cohesion`, not
+    // beside `broad catch`.
+    MetricDef { name: "pass-through",  rung: 4, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
     // Public **kwargs: an interface that reveals nothing about its contract.
     MetricDef { name: "kw opacity",    rung: 3, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
     // A name with "and" in it confesses two responsibilities — temporal

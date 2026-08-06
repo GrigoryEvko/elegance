@@ -214,7 +214,6 @@ React. Solid is exempt: it tracks dependencies at run time.
 | `interface width` | methods per declared interface — Go gold's median is 1 |
 | `repurposed` | Fowler's Split Variable; compound operators, conditional overrides, loop refills, swaps, member writes and let-shadowing exempt |
 | `flag params` · `kw opacity` | |
-| `pass-through` | Ousterhout's shallow wrapper / Fowler's Middle Man |
 | `generic name` | |
 | `lying name` | `is_`/`has_` must return the language's boolean — `Boolean`, `Bool`, a TypeScript type predicate `v is T`, C89's `int`; `get_` must not mutate; a declared test's name is prose, not a contract |
 | `broad catch` · `unwraps` | |
@@ -272,6 +271,7 @@ its annotation and the tuples its returns ship.
 | `cohesion` | LCOM4: how many disconnected groups a class's methods fall into. One is cohesive; more means several objects sharing a name. Methods touching no member are excluded. Eleven of its sixteen languages declare too few classes in all of gold to hold a percentile, so they inherit the MEDIAN of the five that do |
 | `and name` | a conjunction confesses two responsibilities |
 | `feature envy` | a method living in another object's data belongs there |
+| `pass-through` | Ousterhout's shallow wrapper / Fowler's Middle Man — a declared override, a lambda and a constructor re-declaring its superclass's are forwards the language demanded, not layers the author chose |
 
 ### Rung 5 — dependency graph and rates
 

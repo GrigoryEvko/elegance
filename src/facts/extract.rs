@@ -1476,6 +1476,34 @@ impl Extractor<'_> {
     /// (Ousterhout's shallow wrapper; Fowler's Middle Man). An adapter
     /// that reorders, transforms, or supplements arguments is not one.
     fn is_passthrough(&self, node: Node, params: &[super::ParamFact]) -> bool {
+        // A DECLARED OVERRIDE IS NOT A MIDDLE MAN. Fowler's smell is a
+        // class that could be inlined; a method implementing someone
+        // else's signature cannot be, and the Decorator pattern
+        // forwards on purpose — netty's
+        // `Http2FrameListenerDecorator.onRstStreamRead` exists to.
+        //
+        // Read from the declaration's own marker, not from the pack's
+        // `is_override`: that hook answers "could this be an override
+        // point" for `ceremony` and says yes to every method of every
+        // subclass, which would silence the metric wholesale. Where a
+        // language does not MARK an override — Rust's trait impls, Go's
+        // interfaces — nothing is claimed and the unit stays judged.
+        //
+        // Known cost, and it is the honest one: a Decorator whose every
+        // method forwards and none adds behaviour IS a Middle Man, and
+        // this silences it.
+        if crate::lang::declares_an_override(node, self.src) {
+            return false;
+        }
+        // A LAMBDA HAS NO NAME TO BE SHALLOW ABOUT. `decode: (str) =>
+        // BigInt(str)` is a forwarder by definition — that is what a
+        // lambda IS — and it exists to adapt a callback's shape. The
+        // declaration spelling its own name is what separates it from
+        // `def decode(str) = BigInt(str)`, which is a named layer and
+        // stays judged.
+        if crate::lang::is_a_lambda(node.kind()) {
+            return false;
+        }
         let Some(body) = node.child_by_field_name("body") else {
             return false;
         };
@@ -1499,6 +1527,21 @@ impl Extractor<'_> {
             }
         }
         if self.pack.table_sem(stmt) != Sem::Call {
+            return false;
+        }
+        // FORWARDING TO A SUPERCLASS is the language asking, not the
+        // author choosing: a subclass that wants an inherited
+        // constructor must re-declare it, and `super(cause)` is the
+        // whole of that re-declaration.
+        if self
+            .callee_trailing_name(stmt)
+            .into_iter()
+            .chain(
+                stmt.child_by_field_name("function")
+                    .and_then(|f| f.utf8_text(self.src).ok()),
+            )
+            .any(|name| matches!(name, "super" | "base" | "parent" | "super()" | "parent::"))
+        {
             return false;
         }
         let Some(args) = stmt.child_by_field_name("arguments") else {
@@ -4424,6 +4467,55 @@ mod tests {
         );
         assert!(rf.units[1].is_passthrough);
         assert!(!rf.units[2].is_passthrough, "computes on the result");
+    }
+
+    /// The three forwards the AUTHOR did not choose, each with the
+    /// freely-chosen twin beside it.
+    ///
+    /// 4,933 of the 13,816 gold findings were one of these: a declared
+    /// override (2,582), a lambda (1,220), a constructor re-declaring
+    /// its superclass's (1,131). Fowler's Middle Man is a class that
+    /// could be INLINED, and none of the three can be.
+    #[test]
+    fn a_forward_the_language_demanded_is_not_a_middle_man() {
+        use crate::lang::Lang;
+        let forwards = |lang: Lang, name: &str, src: &str, unit: &str| {
+            let pack = lang.pack();
+            let mut parser = pack.make_parser();
+            let f = extract(pack, &mut parser, Path::new(name), src);
+            f.units
+                .iter()
+                .find(|u| u.name.as_ref() == unit)
+                .unwrap_or_else(|| panic!("{lang:?}: no unit {unit}"))
+                .is_passthrough
+        };
+        let java = "class D implements L {\n  private final L l;\n  @Override\n  public void onRead(C ctx, int id) { l.onRead(ctx, id); }\n  public void relay(C ctx, int id) { l.onRead(ctx, id); }\n}\n";
+        assert!(
+            !forwards(Lang::Java, "D.java", java, "onRead"),
+            "@Override implements someone else's signature"
+        );
+        assert!(
+            forwards(Lang::Java, "D.java", java, "relay"),
+            "the same body without the marker is a layer the author chose"
+        );
+        let ts = "export const codec = {\n  decode: (str: string) => parse(str),\n};\nexport function decode2(str: string) { return parse(str); }\n";
+        assert!(
+            !forwards(Lang::TypeScript, "a.ts", ts, "decode"),
+            "a lambda has no name of its own to be shallow about"
+        );
+        assert!(
+            forwards(Lang::TypeScript, "a.ts", ts, "decode2"),
+            "a named function does"
+        );
+        let ctor = "class A extends B {\n  constructor(cause: Error) { super(cause); }\n}\nclass C {\n  wrap(cause: Error) { return this.inner.wrap(cause); }\n}\n";
+        assert!(
+            !forwards(Lang::TypeScript, "b.ts", ctor, "constructor"),
+            "a subclass must re-declare an inherited constructor"
+        );
+        assert!(
+            forwards(Lang::TypeScript, "b.ts", ctor, "wrap"),
+            "forwarding to a COLLABORATOR is still a hop"
+        );
     }
 
     #[test]
