@@ -1028,13 +1028,19 @@ fn unit_metrics(u: &UnitFacts, facts: &FileFacts, f: &mut impl FnMut(usize, f32,
         &u.qualname,
     );
     f(EXPR_DEPTH, u.max_expr_depth as f32, u.line, &u.qualname);
-    f(DEMETER, u.demeter as f32, u.line, &u.qualname);
     f(NEGATIONS, u.negations as f32, u.line, &u.qualname);
     // Test bodies are made of literals — expected values, fixtures,
     // status codes. Judging them by production budgets made 88% of
     // this gating metric's firings noise (same guard as UNWRAPS).
+    //
+    // An assertion DSL is chain-shaped by construction —
+    // `expect(x).to.have.nested.property(..)`, `h.state.zoom.value`,
+    // `channel.pipeline.syncOperations.addHandler(..)` — so the same
+    // guard covers Demeter, where 40.7% of gold's findings were in test
+    // paths and no reviewer would ask for one of them to change.
     if !u.is_test && !facts.is_test_file {
         f(MAGIC_NUMBERS, u.magic_numbers as f32, u.line, &u.qualname);
+        f(DEMETER, u.demeter as f32, u.line, &u.qualname);
     }
     // A file's top level is code too, and in shell it is the WHOLE
     // program: a provisioning script that sets REGION at line 40 and
@@ -4278,6 +4284,33 @@ mod tests {
         // NASA/TigerStyle: assertions must not inflate complexity.
         let (cog, cyc, _) = unit_metrics("def f(x):\n    assert x > 0\n    return x\n");
         assert_eq!((cog, cyc), (0, 1));
+    }
+
+    #[test]
+    fn a_chain_inside_a_test_is_an_assertion_dsl_not_a_reach() {
+        // `expect(x).to.have.nested.property(..)` and `h.state.zoom.value`
+        // are how a test is written; 40.7% of gold's Demeter findings sat
+        // in test paths and no reviewer would ask for one to change. The
+        // same guard MAGIC_NUMBERS and UNWRAPS already carry.
+        let pack = Lang::Python.pack();
+        let mut parser = pack.make_parser();
+        let src = "def reach(cfg):\n    return cfg.db.conn.host\n";
+        let mut emitted = |path: &str| {
+            let facts = extract(pack, &mut parser, Path::new(path), src);
+            let mut vals = Vec::new();
+            for_each(&facts, |m, v, _, _| {
+                if m == DEMETER {
+                    vals.push(v);
+                }
+            });
+            vals
+        };
+        assert_eq!(
+            emitted("app.py"),
+            [0.0, 1.0],
+            "module scope, then the reach"
+        );
+        assert!(emitted("tests/test_app.py").is_empty(), "a test is exempt");
     }
 
     #[test]

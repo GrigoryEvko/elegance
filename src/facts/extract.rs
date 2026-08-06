@@ -99,6 +99,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         self_names: vec!["".into()],
         tokens: vec![Vec::new()],
         import_roots: std::collections::HashSet::new(),
+        chain_roots: Vec::new(),
         mentions: std::collections::HashSet::new(),
         comment_lines: Vec::new(),
         comments_through: 0,
@@ -135,6 +136,7 @@ fn finish(ex: Extractor, blank: &Rows, mass: u32) {
         envy,
         callees,
         import_roots,
+        chain_roots,
         mentions,
         tokens,
         stray_calls,
@@ -155,6 +157,7 @@ fn finish(ex: Extractor, blank: &Rows, mass: u32) {
     facts.step_refs = step_refs(&facts.units, &callees);
     facts.pub_order = pub_order(&facts.units);
     resolve_envy(&mut facts.units, envy, &import_roots);
+    resolve_chains(&mut facts.units, chain_roots, &import_roots);
     facts.test_refs = resolve_locals(&mut facts.units, live, facts.is_test_file);
     facts.mass = mass;
     facts.comment_lines = commentary.count_excluding(blank) as u32;
@@ -252,6 +255,32 @@ fn resolve_envy(
                 unit.envy_count = count;
                 unit.envy_object = name;
             }
+        }
+    }
+}
+
+/// Withdraw every Demeter chain rooted at an imported name.
+///
+/// `torch.nn.functional.pad(x)` is namespace.namespace.namespace.function
+/// — three qualifiers on one call, not three data links into a
+/// neighbour's internals — and Lieberherr's rule is about a neighbour's
+/// STRUCTURE. `resolve_envy` has always applied exactly this rule one
+/// branch away, from the same set; the chain count did not, and 520 of
+/// the 890 gold Python findings had every chain rooted at an import.
+///
+/// Withdrawn afterwards rather than skipped during the walk because a
+/// file may import below the code that uses the name (a Python function
+/// importing lazily inside its body, a re-export at the foot of a
+/// module), and a rule that depended on walk order would judge those
+/// differently for no reason a reader could see.
+fn resolve_chains(
+    units: &mut [UnitFacts],
+    chains: Vec<(usize, Box<str>)>,
+    import_roots: &std::collections::HashSet<Box<str>>,
+) {
+    for (unit, base) in chains {
+        if import_roots.contains(&base) {
+            units[unit].demeter = units[unit].demeter.saturating_sub(1);
         }
     }
 }
@@ -468,6 +497,10 @@ struct Extractor<'a> {
     tokens: Vec<Vec<u64>>,
     /// Local names bound by imports — modules wearing value names.
     import_roots: std::collections::HashSet<Box<str>>,
+    /// (unit, base name) of every counted Demeter chain, kept until the
+    /// whole file's imports are known — a chain rooted at an import is
+    /// withdrawn in [`resolve_chains`].
+    chain_roots: Vec<(usize, Box<str>)>,
     /// Every distinct identifier the file mentions, for the dead-export
     /// join. Deduplicated here so the aggregate counts FILES per name.
     mentions: std::collections::HashSet<Box<str>>,
@@ -1887,7 +1920,7 @@ impl Extractor<'_> {
     /// Fluent chains break naturally — a call ends the descent — and a
     /// self/this base forgives its first link.
     fn check_demeter(&mut self, node: Node, unit: usize) {
-        let Some((attr_kind, object_field)) = self.pack.attr() else {
+        let Some((attr_kind, _)) = self.pack.attr() else {
             return;
         };
         // Only chain roots: a parent of the same kind means we are one of
@@ -1896,6 +1929,16 @@ impl Extractor<'_> {
         {
             return;
         }
+        self.record_chain(node, unit);
+    }
+
+    /// What one chain root contributes: an access to its own object, a
+    /// tally against a foreign one, and — when it reaches far enough
+    /// through something that is neither — a Demeter finding.
+    fn record_chain(&mut self, node: Node, unit: usize) {
+        let Some((attr_kind, object_field)) = self.pack.attr() else {
+            return;
+        };
         let mut links = 0u16;
         let mut base = node;
         while base.kind_id() == attr_kind {
@@ -1908,25 +1951,7 @@ impl Extractor<'_> {
         // The same chain root feeds Feature Envy: one chain = one access
         // to its base receiver (methods only).
         let base_text = base.utf8_text(self.src).ok();
-        // Selfishness is judged by TEXT, envy by identifier-ness. Rust
-        // spells `self` with its own node kind rather than an
-        // identifier, so requiring Sem::Ident here made every
-        // `self.field` in the language invisible — no self access, no
-        // own member, and a cohesive impl block reading as scattered.
-        //
-        // The text must lose its SIGIL first. PHP spells the receiver
-        // `$this` and Perl `$self`, neither of which matched, so every
-        // method in both languages was read as envying a foreign object
-        // that happens to be itself: 993 of PHP's 1138 gold findings
-        // named `$this` and 195 of Perl's 382 named `$self`. The same
-        // branch is the only writer of `own_members`, so both languages
-        // also measured ZERO classes for cohesion while being made of
-        // almost nothing else.
-        let selfish_base = base_text.is_some_and(|n| {
-            let n = crate::lang::unsigiled(n);
-            matches!(n, "self" | "cls" | "this")
-                || n == crate::lang::unsigiled(&self.self_names[unit])
-        });
+        let selfish_base = self.is_own_object(base_text, unit);
         let base_name = (self.pack.table_sem(base) == Sem::Ident)
             .then_some(base_text)
             .flatten();
@@ -1944,9 +1969,44 @@ impl Extractor<'_> {
         if selfish_base {
             links = links.saturating_sub(1);
         }
-        if links >= 3 {
-            self.facts.units[unit].demeter += 1;
+        if links < 3 {
+            return;
         }
+        // An uppercase base is a type or a module — `Console.Out.Write`,
+        // `Ecto.Query.Builder.apply` — and reaching through a namespace
+        // is not reaching through an object. The envy branch above has
+        // always said so; the chain count now says the same.
+        if base_name.is_some_and(|n| n.starts_with(|c: char| c.is_uppercase())) {
+            return;
+        }
+        self.facts.units[unit].demeter += 1;
+        if let Some(name) = base_name {
+            self.chain_roots.push((unit, name.into()));
+        }
+    }
+
+    /// Does this chain start at the unit's OWN object?
+    ///
+    /// Judged by TEXT, where envy is judged by identifier-ness. Rust
+    /// spells `self` with its own node kind rather than an identifier,
+    /// so requiring Sem::Ident made every `self.field` in the language
+    /// invisible — no self access, no own member, and a cohesive impl
+    /// block reading as scattered.
+    ///
+    /// The text must lose its SIGIL first. PHP spells the receiver
+    /// `$this` and Perl `$self`, neither of which matched, so every
+    /// method in both languages was read as envying a foreign object
+    /// that happens to be itself: 993 of PHP's 1138 gold findings named
+    /// `$this` and 195 of Perl's 382 named `$self`. The same branch is
+    /// the only writer of `own_members`, so both languages also
+    /// measured ZERO classes for cohesion while being made of almost
+    /// nothing else.
+    fn is_own_object(&self, base_text: Option<&str>, unit: usize) -> bool {
+        base_text.is_some_and(|n| {
+            let n = crate::lang::unsigiled(n);
+            matches!(n, "self" | "cls" | "this")
+                || n == crate::lang::unsigiled(&self.self_names[unit])
+        })
     }
 
     /// WHICH member this chain reaches first off the receiver:
@@ -4024,6 +4084,26 @@ mod tests {
         // cfg.db.conn.host = 3 data links: violation. self.registry.entries
         // = 2 links minus self-forgiveness = 1. Fluent chain: calls break it.
         assert_eq!(f.units[1].demeter, 1);
+    }
+
+    #[test]
+    fn a_module_path_is_not_a_chain_into_a_neighbours_data() {
+        // Same three links, three bases. `torch` is imported, so the
+        // chain is namespace.namespace.namespace.function — 520 of the
+        // 890 gold Python findings were this. `Config` is capitalised,
+        // so it is a type or a module whatever the file imports. `cfg`
+        // is an object and stays a finding.
+        let f = facts(
+            "import torch\n\ndef f(cfg):\n    torch.nn.functional.pad(x)\n    Config.db.conn.host\n    return cfg.db.conn.host\n",
+        );
+        assert_eq!(f.units[1].demeter, 1);
+
+        // Withdrawn even when the import is read after the use: a lazy
+        // import inside a body must not judge differently.
+        let late = facts(
+            "def f(cfg):\n    import torch\n    torch.nn.functional.pad(x)\n    return cfg.db.conn.host\n",
+        );
+        assert_eq!(late.units[1].demeter, 1);
     }
 
     #[test]

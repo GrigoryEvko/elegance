@@ -157,7 +157,6 @@
 "length" = { hi = 78.0 }
 "params" = { hi = 4.0 }
 "expr depth" = { hi = 12.0 }
-"demeter" = { hi = 3.0 }
 "live span" = { hi = 60.0 }
 "magic numbers" = { hi = 2.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
@@ -183,7 +182,7 @@
 "length" = { hi = 211.0 }
 "params" = { hi = 6.0 }
 "expr depth" = { hi = 12.0 }
-"demeter" = { hi = 7.0 }
+"demeter" = { hi = 6.0 }
 "live span" = { hi = 151.0 }
 "magic numbers" = { hi = 2.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
@@ -213,7 +212,7 @@
 "length" = { hi = 155.0 }
 "params" = { hi = 5.0 }
 "expr depth" = { hi = 12.0 }
-"demeter" = { hi = 1.0 }
+"demeter" = { hi = 2.0 }
 "live span" = { hi = 106.0 }
 "magic numbers" = { hi = 5.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
@@ -231,7 +230,7 @@
 # 0 runs is under the 200 a percentile needs: borrowed from lua's pooled doc p99
 "field doc" = { hi = 118.0 }
 "inline doc" = { hi = 79.0 }
-"asserts" = { rate = 0.09 }
+"asserts" = { rate = 0.08 }
 "public docs" = { rate = 0.19 }
 
 [rb]
@@ -241,7 +240,7 @@
 "length" = { hi = 37.0 }
 "params" = { hi = 4.0 }
 "expr depth" = { hi = 11.0 }
-"demeter" = { hi = 4.0 }
+"demeter" = { hi = 2.0 }
 "live span" = { hi = 25.0 }
 "magic numbers" = { hi = 1.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
@@ -264,7 +263,7 @@
 "depth" = { hi = 3.0 }
 "length" = { hi = 79.0 }
 "expr depth" = { hi = 13.0 }
-"demeter" = { hi = 7.0 }
+"demeter" = { hi = 1.0 }
 "live span" = { hi = 67.0 }
 "magic numbers" = { hi = 3.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
@@ -348,7 +347,6 @@
 "length" = { hi = 60.0 }
 "params" = { hi = 5.0 }
 "expr depth" = { hi = 14.0 }
-"demeter" = { hi = 1.0 }
 "live span" = { hi = 41.0 }
 "magic numbers" = { hi = 1.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
@@ -377,7 +375,7 @@
 "length" = { hi = 83.0 }
 "params" = { hi = 6.0 }
 "expr depth" = { hi = 17.0 }
-"demeter" = { hi = 2.0 }
+"demeter" = { hi = 1.0 }
 "live span" = { hi = 61.0 }
 "magic numbers" = { hi = 7.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
@@ -583,7 +581,7 @@
 "length" = { hi = 249.0 }
 "params" = { hi = 15.0 }
 "expr depth" = { hi = 16.0 }
-"demeter" = { hi = 2.0 }
+"demeter" = { hi = 3.0 }
 "live span" = { hi = 197.0 }
 "magic numbers" = { hi = 30.0 }
 "comment ratio" = { lo = 0.08, hi = 0.58 }
