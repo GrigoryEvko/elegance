@@ -35,6 +35,8 @@ tree-sitter-elixir = "0.3.5"
 tree-sitter-solidity = "1.2.13"
 yaml-rust2 = "0.11.0"
 
+num_cpus = "1.17"
+
 # jemalloc everywhere it exists. MSVC is the exception and the release
 # matrix ships two Windows binaries, so the dependency is target-gated
 # rather than the code being.

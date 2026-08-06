@@ -248,6 +248,38 @@ fn single_file_mode(args: &Args) -> Result<bool, Box<dyn Error>> {
 /// guard in `facts::extract` is the half that bounds the recursion.
 const WORKER_STACK: usize = 32 * 1024 * 1024;
 
+/// Workers to scan with: PHYSICAL cores, not threads.
+///
+/// Two hyperthreads share one core's execution units and its L1/L2, and
+/// this scan is memory-bandwidth bound long before it is ALU bound — so
+/// the second thread on a core adds a full worker's memory for a
+/// fraction of a worker's throughput. Every worker holds its own
+/// tree-sitter parsers, and a parser keeps scratch sized to the largest
+/// tree it has met, so a worker costs about 20 MB once it has seen a big
+/// file whatever it does next.
+///
+/// Measured on the whole gold corpus, 20 physical cores and 28 threads:
+///
+///     threads   peak RSS   wall
+///          14    1829 MB   36.5 s
+///          20    1969 MB   34.6 s     <- physical
+///          24    2024 MB   28.9 s
+///          28    2254 MB   29.1 s
+///
+/// Taking every thread costs 285 MB over taking every core, and the last
+/// four threads buy nothing at all. The curve's shape is the machine's,
+/// not the corpus's — a builder with more cores pays the same 20 MB per
+/// worker for the same flattening return.
+///
+/// RAYON_NUM_THREADS still wins: a caller who knows their machine
+/// outranks a default derived from one of them.
+fn workers() -> usize {
+    if std::env::var_os("RAYON_NUM_THREADS").is_some() {
+        return 0; // 0 lets rayon read the variable itself
+    }
+    num_cpus::get_physical()
+}
+
 /// Parallel scan: parse, extract, measure, and merge — the whole pipeline.
 fn scan(files: &[PathBuf], budgets: config::Layers, complete: bool) -> Agg {
     in_pool(|| scan_in_pool(files, budgets, complete))
@@ -259,6 +291,7 @@ fn scan(files: &[PathBuf], budgets: config::Layers, complete: bool) -> Agg {
 /// is, and nobody minifies their own source.
 fn in_pool<T: Send>(work: impl FnOnce() -> T + Send) -> T {
     let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers())
         .stack_size(WORKER_STACK)
         .build()
         .expect("rayon pool");
