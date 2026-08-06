@@ -124,7 +124,9 @@ struct Index {
     file_comps: Vec<Vec<Box<str>>>,
     /// Directory component vectors (Go packages; representative file).
     dirs: HashMap<Box<str>, Vec<CompEntry>>,
-    basenames: HashMap<Box<str>, usize>,
+    /// Every file's path components, keyed by file name — what a
+    /// path-shaped specifier (`cutlass/gemm/gemm.h`) matches against.
+    basenames: HashMap<Box<str>, Vec<CompEntry>>,
     /// Rust crate roots (lib.rs/main.rs) by their directory components.
     crate_roots: HashMap<Vec<Box<str>>, usize>,
     /// Rust symbol -> defining files, for `use crate::Symbol` edges:
@@ -185,8 +187,12 @@ impl Index {
             if let Some(last) = dir.last() {
                 idx.dirs.entry(last.clone()).or_default().push((dir, i));
             }
-            if let Some(base) = f.path.file_name().and_then(|b| b.to_str()) {
-                idx.basenames.entry(base.into()).or_insert(i);
+            let full = components(&f.path);
+            if let Some(base) = full.last() {
+                idx.basenames
+                    .entry(base.clone())
+                    .or_default()
+                    .push((full.clone(), i));
             }
         }
         // Second pass: crate roots are only complete now.
@@ -422,8 +428,8 @@ impl Index {
             return Class::Internal(i);
         }
         let base = target.rsplit('/').next().unwrap_or(target);
-        match self.basenames.get(base) {
-            Some(&i) => Class::Internal(i),
+        match self.basenames.get(base).and_then(|c| c.first()) {
+            Some(&(_, i)) => Class::Internal(i),
             None => Class::Unresolved,
         }
     }
@@ -447,23 +453,41 @@ impl Index {
         if let Some(&i) = self.paths.get(&joined) {
             return Class::Internal(i);
         }
-        // Include paths are unknowable; a matching basename is evidence
-        // enough.
-        let base = target.rsplit('/').next().unwrap_or(target);
-        match self.basenames.get(base) {
-            Some(&i) => Class::Internal(i),
+        // The include directory is unknowable, so match the whole
+        // specifier against file paths instead of just its last segment.
+        match self.path_suffix(target) {
+            Some(i) => Class::Internal(i),
             None => Class::Unresolved,
         }
     }
 
-    /// First module whose component vector the segments suffix-match
-    /// (files arrive path-sorted, so "first" is deterministic).
+    /// The one file whose path ends with `target`'s segments. `None`
+    /// when none does, and equally when several do: which of them an
+    /// include means is decided by a search path that is not in the
+    /// source.
+    fn path_suffix(&self, target: &str) -> Option<usize> {
+        let segs: Vec<&str> = target
+            .split('/')
+            .filter(|s| !s.is_empty() && *s != ".")
+            .collect();
+        let mut hits = self
+            .basenames
+            .get(*segs.last()?)?
+            .iter()
+            .filter(|(c, _)| ends_with(c, &segs));
+        let &(_, i) = hits.next()?;
+        hits.next().is_none().then_some(i)
+    }
+
+    /// The shallowest module whose component vector the segments
+    /// suffix-match: a search path finds `log` before `vendor/log`.
     fn suffix(&self, segs: &[&str]) -> Option<usize> {
         let last = segs.last()?;
         self.by_last
             .get(*last)?
             .iter()
-            .find(|(c, _)| ends_with(c, segs))
+            .filter(|(c, _)| ends_with(c, segs))
+            .min_by_key(|(c, _)| c.len())
             .map(|(_, i)| *i)
     }
 }
@@ -657,6 +681,57 @@ mod tests {
         // And a crate path from a third file anchors at the crate root,
         // so it reaches the module rather than the namesake.
         assert_eq!(targets[4][0], Some(idx("src/metrics/mod.rs")));
+    }
+
+    #[test]
+    fn an_include_lands_on_the_header_its_path_names() {
+        // cutlass holds seven files called gemm.h. Matching an include
+        // by its last segment sent `cutlass/gemm/gemm.h` to whichever
+        // came first in path order — the one under device/ — so the
+        // header the include actually names had no fan-in at all.
+        let files = [
+            file(Lang::Cuda, "include/cutlass/gemm/device/gemm.h", &[]),
+            file(Lang::Cuda, "include/cutlass/gemm/gemm.h", &[]),
+            file(Lang::Cuda, "include/cutlass/gemm/kernel/gemm.h", &[]),
+            file(Lang::Cuda, "main.cu", &["cutlass/gemm/gemm.h"]),
+        ];
+        let (_, e) = edges(&files);
+        assert_eq!(e, [(3, 1)]);
+    }
+
+    #[test]
+    fn an_include_that_two_headers_answer_to_resolves_to_neither() {
+        // musl carries eighteen copies of syscall_arch.h, one per
+        // architecture. Which one a build sees is decided by
+        // -Iarch/$ARCH, which is nowhere in the source.
+        let files = [
+            file(Lang::C, "arch/aarch64/syscall_arch.h", &[]),
+            file(Lang::C, "arch/x86_64/syscall_arch.h", &[]),
+            file(Lang::C, "src/internal/syscall.c", &["syscall_arch.h"]),
+        ];
+        assert_eq!(
+            resolve(&files),
+            Resolution {
+                internal: 0,
+                external: 0,
+                unresolved: 1
+            }
+        );
+    }
+
+    #[test]
+    fn a_module_search_finds_the_shallowest_match() {
+        // `require 'pl.utils'` walks package.path, which reaches the
+        // project's own tree before anything vendored under it. Taking
+        // the path-first match instead handed every edge to the copy
+        // that happened to sort earliest.
+        let files = [
+            file(Lang::Lua, "a/deep/vendor/pl/utils.lua", &[]),
+            file(Lang::Lua, "app/main.lua", &["pl.utils"]),
+            file(Lang::Lua, "z/pl/utils.lua", &[]),
+        ];
+        let (_, e) = edges(&files);
+        assert_eq!(e, [(1, 2)]);
     }
 
     #[test]
