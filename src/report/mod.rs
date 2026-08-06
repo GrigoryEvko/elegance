@@ -29,6 +29,11 @@ const CLUMP_MIN: u32 = 3;
 /// Below this many measurements a percentile is noise, not a position.
 const MIN_POSITION_SAMPLES: usize = 200;
 
+/// Distinct budgets a mixed run names before the column stops being a
+/// column. A 22-language scan can have twenty of them; three covers the
+/// languages a reader is actually reading.
+const BUDGET_LANGS: usize = 3;
+
 /// The tail quantiles every distribution is summarized by. p99 is also
 /// what budgets are pinned to, so the report shows the number the
 /// calibration argues about.
@@ -900,7 +905,7 @@ impl Agg {
 
     /// One budget across the languages present in this run, or None when
     /// they differ (mixed-language runs with per-language calibration).
-    fn uniform_budget(&self, m: usize) -> Option<(Option<f32>, Option<f32>)> {
+    fn uniform_budget(&self, m: usize) -> Option<Band> {
         let mut present = LANGS
             .iter()
             .filter(|l| self.files_by_lang[**l as usize] > 0);
@@ -912,18 +917,57 @@ impl Agg {
     }
 
     fn budget_label(&self, m: usize) -> String {
-        let Some(band) = self.uniform_budget(m) else {
-            return "varies".to_string();
+        let label = match self.uniform_budget(m) {
+            Some(band) => metrics::band_label(m, band),
+            None => self.mixed_budget(m),
         };
         // A trailing dot marks a budget resting on nothing but the
         // compiled default: the corpus was too thin to pin it, or it
         // is a policy no percentile may legitimize. Printing a pinned
         // budget and a guessed one identically implies evidence the
         // tool does not have.
-        let label = metrics::band_label(m, band);
         match self.budget_is_pinned(m) {
             true => label,
             false => format!("{label}."),
+        }
+    }
+
+    /// Every band this run judged against, most files first, languages
+    /// sharing one named together.
+    ///
+    /// `varies` named the problem and then withheld the answer. On a
+    /// mixed tree the metrics that fire most are exactly the ones
+    /// calibrated per language, so the word landed on the rows a reader
+    /// most needs the number for — twelve of them on the reference
+    /// tree, `cognitive`, `cyclomatic`, `length` and `live span` among
+    /// them — and said only that the tool knew and would not say.
+    fn mixed_budget(&self, m: usize) -> String {
+        let mut langs: Vec<crate::lang::Lang> = LANGS
+            .iter()
+            .copied()
+            .filter(|l| self.files_by_lang[*l as usize] > 0)
+            .collect();
+        langs.sort_by_key(|l| {
+            (
+                std::cmp::Reverse(self.files_by_lang[*l as usize]),
+                *l as usize,
+            )
+        });
+        let mut groups: Vec<(Band, Vec<&'static str>)> = Vec::new();
+        for lang in langs {
+            let band = self.budgets.root().for_lang(lang).0[m];
+            match groups.iter_mut().find(|(seen, _)| *seen == band) {
+                Some((_, names)) => names.push(lang.name()),
+                None => groups.push((band, vec![lang.name()])),
+            }
+        }
+        let named = groups.iter().take(BUDGET_LANGS);
+        let shown: Vec<String> = named
+            .map(|(band, names)| format!("{} {}", metrics::band_label(m, *band), names.join("/")))
+            .collect();
+        match groups.len().saturating_sub(BUDGET_LANGS) {
+            0 => shown.join(" · "),
+            rest => format!("{} +{rest}", shown.join(" · ")),
         }
     }
 
@@ -1144,6 +1188,9 @@ type Body<'a> = (&'a str, u32, &'a str);
 
 /// A metric and the finding it produced there.
 type Finding<'a> = (usize, &'a Offender);
+
+/// A budget as a low and a high, either of which may be absent.
+type Band = (Option<f32>, Option<f32>);
 
 /// Every rankable finding one body carries, as one entry.
 ///
@@ -1564,10 +1611,10 @@ fn render_policy(agg: &mut Agg, page: &Page, out: &mut String) {
 /// the head of this table is otherwise dominated by compiled-in defaults,
 /// and a section claiming to compare against admired code must not.
 fn render_shape(agg: &mut Agg, ink: ink::Ink, out: &mut String) {
-    // A budget is per language, so a mixed scan has no single number to
-    // print and `budget_label` rightly says "varies" — which is no use in
-    // a column. The section speaks for the language that dominates the
-    // tree and says which, rather than showing a word where a budget goes.
+    // A budget is per language, so a mixed scan has several and
+    // `budget_label` names them all — too many for a column that also
+    // carries three quantiles. This section speaks for the language that
+    // dominates the tree and says which, so one band can stand per row.
     let Some(lang) = LANGS
         .iter()
         .copied()
@@ -2017,29 +2064,36 @@ fn render_architecture(agg: &mut Agg, out: &mut String) {
 /// Tails, never means: a codebase is as bad as the code you are forced
 /// to read most often.
 fn render_distributions(agg: &mut Agg, out: &mut String) {
+    // Budget LAST, and unpadded. A mixed tree names one band per
+    // language, and a column wide enough for `0%-47% py · 0%-64% cpp ·
+    // 0%-63% sh` pushed every row of `<=0.` thirty characters wide to
+    // pad it. Nothing follows it, so nothing has to.
+    let budgets: Vec<(usize, String)> = METRICS
+        .iter()
+        .enumerate()
+        .filter(|(m, _)| !agg.dists[*m].is_empty())
+        .map(|(m, _)| (m, agg.budget_label(m)))
+        .collect();
     let _ = writeln!(
         out,
-        "{:<15} {:>2} {:>7} {:>7} {:>7} {:>7}   {:<9} {:>8}",
-        "metric", "r", "p50", "p90", "p99", "max", "budget", "violate"
+        "{:<15} {:>2} {:>7} {:>7} {:>7} {:>7} {:>8}   budget",
+        "metric", "r", "p50", "p90", "p99", "max", "violate"
     );
-    for (m, def) in METRICS.iter().enumerate() {
-        if agg.dists[m].is_empty() {
-            continue;
-        }
-        let budget = agg.budget_label(m);
+    for (m, budget) in budgets {
+        let def = &METRICS[m];
         let violate = 100.0 * agg.violations_n[m] as f64 / agg.dists[m].len() as f64;
         let dist = agg.sorted_dist(m);
         let _ = writeln!(
             out,
-            "{:<15} {:>2} {:>7} {:>7} {:>7} {:>7}   {:<9} {:>7.1}%",
+            "{:<15} {:>2} {:>7} {:>7} {:>7} {:>7} {:>7.1}%   {}",
             def.name,
             def.rung,
             fmt(def, quantile(dist, P50)),
             fmt(def, quantile(dist, P90)),
             fmt(def, quantile(dist, P99)),
             fmt(def, *dist.last().expect("non-empty")),
-            budget,
             violate,
+            budget,
         );
     }
     let _ = writeln!(
@@ -2050,6 +2104,11 @@ fn render_distributions(agg: &mut Agg, out: &mut String) {
     let _ = writeln!(
         out,
         "{:<15} a budget ending in `.` rests on the compiled default, not on the gold corpus",
+        ""
+    );
+    let _ = writeln!(
+        out,
+        "{:<15} `<=76 py · <=115 cpp` is one band per language: gold pinned them apart",
         ""
     );
 }
@@ -2098,7 +2157,7 @@ pub fn render_brief(agg: &mut Agg) -> String {
         for (rate, name, rung, budget, p99, max) in rows.iter().take(BRIEF_METRICS) {
             let _ = writeln!(
                 out,
-                "  {name:<16} {rate:>5.1}%   r{rung}  {budget:<9} p99 {p99:<7} max {max}"
+                "  {name:<16} {rate:>5.1}%   r{rung}  p99 {p99:<7} max {max:<7} {budget}"
             );
         }
     }
@@ -3455,6 +3514,40 @@ mod tests {
             clause(costs(&[], &[], REPEATED - 1)),
             "nothing",
             "a handful is not a house style"
+        );
+    }
+
+    /// `varies` named the problem and withheld the answer, and it did
+    /// so on exactly the rows a reader needs the number for: the
+    /// metrics that fire most are the ones calibrated per language.
+    /// Both expectations are pinned to `calibration.toml` on purpose —
+    /// if a recalibration moves `depth` or `length` this test says so,
+    /// the way the README's numbers are pinned.
+    #[test]
+    fn a_mixed_run_names_the_budget_of_every_language_it_judged_by() {
+        // Calibrated budgets, not the compiled defaults: the point of
+        // the label is that gold pinned these languages differently.
+        let mut agg = Agg::configured(
+            crate::config::Layers::flat(LangBudgets::calibrated()),
+            true,
+            Wants::ALL,
+        );
+        for (lang, files) in [
+            (Lang::Python, 40),
+            (Lang::Rust, 30),
+            (Lang::TypeScript, 20),
+            (Lang::Go, 10),
+        ] {
+            agg.files_by_lang[lang as usize] = files;
+        }
+        // Most files first, and languages sharing a band named together
+        // — the label is a budget, not a list of languages.
+        assert_eq!(agg.budget_label(metric("depth")), "<=3 py/rs · <=4 ts/go");
+        // Four distinct bands is more than a column can hold, so the
+        // tail is counted rather than dropped.
+        assert_eq!(
+            agg.budget_label(metric("length")),
+            "<=76 py · <=93 rs · <=106 ts +1"
         );
     }
 

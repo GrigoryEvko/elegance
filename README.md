@@ -377,6 +377,14 @@ file in no declared layer is unjudged rather than guessed at.
 | :--- | :--- |
 | `<=33` | a percentile of the gold corpus |
 | `<=12.` | the compiled-in default — fewer than 200 samples, a policy metric, or a gold p99 of zero |
+| `<=76 py · <=115 cpp · <=109 sh` | a mixed tree: one band per language, most files first, languages sharing a band named together |
+
+A budget is per language, so a mixed scan has several. It used to print
+`varies`, which named the problem and withheld the answer — and did so
+on exactly the rows a reader needs the number for, since the metrics
+that fire most are the ones calibrated per language. Past three distinct
+bands the tail is counted (`+2`) rather than dropped, and the column is
+printed last so a wide label costs no other column any width.
 
 Machine output says the same in a `budget_source` field. Budgets are
 `[lo, hi]` bands, per language: one-sided take gold p99, two-sided take
