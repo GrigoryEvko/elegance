@@ -132,6 +132,17 @@ struct Index {
     file_crate_root: Vec<Option<usize>>,
 }
 
+/// What separates one component of an import target from the next.
+fn component_separators(lang: Lang) -> &'static [char] {
+    match lang {
+        Lang::Lua => &['.', '/'],
+        Lang::Ruby | Lang::Solidity => &['/'],
+        Lang::Php => &['\\'],
+        Lang::Perl => &[':'],
+        _ => &['.'],
+    }
+}
+
 impl Index {
     fn build(files: &[GraphFacts]) -> Index {
         let mut idx = Index {
@@ -201,12 +212,28 @@ impl Index {
             // at run time from a variable, which resolves to nothing
             // and lands in the honesty bucket where it belongs.
             Lang::Shell => self.shell(from, target),
-            // `open Core` names a module, not a path; resolution is by
-            // the module's own name against the scanned files.
-            Lang::OCaml => match self.suffix(&target.split('.').collect::<Vec<_>>()) {
-                Some(i) => Class::Internal(i),
-                None => Class::External,
-            },
+            // Everything below resolves the same way: split the target
+            // on whatever this language uses to separate namespace or
+            // path components, then match the tail against the scanned
+            // files. Only the separators differ.
+            //
+            //   OCaml     `open Core` names a module, by its own name
+            //   Lua       `require "a.b.c"` walks package.path
+            //   Ruby      `require_relative "a/b"` is a path
+            //   Perl      `use Foo::Bar` mirrors the namespace
+            //   PHP       `use Foo\\Bar` likewise
+            //   Solidity  an import names a FILE path
+            //   the rest  a package or namespace names a directory
+            lang => {
+                let parts: Vec<&str> = target
+                    .split(component_separators(lang))
+                    .filter(|p| !p.is_empty())
+                    .collect();
+                match self.suffix(&parts) {
+                    Some(i) => Class::Internal(i),
+                    None => Class::External,
+                }
+            }
         }
     }
 
