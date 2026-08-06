@@ -357,12 +357,35 @@ pub enum CatchSin {
 /// One import edge as written in source: where it points and which
 /// local names it binds (bound names are modules in disguise — they
 /// must not read as envied objects or unnamed magic).
+/// How far a specifier can possibly reach.
+///
+/// The distinction decides what a MISS means, and three resolvers here
+/// already act on it: a Python relative import, a quoted C include and a
+/// shell `source` all report `Unresolved` when they find nothing, while
+/// an absolute Python import and an angled include report `External`.
+/// The generic arm could not express it, so ten languages could only
+/// ever answer Internal or External — and a corpus that resolved nothing
+/// reported itself 100% resolved.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Reach {
+    /// A package name. A miss is an ordinary third-party dependency.
+    #[default]
+    Anywhere,
+    /// A path, or a member of a namespace this project declares. It
+    /// names something that is supposed to be HERE, so a miss is a
+    /// failure to resolve and belongs in the honesty bucket.
+    Project,
+}
+
+#[derive(Default)]
 pub struct ImportInfo {
     /// Normalized target: `a.b`, `..pkg.x`, `./util`, `crate::x::y`,
     /// `<stdio.h>` (angle brackets preserved: definitionally external).
     pub target: Box<str>,
     /// Local names this import introduces.
     pub names: Vec<Box<str>>,
+    /// Whether a miss is a dependency or a failure. See `Reach`.
+    pub reach: Reach,
 }
 
 /// The field names of an anonymous record, when a node is one.

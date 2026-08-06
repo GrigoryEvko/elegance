@@ -260,6 +260,7 @@ pub(super) fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     vec![super::ImportInfo {
         target: text(source).trim_matches(['"', '\'']).into(),
         names,
+        reach: super::Reach::Anywhere,
     }]
 }
 

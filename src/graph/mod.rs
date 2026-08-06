@@ -64,7 +64,7 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
         let row = f
             .imports
             .iter()
-            .map(|imp| match index.classify(i, f, &imp.target) {
+            .map(|imp| match index.classify(i, f, imp) {
                 Class::Internal(j) => {
                     r.internal += 1;
                     Some(j)
@@ -202,7 +202,8 @@ impl Index {
         idx
     }
 
-    fn classify(&self, i: usize, from: &GraphFacts, target: &str) -> Class {
+    fn classify(&self, i: usize, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Class {
+        let target = &*imp.target;
         match from.lang {
             Lang::Python => self.python(from, target),
             Lang::Rust => self.rust(i, from, target),
@@ -236,7 +237,15 @@ impl Index {
                     .collect();
                 match self.suffix(&parts) {
                     Some(i) => Class::Internal(i),
-                    None => Class::External,
+                    // A specifier that named a path, or a member of a
+                    // namespace this project declares, was SUPPOSED to
+                    // be here. Calling that a third-party dependency is
+                    // how a corpus that resolved nothing reported
+                    // itself fully resolved.
+                    None => match imp.reach {
+                        crate::lang::Reach::Project => Class::Unresolved,
+                        crate::lang::Reach::Anywhere => Class::External,
+                    },
                 }
             }
         }
@@ -518,6 +527,7 @@ pub(super) fn fixture(lang: Lang, path: &str, imports: &[&str]) -> GraphFacts {
             .map(|i| crate::facts::ImportFact {
                 target: (*i).into(),
                 names: Vec::new(),
+                reach: crate::lang::Reach::Anywhere,
             })
             .collect(),
         exports: Vec::new(),
@@ -585,6 +595,39 @@ mod tests {
                 external: 1,
                 unresolved: 0
             }
+        );
+    }
+
+    #[test]
+    fn a_specifier_that_named_this_project_reports_a_miss_as_a_miss() {
+        // A corpus that resolved NOTHING used to report itself 100%
+        // resolved: the generic arm could only answer Internal or
+        // External, so every in-repo `require_relative` that failed to
+        // land read as a third-party dependency. roda showed 41
+        // internal / 296 external / 0 unresolved while 161 of those 296
+        // named files inside itself.
+        use crate::facts::ImportFact;
+        use crate::lang::Reach;
+        let imp = |target: &str, reach| ImportFact {
+            target: target.into(),
+            names: Vec::new(),
+            reach,
+        };
+        let mut f = file(Lang::Ruby, "lib/app/core.rb", &[]);
+        f.imports = vec![
+            imp("nowhere/at/all", Reach::Project),
+            imp("nowhere/at/all", Reach::Anywhere),
+        ];
+        let files = [f, file(Lang::Ruby, "lib/app/other.rb", &[])];
+        let (res, _) = super::resolve_imports(&files);
+        assert_eq!(
+            (res.internal, res.external, res.unresolved),
+            (0, 1, 1),
+            "a path that named this project is unresolved; a package name is external"
+        );
+        assert!(
+            res.rate() < 1.0,
+            "a run that resolved nothing cannot report success"
         );
     }
 

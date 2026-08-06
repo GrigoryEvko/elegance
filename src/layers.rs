@@ -164,6 +164,7 @@ mod tests {
                 .map(|t| ImportFact {
                     target: (*t).into(),
                     names: Vec::new(),
+                    reach: crate::lang::Reach::Anywhere,
                 })
                 .collect(),
             exports: Vec::new(),

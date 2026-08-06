@@ -239,6 +239,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
                     out.push(super::ImportInfo {
                         names: name.map(Into::into).into_iter().collect(),
                         target: target.into(),
+                        reach: super::Reach::Anywhere,
                     });
                 }
                 _ => {}

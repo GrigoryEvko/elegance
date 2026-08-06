@@ -215,6 +215,8 @@ pub struct ImportFact {
     pub target: Box<str>,
     /// Local names this import binds (named-import styles only).
     pub names: Vec<Box<str>>,
+    /// Whether a miss is a dependency or a failure to resolve.
+    pub reach: crate::lang::Reach,
 }
 
 /// A sorted set of names, joined with `\u{1f}`, and where it appeared.

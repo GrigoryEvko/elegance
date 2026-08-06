@@ -156,6 +156,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     vec![super::ImportInfo {
         target: target.trim_end_matches("._").into(),
         names: Vec::new(),
+        reach: super::Reach::Anywhere,
     }]
 }
 

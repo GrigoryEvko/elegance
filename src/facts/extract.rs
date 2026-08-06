@@ -1102,6 +1102,7 @@ impl Extractor<'_> {
             self.facts.imports.push(super::ImportFact {
                 target: edge.target,
                 names: edge.names,
+                reach: edge.reach,
             });
         }
     }

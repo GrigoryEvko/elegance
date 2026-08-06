@@ -178,6 +178,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
             Some(super::ImportInfo {
                 target: text.trim_start_matches('\\').into(),
                 names: Vec::new(),
+                reach: super::Reach::Anywhere,
             })
         })
         .collect()

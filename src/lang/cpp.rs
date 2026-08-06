@@ -414,6 +414,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
             vec![super::ImportInfo {
                 target: t.trim_matches('"').into(),
                 names: Vec::new(),
+                reach: super::Reach::Anywhere,
             }]
         })
         .unwrap_or_default()

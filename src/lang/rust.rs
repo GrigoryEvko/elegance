@@ -224,6 +224,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
         out.push(super::ImportInfo {
             target: format!("self::{text}").into(),
             names: Vec::new(),
+            reach: super::Reach::Anywhere,
         });
     }
     if node.kind() == "use_declaration"
@@ -314,6 +315,7 @@ fn use_edges(node: Node, prefix: &str, src: &[u8], out: &mut Vec<super::ImportIn
                     .then(|| leaf.into())
                     .into_iter()
                     .collect(),
+                reach: super::Reach::Anywhere,
             });
         }
         "use_as_clause" => out.push(super::ImportInfo {
@@ -323,6 +325,7 @@ fn use_edges(node: Node, prefix: &str, src: &[u8], out: &mut Vec<super::ImportIn
                 .map(|a| text(a).into())
                 .into_iter()
                 .collect(),
+            reach: super::Reach::Anywhere,
         }),
         "scoped_use_list" => {
             let deeper = join(node.child_by_field_name("path").map(text).unwrap_or(""));
@@ -339,6 +342,7 @@ fn use_edges(node: Node, prefix: &str, src: &[u8], out: &mut Vec<super::ImportIn
         "use_wildcard" => out.push(super::ImportInfo {
             target: format!("{}::*", join(node.named_child(0).map(text).unwrap_or(""))).into(),
             names: Vec::new(),
+            reach: super::Reach::Anywhere,
         }),
         _ => {}
     }

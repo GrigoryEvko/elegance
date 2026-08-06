@@ -161,8 +161,17 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     else {
         return Vec::new();
     };
+    let path = target.trim_matches(['"', '\'']);
     vec![super::ImportInfo {
-        target: target.trim_matches(['"', '\'']).into(),
+        target: path.into(),
+        // `./x.sol` and `../utils/x.sol` name a file HERE, so failing to
+        // find one is a failure rather than a dependency. A bare
+        // specifier may be a remapping onto this project or a real
+        // package, and telling those apart needs the remapping table.
+        reach: match path.starts_with('.') {
+            true => super::Reach::Project,
+            false => super::Reach::Anywhere,
+        },
         names: Vec::new(),
     }]
 }

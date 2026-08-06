@@ -775,6 +775,7 @@ mod tests {
         user.imports = vec![crate::facts::ImportFact {
             target: "pkg.util".into(),
             names: vec!["a".into(), "_secret".into()],
+            reach: crate::lang::Reach::Anywhere,
         }];
         let arch = analyze(
             &[wide, user],

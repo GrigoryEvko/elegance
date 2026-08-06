@@ -257,6 +257,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
                             .map(|r| text(r).into())
                             .into_iter()
                             .collect(),
+                        reach: super::Reach::Anywhere,
                     }),
                     "aliased_import" => out.push(super::ImportInfo {
                         target: child
@@ -269,6 +270,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
                             .map(|a| text(a).into())
                             .into_iter()
                             .collect(),
+                        reach: super::Reach::Anywhere,
                     }),
                     _ => {}
                 }
@@ -292,7 +294,11 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
                     _ => {} // wildcard binds unknowable names
                 }
             }
-            out.push(super::ImportInfo { target, names });
+            out.push(super::ImportInfo {
+                target,
+                names,
+                reach: super::Reach::Anywhere,
+            });
         }
         _ => {}
     }

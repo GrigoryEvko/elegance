@@ -160,6 +160,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     vec![super::ImportInfo {
         target: target.into(),
         names: Vec::new(),
+        reach: super::Reach::Anywhere,
     }]
 }
 

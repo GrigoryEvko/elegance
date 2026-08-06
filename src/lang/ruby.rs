@@ -159,6 +159,13 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     };
     vec![super::ImportInfo {
         target: target.into(),
+        // `require_relative` is a path from this file and must land on
+        // one. `require` searches the load path, where a gem is an
+        // ordinary answer.
+        reach: match callee_text(node, src) {
+            Some("require_relative") => super::Reach::Project,
+            _ => super::Reach::Anywhere,
+        },
         names: Vec::new(),
     }]
 }

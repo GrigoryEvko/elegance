@@ -177,6 +177,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     vec![super::ImportInfo {
         target: text(target).trim_matches('"').into(),
         names: name.map(|n| text(n).into()).into_iter().collect(),
+        reach: super::Reach::Anywhere,
     }]
 }
 
