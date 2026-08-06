@@ -56,7 +56,7 @@ See [plugins/elegance-nudge](plugins/elegance-nudge/README.md).
 | `elegance [paths...]` | scan; findings ranked by how far past budget they sit |
 | `elegance --full [--top N]` | every section and every per-metric offender list |
 | `elegance --brief [paths...]` | the headline only — what kind of trouble, not which unit |
-| `elegance --json [paths...]` | versioned machine output (schema 1) |
+| `elegance --json [paths...]` | versioned machine output (schema 2) |
 | `elegance --explain file[:line]` | per-construct score breakdown |
 | `elegance --baseline write` | record today's violations as the ledger |
 | `elegance --baseline check` | exit 1 on new or worsened violations |
@@ -77,6 +77,37 @@ See [plugins/elegance-nudge](plugins/elegance-nudge/README.md).
 | `--deps` | look inside the dependencies you did not write |
 | `--helm` | values-overlay drift and credentials in YAML |
 | `--render` | render each environment, measure what ships |
+
+### Machine output
+
+`--json` emits **schema 2**; `--sarif` emits SARIF 2.1.0. A format flag
+outranks a verbosity flag — `--json --full` is JSON, because `--json` is
+already full: it caps no offender list and omits no section. `--json
+--sarif` names two formats and is refused rather than silently resolved.
+
+Schema 2 added the per-language denominators. Every metric here is
+per-unit or per-file, so a rate compared across two corpora needs a
+per-language denominator on **both** sides. Dividing one corpus's
+per-language violation counts by its pooled unit total is how a
+comparison once reported `params` firing 651x more often on admired code
+than on real code — a number that was entirely an artifact of the
+division.
+
+```json
+"languages": [
+  { "lang": "rs", "files": 56, "units": 1265,
+    "metrics": [ { "name": "cognitive", "measured": 1321, "violations": 3 } ] }
+]
+```
+
+`measured` is the denominator, not `units`. A metric that also measures a
+file's top level exceeds the unit count — above, `cognitive` measures
+exactly one more per file, because a module scope is code too and `units`
+excludes it. Metrics that skip test bodies, or languages without type
+syntax, fall short of it instead. Summed
+over the languages present, `measured` equals the pooled `n` on the same
+metric and `units` equals the pooled `units` — an invariant the suite
+checks across a merge, since the rows accumulate per worker.
 
 ### The ratchet
 

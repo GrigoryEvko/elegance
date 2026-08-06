@@ -1,5 +1,6 @@
 //! Machine-readable report. The schema is versioned and deliberately
-//! decoupled from internal types: internals may evolve, schema 1 must not.
+//! decoupled from internal types: internals may evolve, a published
+//! schema may only be added to under a new version.
 
 use serde::Serialize;
 
@@ -7,7 +8,11 @@ use super::{Agg, quantile, select_clones, select_clumps, select_switches, worse}
 use crate::lang::LANGS;
 use crate::metrics::METRICS;
 
-pub const SCHEMA_VERSION: u32 = 1;
+/// 2 added per-language units and per-language violation counts per
+/// metric. Before it, `languages` carried file counts alone — and every
+/// metric in this tool is per-unit, so no correct per-language rate
+/// could be derived from what this printed.
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Serialize)]
 struct Report<'a> {
@@ -21,7 +26,10 @@ struct Report<'a> {
     /// Files whose parse quality disqualified their metrics (excluded from
     /// distributions, violations, and clones).
     low_confidence_files: Vec<String>,
-    languages: Vec<LangFiles>,
+    /// Per language: files, units, and what each metric measured and
+    /// violated there. A rate compared across corpora needs a
+    /// per-language denominator on BOTH sides, and these are it.
+    languages: Vec<LangOut>,
     metrics: Vec<Metric>,
     violations: Vec<Violation<'a>>,
     clones: Clones,
@@ -169,9 +177,26 @@ struct ClumpOut {
 }
 
 #[derive(Serialize)]
-struct LangFiles {
+struct LangOut {
     lang: &'static str,
     files: u32,
+    /// Units measured in this language; the top-level `units` is their
+    /// sum. Module scopes are excluded, exactly as they are there.
+    units: u64,
+    /// Metrics this language measured at least once, in registry order.
+    metrics: Vec<LangMetric>,
+}
+
+/// What one metric did in one language. `measured` is the honest
+/// denominator: it counts the measurements that metric actually made
+/// there, which for most metrics is narrower than the language's unit
+/// count — module scopes, test bodies and untyped languages are skipped
+/// by different metrics for different reasons.
+#[derive(Serialize)]
+struct LangMetric {
+    name: &'static str,
+    measured: u64,
+    violations: u64,
 }
 
 #[derive(Serialize)]
@@ -368,6 +393,34 @@ fn summary_out(agg: &Agg, dup: super::Duplication) -> SummaryOut {
     }
 }
 
+/// One row per language present, carrying the denominators a
+/// per-language rate needs: files, units, and per metric the count it
+/// measured beside the count it violated.
+fn language_rows(agg: &Agg) -> Vec<LangOut> {
+    LANGS
+        .iter()
+        .filter(|l| agg.files_by_lang[**l as usize] > 0)
+        .map(|l| {
+            let row = &agg.metric_by_lang[*l as usize];
+            LangOut {
+                lang: l.name(),
+                files: agg.files_by_lang[*l as usize],
+                units: agg.units_by_lang[*l as usize],
+                metrics: METRICS
+                    .iter()
+                    .enumerate()
+                    .filter(|(m, _)| row[*m].measured > 0)
+                    .map(|(m, def)| LangMetric {
+                        name: def.name,
+                        measured: row[m].measured,
+                        violations: row[m].violated,
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
 fn rates_out(agg: &Agg) -> Vec<RateOut> {
     super::rate_rows(agg)
         .into_iter()
@@ -438,14 +491,7 @@ pub fn render_json(agg: &mut Agg) -> String {
         })
         .collect();
 
-    let languages = LANGS
-        .iter()
-        .filter(|l| agg.files_by_lang[**l as usize] > 0)
-        .map(|l| LangFiles {
-            lang: l.name(),
-            files: agg.files_by_lang[*l as usize],
-        })
-        .collect();
+    let languages = language_rows(agg);
 
     let mut low_confidence_files = agg.low_confidence.clone();
     low_confidence_files.sort_unstable();
@@ -506,9 +552,32 @@ mod tests {
 
         let out = render_json(&mut agg);
         let v: serde_json::Value = serde_json::from_str(&out).expect("valid json");
-        assert_eq!(v["schema_version"], 1);
+        assert_eq!(v["schema_version"], 2);
         assert_eq!(v["files"], 2);
         assert_eq!(v["languages"][0]["lang"], "py");
+        // The denominators a per-language rate is computed from. One
+        // language here, so each has to equal its pooled total, and the
+        // per-metric counts have to agree with the pooled metric rows.
+        assert_eq!(v["languages"][0]["units"], v["units"]);
+        let by_lang = |name: &str, field: &str| {
+            v["languages"][0]["metrics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["name"] == name)
+                .unwrap_or_else(|| panic!("{name} measured in py"))[field]
+                .as_u64()
+                .expect("count")
+        };
+        for m in v["metrics"].as_array().unwrap() {
+            let name = m["name"].as_str().unwrap();
+            assert_eq!(
+                by_lang(name, "measured"),
+                m["n"].as_u64().unwrap(),
+                "{name}"
+            );
+        }
+        assert!(by_lang("cognitive", "violations") > 0);
         let cognitive = v["metrics"]
             .as_array()
             .unwrap()

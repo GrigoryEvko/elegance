@@ -205,7 +205,7 @@ struct CloneLoc {
 /// spent on an answer nobody asks for: `calibrate` reads distributions
 /// only, and on the gold corpus it was carrying a 777,638-entry clone map
 /// to the end of the scan and dropping it unread.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Wants {
     pub clones: bool,
     pub prints: bool,
@@ -327,6 +327,17 @@ pub struct Agg {
     pub test_units: u64,
     budgets: crate::config::Layers,
     files_by_lang: [u32; LANGS.len()],
+    /// Units per language. Every metric here is per-unit or per-file, so
+    /// a per-language RATE needs a per-language denominator on both sides
+    /// of any comparison: dividing one language's violations by the whole
+    /// run's units is how a corpus comparison once reported `params`
+    /// firing 651x more often on admired code than on real code.
+    units_by_lang: [u64; LANGS.len()],
+    /// Per language, per metric, what that language measured and what
+    /// broke its budget. Neither is recoverable from the pooled totals:
+    /// budgets are per-language, and a metric's measurement domain is
+    /// narrower than "units" for most of them.
+    metric_by_lang: [[LangTally; N]; LANGS.len()],
     /// Violation counts, recorded at add time — with per-language budgets
     /// they cannot be recomputed from the mixed distributions.
     violations_n: [u64; N],
@@ -387,6 +398,23 @@ struct UntestedCandidate {
     cyclomatic: u32,
 }
 
+/// One language's tally for one metric: how many measurements it made,
+/// and how many of them broke that language's budget. `measured` is the
+/// exact denominator — `units` over-counts for every metric a module
+/// scope, a test body or an untyped language never reaches.
+#[derive(Clone, Copy)]
+struct LangTally {
+    measured: u64,
+    violated: u64,
+}
+
+impl LangTally {
+    const ZERO: LangTally = LangTally {
+        measured: 0,
+        violated: 0,
+    };
+}
+
 impl Agg {
     #[cfg(test)]
     pub fn new() -> Agg {
@@ -421,6 +449,8 @@ impl Agg {
             test_units: 0,
             budgets,
             files_by_lang: [0; LANGS.len()],
+            units_by_lang: [0; LANGS.len()],
+            metric_by_lang: [[LangTally::ZERO; N]; LANGS.len()],
             violations_n: [0; N],
             total_mass: 0,
             cap: if complete { usize::MAX } else { KEEP },
@@ -481,7 +511,9 @@ impl Agg {
     fn absorb(&mut self, facts: &FileFacts) {
         let path = facts.path.display().to_string();
         let shared: std::sync::Arc<str> = path.as_str().into();
+        let lang = facts.lang as usize;
         self.units += (facts.units.len() - 1) as u64;
+        self.units_by_lang[lang] += (facts.units.len() - 1) as u64;
         self.test_units += facts.units.iter().filter(|u| u.is_test).count() as u64;
         self.total_mass += facts.mass as u64;
         self.junk_files += is_junk_drawer(facts) as u32;
@@ -530,7 +562,9 @@ impl Agg {
                 cell.1 += 1;
             }
             self.dists[m].push(value);
+            self.metric_by_lang[lang][m].measured += 1;
             if budgets.violates(m, value) {
+                self.metric_by_lang[lang][m].violated += 1;
                 self.violations_n[m] += 1;
                 let o = Offender {
                     value,
@@ -625,6 +659,56 @@ impl Agg {
             .merge(&mut b.untested_candidates, |d, s| d.append(s));
     }
 
+    /// Fold the per-LANGUAGE tables. Each is a fixed array indexed by
+    /// `Lang` and each folds elementwise; only what an element IS
+    /// differs, which is why they belong together rather than strung
+    /// through the counters above them.
+    fn merge_by_lang(&mut self, b: &Agg) {
+        for (i, n) in b.files_by_lang.iter().enumerate() {
+            self.files_by_lang[i] += n;
+        }
+        for (i, n) in b.units_by_lang.iter().enumerate() {
+            self.units_by_lang[i] += n;
+        }
+        for (lang, row) in b.metric_by_lang.iter().enumerate() {
+            for (m, t) in row.iter().enumerate() {
+                self.metric_by_lang[lang][m].measured += t.measured;
+                self.metric_by_lang[lang][m].violated += t.violated;
+            }
+        }
+        for (lang, row) in b.narrative.iter().enumerate() {
+            for (k, v) in row.iter().enumerate() {
+                self.narrative[lang][k] += v;
+            }
+        }
+        for (lang, row) in b.spellings.iter().enumerate() {
+            for (case, n) in row.iter().enumerate() {
+                self.spellings[lang][case] += n;
+            }
+        }
+        for (lang, row) in b.rates.iter().enumerate() {
+            for (r, (covered, total)) in row.iter().enumerate() {
+                self.rates[lang][r].0 += covered;
+                self.rates[lang][r].1 += total;
+            }
+        }
+        self.absorb_comments(&b.comments);
+    }
+
+    /// Fold the per-METRIC tables: distributions concatenate, violation
+    /// counts add, and offenders re-enter the retention heap so the cap
+    /// applies to the merged list rather than to each half.
+    fn merge_by_metric(&mut self, b: &mut Agg) {
+        let cap = self.cap;
+        for m in 0..N {
+            self.violations_n[m] += b.violations_n[m];
+            self.dists[m].append(&mut b.dists[m]);
+            for o in b.offenders[m].drain(..) {
+                push_offender(&mut self.offenders[m], o, cap);
+            }
+        }
+    }
+
     pub fn merge(mut a: Agg, mut b: Agg) -> Agg {
         a.files += b.files;
         a.skipped += b.skipped;
@@ -637,35 +721,9 @@ impl Agg {
         a.total_mass += b.total_mass;
         a.cap = a.cap.max(b.cap);
         a.low_confidence.append(&mut b.low_confidence);
-        for (i, n) in b.files_by_lang.iter().enumerate() {
-            a.files_by_lang[i] += n;
-        }
+        a.merge_by_lang(&b);
         a.merge_accumulators(&mut b);
-        for (lang, row) in b.narrative.iter().enumerate() {
-            for (k, v) in row.iter().enumerate() {
-                a.narrative[lang][k] += v;
-            }
-        }
-        for (lang, row) in b.spellings.iter().enumerate() {
-            for (case, n) in row.iter().enumerate() {
-                a.spellings[lang][case] += n;
-            }
-        }
-        a.absorb_comments(&b.comments);
-        for (lang, row) in b.rates.iter().enumerate() {
-            for (r, (covered, total)) in row.iter().enumerate() {
-                a.rates[lang][r].0 += covered;
-                a.rates[lang][r].1 += total;
-            }
-        }
-        for m in 0..N {
-            a.violations_n[m] += b.violations_n[m];
-            a.dists[m].append(&mut b.dists[m]);
-            let cap = a.cap;
-            for o in b.offenders[m].drain(..) {
-                push_offender(&mut a.offenders[m], o, cap);
-            }
-        }
+        a.merge_by_metric(&mut b);
         a
     }
 
@@ -791,7 +849,9 @@ impl Agg {
         for &(m, value) in values {
             let m = m as usize;
             self.dists[m].push(value);
+            self.metric_by_lang[lang as usize][m].measured += 1;
             if budgets.violates(m, value) {
+                self.metric_by_lang[lang as usize][m].violated += 1;
                 self.violations_n[m] += 1;
             }
         }
@@ -2631,6 +2691,39 @@ mod tests {
     /// and one clone class — both tie-break paths get exercised.
     const TWIN: &str = "def NAME(xs):\n    t = 0\n    for x in xs:\n        if x > 0:\n            if x > 1:\n                if x > 2:\n                    if x > 3:\n                        if x > 4:\n                            t += x\n    return t\n";
 
+    /// The per-language denominators are only worth having if they add
+    /// up to the pooled totals this report has always printed — a
+    /// language row that silently lost a unit would produce exactly the
+    /// kind of inflated rate it exists to prevent. Two languages and a
+    /// merge, because the rows are accumulated per rayon worker and
+    /// folded together afterwards.
+    #[test]
+    fn language_rows_reconcile_with_the_pooled_totals() {
+        let rust = {
+            let pack = Lang::Rust.pack();
+            let mut parser = pack.make_parser();
+            let src = "pub fn total(xs: &[i32]) -> i32 {\n    let mut t = 0;\n    for x in xs {\n        if *x > 0 {\n            t += *x;\n        }\n    }\n    t\n}\n";
+            extract(pack, &mut parser, Path::new("b.rs"), src)
+        };
+        let mut left = Agg::new();
+        left.add_file(&facts("a.py", &TWIN.replace("NAME", "f0")));
+        let mut right = Agg::new();
+        right.add_file(&rust);
+        let agg = Agg::merge(left, right);
+
+        assert_eq!(agg.units_by_lang.iter().sum::<u64>(), agg.units);
+        assert!(agg.units_by_lang[Lang::Python as usize] > 0);
+        assert!(agg.units_by_lang[Lang::Rust as usize] > 0);
+        for m in 0..N {
+            let cell = |l: &Lang| agg.metric_by_lang[*l as usize][m];
+            let measured: u64 = LANGS.iter().map(|l| cell(l).measured).sum();
+            let violated: u64 = LANGS.iter().map(|l| cell(l).violated).sum();
+            let name = metrics::METRICS[m].name;
+            assert_eq!(measured as usize, agg.dists[m].len(), "{name} measured");
+            assert_eq!(violated, agg.violations_n[m], "{name} violated");
+        }
+    }
+
     #[test]
     fn every_mode_asks_for_what_it_reads() {
         // A `Wants` set is declared by hand, and a mode that forgets one
@@ -2676,7 +2769,18 @@ mod tests {
                 render_brief,
             ),
             ("--json", Wants::ALL, crate::report::json::render_json),
-            ("--sarif", Wants::ALL, crate::report::sarif::render),
+            (
+                "--sarif",
+                Wants {
+                    clones: true,
+                    prints: true,
+                    graph: true,
+                    clumps: true,
+                    sets: true,
+                    ..Wants::NONE
+                },
+                crate::report::sarif::render,
+            ),
             (
                 "--by",
                 Wants {

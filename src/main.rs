@@ -127,9 +127,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Every mode that COUNTS across violations needs them all: 64 per
     // metric undercounts any aggregate read from them, by 789 files to
-    // 55 on `flag params` and 1107 tensions to 249. `--brief` is exempt
-    // because it reads distributions and totals, never the offenders.
-    let complete = !args.brief;
+    // 55 on `flag params` and 1107 tensions to 249. Only the mode that
+    // actually renders decides — `--brief` beside `--json` no longer
+    // caps a report `--brief` is not going to print.
+    let shape = shape(&args);
+    let complete = shape != Shape::Brief;
     let layers = config::layers(&args.roots[0])?;
     // A reader of one table should know it is not one budget.
     match layers.count() {
@@ -137,7 +139,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         1 => println!("1 package sets its own budgets\n"),
         n => println!("{n} packages set their own budgets\n"),
     }
-    let wants = wants_for(&args);
+    let wants = wants_for(shape);
     let mut agg = scan(&files, layers, complete, wants);
     // A contract is a question about the whole graph, so it is asked
     // once the scan is done rather than per file — and only where the
@@ -193,18 +195,15 @@ fn present(args: &Args, agg: &mut Agg) -> Result<(), Box<dyn Error>> {
     if args.hotspots {
         std::process::exit(hotspots::run(agg, root, args.top)?);
     }
-    let rendered = if args.rollup {
-        rollup::run(agg, args.top)
-    } else if args.brief {
-        report::render_brief(agg)
-    } else if args.full {
-        report::render_full(agg, args.top)
-    } else if args.sarif {
-        report::render_sarif(agg)
-    } else if args.json {
-        report::render_json(agg)
-    } else {
-        report::render(agg, report::ink::Ink::stdout())
+    let rendered = match shape(args) {
+        Shape::Rollup => rollup::run(agg, args.top),
+        Shape::Json => report::render_json(agg),
+        Shape::Sarif => report::render_sarif(agg),
+        Shape::Brief => report::render_brief(agg),
+        Shape::Full => report::render_full(agg, args.top),
+        // Every mode `Owned` covers exited above, so only a shape that
+        // renders reaches this match.
+        Shape::Owned | Shape::Default => report::render(agg, report::ink::Ink::stdout()),
     };
     print!("{rendered}");
     Ok(())
@@ -259,38 +258,85 @@ const WORKER_STACK: usize = 32 * 1024 * 1024;
 /// never built. A mode that reads one it did not ask for panics in a
 /// debug build; `every_mode_asks_for_what_it_reads` runs them all to
 /// prove the sets are complete.
-fn wants_for(args: &Args) -> report::Wants {
-    use report::Wants;
-    // Machine output and the full report render everything there is.
-    if args.json || args.full || args.sarif {
-        return Wants::ALL;
+/// The report a set of flags selects — and the whole of the precedence
+/// rule between them, in one place, because three parallel `else if`
+/// chains that must agree is how `--json --full` came to print the human
+/// report while `wants_for` sized the scan for JSON.
+///
+/// The order is: a mode that answers a DIFFERENT question, then the
+/// FORMAT, then the VERBOSITY. A format outranking a verbosity costs
+/// nothing — `--json` is already full, capping no list and omitting no
+/// section — and two formats at once is refused in `parse_args`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Shape {
+    /// `--baseline`, `--history`, `--hotspots`: each decides its own
+    /// exit code and never returns to the renderer.
+    Owned,
+    Rollup,
+    Json,
+    Sarif,
+    Brief,
+    Full,
+    Default,
+}
+
+fn shape(args: &Args) -> Shape {
+    if args.baseline.is_some() || args.history.is_some() || args.hotspots {
+        Shape::Owned
+    } else if args.rollup {
+        Shape::Rollup
+    } else if args.json {
+        Shape::Json
+    } else if args.sarif {
+        Shape::Sarif
+    } else if args.brief {
+        Shape::Brief
+    } else if args.full {
+        Shape::Full
+    } else {
+        Shape::Default
     }
-    // The headline still reports a duplication share: that needs the
-    // clone classes, and the graph to tell a test file from a source
-    // one so the share can be quoted both ways.
-    if args.brief {
-        return Wants {
+}
+
+fn wants_for(shape: Shape) -> report::Wants {
+    use report::Wants;
+    match shape {
+        // Ratchet, trend and hotspot modes rank offenders, which are not
+        // corpus-sized: they are capped per metric.
+        Shape::Owned => Wants::NONE,
+        // A rollup groups the graph's files by directory.
+        Shape::Rollup => Wants {
+            graph: true,
+            ..Wants::NONE
+        },
+        // SARIF carries violations plus the findings that are about a
+        // SET of sites — clone classes, near-clones, param clumps,
+        // repeated dispatch. It has no architecture section, no synonym
+        // table and no untested-complexity join, so it asks for none of
+        // their state. The graph it does need: the duplication split
+        // reads it to tell a test file from a production one.
+        Shape::Sarif => Wants {
+            clones: true,
+            prints: true,
+            graph: true,
+            clumps: true,
+            sets: true,
+            ..Wants::NONE
+        },
+        // The headline still reports a duplication share: that needs the
+        // clone classes, and the graph to tell a test file from a source
+        // one so the share can be quoted both ways.
+        Shape::Brief => Wants {
             clones: true,
             graph: true,
             ..Wants::NONE
-        };
+        },
+        // Machine output, `--full` and the default report each render
+        // everything there is: tensions pair a clone class, a
+        // load-bearing file and an untested unit, and the shape section
+        // reads the recurrences.
+        Shape::Json | Shape::Full | Shape::Default => Wants::ALL,
     }
-    // Ratchet, trend and hotspot modes rank offenders, which are not
-    // corpus-sized: they are capped per metric.
-    if args.baseline.is_some() || args.history.is_some() || args.hotspots {
-        return Wants::NONE;
-    }
-    // A rollup groups the graph's files by directory.
-    if args.rollup {
-        return Wants {
-            graph: true,
-            ..Wants::NONE
-        };
-    }
-    // The default report: tensions pair a clone class, a load-bearing
-    // file and an untested unit, and the shape section reads the
-    // recurrences.
-    Wants::ALL
 }
 
 /// Workers to scan with: PHYSICAL cores, not threads.
@@ -434,8 +480,9 @@ fn answers_and_exits(flag: &str) -> bool {
     std::process::exit(0);
 }
 
-fn parse_args() -> Result<Args, Box<dyn Error>> {
-    let mut args = Args {
+/// Every flag off and no roots — what `parse_args` starts from.
+fn defaults() -> Args {
+    Args {
         roots: Vec::new(),
         top: 10,
         json: false,
@@ -459,7 +506,11 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
         deps: false,
         helm: false,
         render: false,
-    };
+    }
+}
+
+fn parse_args() -> Result<Args, Box<dyn Error>> {
+    let mut args = defaults();
     let mut it = std::env::args_os().skip(1);
     while let Some(arg) = it.next() {
         let Some(flag) = arg.to_str() else {
@@ -485,6 +536,12 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
     }
     if args.roots.is_empty() {
         args.roots.push(PathBuf::from("."));
+    }
+    // Two formats is a request with no answer, and silently picking one
+    // is how a pipeline ends up parsing the other. Verbosity flags beside
+    // a format are fine — the format simply wins.
+    if args.json && args.sarif {
+        return Err("--json and --sarif are two formats; pass one".into());
     }
     Ok(args)
 }
@@ -515,7 +572,7 @@ usage: elegance [paths...]                 report; defaults to .
   --top N                                  offenders shown per metric
   --brief                                  the headline only: what kind of trouble, not which unit
   --full                                   every section and every offender list
-  --json | --sarif                         machine output (schema 1 / SARIF 2.1.0)
+  --json | --sarif                         machine output (schema 2 / SARIF 2.1.0)
   --explain file[:line]                    per-construct breakdown of one unit
   --context                                the repo's measured style, to read BEFORE writing
   --baseline write|check [--fail-on RUNG]  the CI ratchet
@@ -706,4 +763,75 @@ fn collect_files(roots: &[PathBuf], cfg: &config::Config) -> Vec<PathBuf> {
     files.sort_unstable();
     files.dedup();
     files
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A format flag must not lose to a verbosity flag. `--json --full`
+    /// returned the HUMAN report for as long as `present` tested
+    /// `--full` first, and a scan sized by `wants_for` for JSON went
+    /// with it — a wart no test could see while the rule lived in three
+    /// `else if` chains instead of one function.
+    #[test]
+    fn a_format_outranks_a_verbosity() {
+        let with = |set: fn(&mut Args)| {
+            let mut args = defaults();
+            set(&mut args);
+            shape(&args)
+        };
+        assert_eq!(
+            with(|a| {
+                a.json = true;
+                a.full = true;
+            }),
+            Shape::Json
+        );
+        assert_eq!(
+            with(|a| {
+                a.json = true;
+                a.brief = true;
+            }),
+            Shape::Json
+        );
+        assert_eq!(
+            with(|a| {
+                a.sarif = true;
+                a.full = true;
+            }),
+            Shape::Sarif
+        );
+        // Each flag alone still selects itself.
+        assert_eq!(with(|a| a.json = true), Shape::Json);
+        assert_eq!(with(|a| a.full = true), Shape::Full);
+        assert_eq!(with(|a| a.brief = true), Shape::Brief);
+        assert_eq!(with(|_| {}), Shape::Default);
+    }
+
+    /// A mode answering a DIFFERENT question keeps its precedence over
+    /// the format: `--by` and `--hotspots` are not the standard report
+    /// in another encoding, and neither has a JSON form to fall back to.
+    #[test]
+    fn a_different_question_outranks_a_format() {
+        let mut args = defaults();
+        args.json = true;
+        args.rollup = true;
+        assert_eq!(shape(&args), Shape::Rollup);
+        args.hotspots = true;
+        assert_eq!(shape(&args), Shape::Owned);
+    }
+
+    /// Only `--brief` may cap the offender lists, and only where it is
+    /// the mode that renders. `--json --brief` used to print the brief
+    /// human report; now it prints JSON, and that JSON must carry every
+    /// violation rather than the first 64 per metric.
+    #[test]
+    fn only_a_rendering_brief_caps_the_offenders() {
+        let mut args = defaults();
+        args.json = true;
+        args.brief = true;
+        assert_ne!(shape(&args), Shape::Brief);
+        assert_eq!(wants_for(shape(&args)), report::Wants::ALL);
+    }
 }
