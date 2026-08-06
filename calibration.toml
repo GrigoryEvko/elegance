@@ -436,7 +436,7 @@
 "params" = { hi = 6.0 }
 "expr depth" = { hi = 18.0 }
 "live span" = { hi = 32.0 }
-"magic numbers" = { hi = 9.0 }
+"magic numbers" = { hi = 12.0 }
 "comment ratio" = { lo = 0.02, hi = 0.76 }
 "loose types" = { hi = 3.0 }
 "casts" = { hi = 4.0 }

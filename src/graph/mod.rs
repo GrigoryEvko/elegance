@@ -141,7 +141,7 @@ struct Index {
 fn component_separators(lang: Lang) -> &'static [char] {
     match lang {
         Lang::Lua => &['.', '/'],
-        Lang::Ruby | Lang::Solidity => &['/'],
+        Lang::Ruby => &['/'],
         Lang::Php => &['\\'],
         Lang::Perl => &[':'],
         _ => &['.'],
@@ -220,6 +220,9 @@ impl Index {
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => self.web(from, target),
             Lang::Go => self.go(target),
             Lang::Swift => self.swift(target),
+            // An import names a FILE, and the generic arm dropped the
+            // extension on one side of the comparison only.
+            Lang::Solidity => self.solidity(from, imp),
             Lang::Zig => self.zig(from, target),
             // C++ includes resolve exactly as C's do: a quoted path is
             // relative to the including file, an angled one is a
@@ -517,28 +520,47 @@ impl Index {
         }
         // The include directory is unknowable, so match the whole
         // specifier against file paths instead of just its last segment.
+        let segs = segments(path);
         let least = if angled { 2 } else { 1 };
-        match self
-            .path_suffix(path)
-            .filter(|_| segments(path).len() >= least)
-        {
+        match self.path_suffix(&segs).filter(|_| segs.len() >= least) {
             Some(i) => Class::Internal(i),
             None if angled => Class::External,
             None => Class::Unresolved,
         }
     }
 
-    /// The one file whose path ends with `target`'s segments. `None`
-    /// when none does, and equally when several do: which of them an
-    /// include means is decided by a search path that is not in the
-    /// source.
-    fn path_suffix(&self, target: &str) -> Option<usize> {
+    /// A Solidity import names a FILE. `./x.sol` and `../utils/x.sol`
+    /// are paths from the importing file, so a miss there is a miss. A
+    /// bare specifier is a remapping, and openzeppelin-contracts remaps
+    /// `@openzeppelin/contracts/...` onto itself — the table that says
+    /// so lives in foundry.toml, so the longest tail naming exactly one
+    /// file is taken instead, never below two components.
+    fn solidity(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Class {
+        let target = &*imp.target;
+        let joined = normalize(from.path.parent().unwrap_or(Path::new("")), target);
+        if let Some(&i) = self.paths.get(&joined) {
+            return Class::Internal(i);
+        }
+        if imp.reach == crate::lang::Reach::Project {
+            return Class::Unresolved;
+        }
         let segs = segments(target);
+        (2..=segs.len())
+            .rev()
+            .find_map(|take| self.path_suffix(&segs[segs.len() - take..]))
+            .map_or(Class::External, Class::Internal)
+    }
+
+    /// The one file whose path ends with these segments. `None` when
+    /// none does, and equally when several do: which of them a
+    /// specifier means is decided by a search path or a remapping
+    /// table that is not in the source.
+    fn path_suffix(&self, segs: &[&str]) -> Option<usize> {
         let mut hits = self
             .basenames
             .get(*segs.last()?)?
             .iter()
-            .filter(|(c, _)| ends_with(c, &segs));
+            .filter(|(c, _)| ends_with(c, segs));
         let &(_, i) = hits.next()?;
         hits.next().is_none().then_some(i)
     }
@@ -876,6 +898,47 @@ mod tests {
                 unresolved: 1
             }
         );
+    }
+
+    #[test]
+    fn a_solidity_import_names_a_file_extension_and_all() {
+        // The generic arm split "../utils/Context.sol" into segments
+        // and matched them against module components, which have the
+        // extension stripped — present on one side, absent on the
+        // other, and `..` folded on neither. A guaranteed miss:
+        // openzeppelin's 367 contracts produced zero internal edges and
+        // no architecture section at all.
+        use crate::facts::ImportFact;
+        use crate::lang::Reach;
+        let imp = |target: &str, reach| ImportFact {
+            target: target.into(),
+            names: Vec::new(),
+            reach,
+        };
+        let mut ownable = file(Lang::Solidity, "contracts/access/Ownable.sol", &[]);
+        ownable.imports = vec![
+            imp("../utils/Context.sol", Reach::Project),
+            imp(
+                "@openzeppelin/contracts/utils/math/Math.sol",
+                Reach::Anywhere,
+            ),
+            imp("forge-std/Test.sol", Reach::Anywhere),
+            imp("../utils/Gone.sol", Reach::Project),
+        ];
+        let files = [
+            ownable,
+            file(Lang::Solidity, "contracts/utils/Context.sol", &[]),
+            file(Lang::Solidity, "contracts/utils/math/Math.sol", &[]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[0][0], Some(idx("contracts/utils/Context.sol")));
+        // A remapping onto the project itself, found by its longest
+        // unique tail, since foundry.toml is not in the source.
+        assert_eq!(targets[0][1], Some(idx("contracts/utils/math/Math.sol")));
+        assert_eq!(targets[0][2], None, "forge-std is a real dependency");
+        assert_eq!(targets[0][3], None, "a path that names nothing is a miss");
+        assert_eq!((res.internal, res.external, res.unresolved), (2, 1, 1));
     }
 
     #[test]

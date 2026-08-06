@@ -130,11 +130,19 @@ pub fn pack() -> Pack {
         // All five gold `unwraps` findings in Solidity were one such
         // directory, v3-core/audits/tob/contracts/crytic/echidna, and
         // every one was an invariant.
+        //
+        // A mock contract and a verification harness are the same kind
+        // of thing one tier out: openzeppelin files 108 of them under
+        // contracts/mocks and 20 under fv/harnesses, aave 21 and 8, and
+        // none is deployed. `/harness` catches `harnesses` too.
         test_path: |p| {
             p.contains("/test/")
                 || p.ends_with(".t.sol")
                 || p.contains("/echidna/")
                 || p.contains("/crytic/")
+                || p.contains("/mocks/")
+                || p.contains("/harness")
+                || p.contains("/fv/")
         },
         asserty,
         is_hook: |_, _| false,
@@ -363,5 +371,31 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
             Sem::ElseIf
         }
         _ => sem,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_mock_and_a_verification_harness_are_not_deployed_code() {
+        // openzeppelin files 108 mock contracts under contracts/mocks
+        // and 20 harnesses under fv/harnesses; aave 21 and 8. They
+        // exist for the suite and the prover, and counting them as
+        // production put 73% of the residual orphans there.
+        let is_test = super::pack().test_path;
+        for p in [
+            "openzeppelin-contracts/contracts/mocks/AccessManagerMock.sol",
+            "openzeppelin-contracts/fv/harnesses/Ownable2StepHarness.sol",
+            "aave-v3-core/certora/harness/PoolHarness.sol",
+            "v3-core/test/UniswapV3Pool.spec.sol",
+        ] {
+            assert!(is_test(p), "{p}");
+        }
+        for p in [
+            "openzeppelin-contracts/contracts/access/Ownable.sol",
+            "aave-v3-core/contracts/protocol/pool/Pool.sol",
+        ] {
+            assert!(!is_test(p), "{p}");
+        }
     }
 }
