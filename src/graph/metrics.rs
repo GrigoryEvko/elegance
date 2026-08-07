@@ -728,10 +728,43 @@ fn package_of(path: &Path) -> String {
 /// ever matched. Reading the first segment exempts 360 tsx files and
 /// exactly none in ts or js.
 fn entryish(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|s| s.to_str())
-        .and_then(|s| s.split('.').next())
-        .is_some_and(|s| ENTRY_STEMS.contains(&s))
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    let stem = name.split('.').next().unwrap_or("");
+    ENTRY_STEMS.contains(&stem) || routed(path, name, stem)
+}
+
+/// The eight filenames Next.js reserves inside an `app/` or `pages/`
+/// tree. The router loads each by NAME, so nothing imports one, and 78
+/// of gold tsx's 506 orphans are one.
+///
+/// Both narrowings are load-bearing rather than decoration. Without the
+/// extension the stems reach musl's `include/net/route.h` and immer's
+/// eight `default.cpp`; with it but without the directory they still
+/// reach vscode's `layout.ts`, mithril's `route.js` and trpc's
+/// `error.ts`, which are ordinary modules their neighbours import.
+fn routed(path: &Path, name: &str, stem: &str) -> bool {
+    const ROUTE_FILES: &[&str] = &[
+        "page",
+        "layout",
+        "loading",
+        "error",
+        "not-found",
+        "template",
+        "default",
+        "route",
+    ];
+    const ROUTE_ROOTS: &[&str] = &["app", "pages"];
+    let web = name
+        .rsplit('.')
+        .next()
+        .is_some_and(|ext| matches!(ext, "tsx" | "ts" | "jsx" | "js"));
+    web && ROUTE_FILES.contains(&stem)
+        && path
+            .parent()
+            .into_iter()
+            .flat_map(Path::ancestors)
+            .filter_map(|a| a.file_name()?.to_str())
+            .any(|d| ROUTE_ROOTS.contains(&d))
 }
 
 /// One flag per file: can this module be asked whether anything depends
@@ -754,7 +787,24 @@ fn judgeable(files: &[&GraphFacts], fan_in: &[u32]) -> Vec<bool> {
 /// and dropping those from the population raised Lua's orphan rate
 /// instead of lowering it.
 fn runs_once(path: &Path) -> bool {
-    crate::facts::one_shot_dir(&crate::facts::rooted(&path.display().to_string()))
+    let norm = crate::facts::rooted(&path.display().to_string());
+    crate::facts::one_shot_dir(&norm) || glob_loaded(path)
+}
+
+/// A file a TOOL collects by pattern rather than one any code imports,
+/// and the pattern is in the repository: primer-react's
+/// `.storybook/main.ts` writes `stories: ['../src/**/*.stories.tsx']`,
+/// and Figma's Code Connect claims `.figma.tsx` the same way. 338 of
+/// gold tsx's 506 orphans carry one of the two markers.
+///
+/// The marker is an INNER dot-segment, so `Button.stories.tsx` matches
+/// and a module honestly named `stories.tsx` does not.
+fn glob_loaded(path: &Path) -> bool {
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    let mut segments = name.split('.');
+    segments.next();
+    segments.next_back();
+    segments.any(|s| matches!(s, "stories" | "figma"))
 }
 
 /// The judged population, and the share of it that nothing transitively
@@ -1015,6 +1065,32 @@ mod tests {
         // Nothing imports Demo, and that is the answer worth reading.
         assert_eq!(arch.orphans, ["Sources/Demo/Server.swift"]);
         assert_eq!(arch.orphan_count, 1);
+    }
+
+    #[test]
+    fn a_file_a_tool_collects_by_pattern_is_not_asked_who_imports_it() {
+        // primer-react's `.storybook/main.ts` writes
+        // `stories: ['../src/**/*.stories.tsx']`, so the glob is IN the
+        // repository; Figma's Code Connect claims `.figma.tsx` the same
+        // way. And Next.js reserves eight filenames inside an `app/`
+        // tree, loading each by name. 416 of gold tsx's 506 orphans are
+        // one of the three, and none of them has an import to fix.
+        let files = [
+            fixture(Lang::Tsx, "src/Button.tsx", &["./Spinner"]),
+            fixture(Lang::Tsx, "src/Spinner.tsx", &[]),
+            fixture(Lang::Tsx, "src/Button.stories.tsx", &["./Button"]),
+            fixture(Lang::Tsx, "src/Button.figma.tsx", &["./Button"]),
+            fixture(Lang::Tsx, "app/docs/page.tsx", &["./Button"]),
+            fixture(Lang::Tsx, "src/stories.tsx", &[]),
+            fixture(Lang::Tsx, "src/layout.tsx", &[]),
+        ];
+        let arch = arch(&files);
+        // The two glob-loaded files leave the population; the route
+        // file stays in it and stops counting as unreferenced.
+        assert_eq!(arch.judged_modules, 5);
+        // A module honestly NAMED stories.tsx is not one, and `layout`
+        // outside a route tree is an ordinary module — vscode ships two.
+        assert_eq!(arch.orphans, ["src/layout.tsx", "src/stories.tsx"]);
     }
 
     #[test]
