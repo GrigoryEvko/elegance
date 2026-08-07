@@ -152,11 +152,30 @@ fn name_node(node: Node) -> Option<Node> {
 /// `require`, `require_relative`, `load` and `autoload` are the import
 /// forms. `autoload` names the constant first and the file second, so
 /// the target is the first STRING argument rather than the first.
+///
+/// A `"#{__dir__}/..."` literal is an import form too, whatever call it
+/// is written in: `__dir__` is the directory of the file holding it, so
+/// the literal states `require_relative`'s argument the long way. Ruby
+/// reaches for it wherever a load must not depend on `$LOAD_PATH`, and
+/// the load is then commonly wrapped in a project's own verb. rubocop
+/// writes 609 of them as `register_cop :Alias, "#{__dir__}/style/alias"`
+/// and 86 as `autoload :Alignment, "#{__dir__}/mixin/alignment"`; those
+/// 609 cop files are 55% of every orphan in the Ruby corpus.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    if !requires(node, src) {
+    let Some(string) = requires(node, src).then(|| first_string(node)).flatten() else {
+        return Vec::new();
+    };
+    if let Some(path) = dir_rooted_path(string, src) {
+        return vec![super::ImportInfo {
+            target: path.into(),
+            reach: super::Reach::Project,
+            names: Vec::new(),
+        }];
+    }
+    if !names_a_load(node, src) {
         return Vec::new();
     }
-    let Some(target) = first_string(node, src) else {
+    let Some(target) = string_content(string, src) else {
         return Vec::new();
     };
     vec![super::ImportInfo {
@@ -170,6 +189,38 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
         },
         names: Vec::new(),
     }]
+}
+
+/// The path a `"#{__dir__}/x/y"` literal names, relative to the file
+/// holding it — here `/x/y`, which `normalize` folds onto the file's own
+/// directory exactly as it folds a `require_relative` argument.
+///
+/// Two narrowings keep this to loads. A FURTHER interpolation makes the
+/// rest of the path a run-time value, and there is nothing to read.
+/// And an extension other than `.rb` names data rather than a module:
+/// rubocop's `File.exist?("#{__dir__}/../rubocop.gemspec")` is the
+/// corpus's one such literal, and it is already excluded by the
+/// receiver its call carries.
+fn dir_rooted_path(string: Node, src: &[u8]) -> Option<String> {
+    let mut cursor = string.walk();
+    let mut parts = string.named_children(&mut cursor);
+    let head = parts.next()?;
+    if head.kind() != "interpolation" || head.named_child(0)?.utf8_text(src).ok()? != "__dir__" {
+        return None;
+    }
+    let mut path = String::new();
+    for part in parts {
+        if part.kind() != "string_content" {
+            return None;
+        }
+        path.push_str(part.utf8_text(src).ok()?);
+    }
+    let leaf = path.rsplit('/').next().unwrap_or("");
+    let loadable = match leaf.rsplit_once('.') {
+        Some((_, ext)) => ext == "rb",
+        None => !leaf.is_empty(),
+    };
+    loadable.then_some(path)
 }
 
 /// Ruby's parameter kinds are a taxonomy in themselves: required,
@@ -230,15 +281,17 @@ fn callee_text<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
     call.child_by_field_name("method")?.utf8_text(src).ok()
 }
 
-fn first_string<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
+fn first_string<'t>(call: Node<'t>) -> Option<Node<'t>> {
     let args = call.child_by_field_name("arguments")?;
     let mut cursor = args.walk();
-    let s = args
+    args.named_children(&mut cursor)
+        .find(|c| c.kind() == "string")
+}
+
+fn string_content<'a>(string: Node, src: &'a [u8]) -> Option<&'a str> {
+    let mut cursor = string.walk();
+    let content = string
         .named_children(&mut cursor)
-        .find(|c| c.kind() == "string")?;
-    let mut inner = s.walk();
-    let content = s
-        .named_children(&mut inner)
         .find(|c| c.kind() == "string_content")?;
     content.utf8_text(src).ok()
 }
@@ -452,17 +505,27 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     }
 }
 
-/// Is this call the import form? A RECEIVER disqualifies it: `require`
-/// and `load` are Kernel methods called bare, and `config.load(path)` is
-/// somebody's own method that happens to share the name. `autoload
-/// :Base, 'rack/protection/base'` defers the same load until the
-/// constant is touched; the file is a dependency either way.
+/// Is this call a load site? Either it NAMES a load — `autoload :Base,
+/// 'rack/protection/base'` defers one until the constant is touched,
+/// and the file is a dependency either way — or it is handed a
+/// `#{__dir__}`-rooted path, which nothing but a load is written with.
+///
+/// A RECEIVER disqualifies both: `require` and `load` are Kernel methods
+/// called bare, `config.load(path)` is somebody's own method that
+/// happens to share the name, and the receiver is what separates
+/// rubocop's 609 `register_cop` loads from its three `File.exist?`,
+/// `Dir[]` and `$LOAD_PATH.unshift` uses of the same literal shape.
 fn requires(call: Node, src: &[u8]) -> bool {
     call.child_by_field_name("receiver").is_none()
-        && matches!(
-            callee_text(call, src),
-            Some("require" | "require_relative" | "load" | "autoload")
-        )
+        && (names_a_load(call, src)
+            || first_string(call).is_some_and(|s| dir_rooted_path(s, src).is_some()))
+}
+
+fn names_a_load(call: Node, src: &[u8]) -> bool {
+    matches!(
+        callee_text(call, src),
+        Some("require" | "require_relative" | "load" | "autoload")
+    )
 }
 
 /// Blocks given to the iteration methods. The list is deliberately
@@ -513,4 +576,53 @@ fn iterates(block: Node, src: &[u8]) -> bool {
                 | "one?"
         )
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::facts::extract;
+    use crate::lang::{Lang, Reach};
+    use std::path::Path;
+
+    fn imports_of(src: &str) -> Vec<(String, Reach)> {
+        let pack = Lang::Ruby.pack();
+        let facts = extract(pack, &mut pack.make_parser(), Path::new("lib/dept.rb"), src);
+        facts
+            .imports
+            .iter()
+            .map(|i| (i.target.to_string(), i.reach))
+            .collect()
+    }
+
+    #[test]
+    fn a_dir_rooted_literal_is_a_path_from_this_file_whatever_call_holds_it() {
+        // rubocop names 609 cop files with `register_cop` and 86 mixins
+        // with `autoload`, both over a `#{__dir__}` literal. Its three
+        // other uses of the same shape carry a receiver, and that is
+        // what keeps a gemspec check and a glob out of the graph.
+        let got = imports_of(concat!(
+            "register_cop :Alias, \"#{__dir__}/style/alias\"\n",
+            "autoload :Alignment, \"#{__dir__}/mixin/alignment\"\n",
+            "$LOAD_PATH.unshift(\"#{__dir__}/../lib\")\n",
+            "features = Dir[\"#{__dir__}/**/*.rb\"]\n",
+            "warn 'x' unless File.exist?(\"#{__dir__}/../a.gemspec\")\n",
+            "require_relative 'sibling'\n",
+            "require 'set'\n",
+        ));
+        assert_eq!(
+            got,
+            [
+                ("/style/alias".to_string(), Reach::Project),
+                ("/mixin/alignment".to_string(), Reach::Project),
+                ("sibling".to_string(), Reach::Project),
+                ("set".to_string(), Reach::Anywhere),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_second_interpolation_leaves_no_path_to_read() {
+        // `"#{__dir__}/#{cop_path}"` names a file chosen at run time.
+        assert!(imports_of("register_cop :X, \"#{__dir__}/#{dept}/x\"\n").is_empty());
+    }
 }

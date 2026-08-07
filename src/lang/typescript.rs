@@ -229,7 +229,15 @@ pub(super) fn return_arity(node: Node, src: &[u8]) -> u16 {
 }
 
 /// Nodes that hold specifiers rather than being one.
-const CLAUSES: &[&str] = &["import_clause", "named_imports", "export_clause"];
+const CLAUSES: &[&str] = &[
+    "import_clause",
+    "named_imports",
+    "export_clause",
+    // `import File = require("vinyl")` binds through a clause of its own.
+    "import_require_clause",
+    // `const { a, b: c } = require("./x")` binds through a pattern.
+    "object_pattern",
+];
 
 /// The node holding the local name a specifier binds, for each of the
 /// spellings that bind one.
@@ -240,21 +248,95 @@ fn bound_name(child: Node) -> Option<Node> {
         "import_specifier" | "export_specifier" => child
             .child_by_field_name("alias")
             .or_else(|| child.child_by_field_name("name")),
+        // The destructured halves of a `require`.
+        "shorthand_property_identifier_pattern" => Some(child),
+        "pair_pattern" => child.child_by_field_name("value"),
         _ => None,
     }
 }
 
-/// `import d, { a, b as c }, * as ns from "./x"` — one edge, every
-/// bound local collected. A re-export reads the same way: `export { a }
-/// from "./x"` is the barrel depending on ./x. Without a source there
-/// is no dependency, so `export function f()` yields nothing.
-pub(super) fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+/// The specifier a statement names. `import File = require("vinyl")` is
+/// an `import_statement`, but the grammar hangs its `source` field on
+/// the `import_require_clause` beneath — so reading only the statement
+/// answered None and the edge was dropped without trace. vscode writes
+/// it 18 times.
+fn statement_source<'t>(node: Node<'t>) -> Option<Node<'t>> {
+    if let Some(source) = node.child_by_field_name("source") {
+        return Some(source);
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .find(|c| c.kind() == "import_require_clause")?
+        .child_by_field_name("source")
+}
+
+/// The specifier of a `require("./x")` or `import("./x")`, given the
+/// argument list that holds it.
+///
+/// The ARGUMENT LIST is what carries the import, because it is the one
+/// node on the path that carries no Sem of its own: refining the
+/// `call_expression` would take it out of the call ledger and out of
+/// clone logic density, and refining the callee would take an
+/// identifier out of the name ledger. `arguments` is inert in
+/// `clone_bucket`, `is_ctrl`, `nests_cognitive`, `forks_control` and
+/// `nests_visual` under both readings, so nothing but the edge moves.
+///
+/// One string argument and nothing else. `import(base + name)` is
+/// assembled at run time and names no file that can be checked; the
+/// corpus writes 27 of those in ts against 641 literal ones.
+fn call_specifier<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if node.kind() != "arguments" {
+        return None;
+    }
+    let call = node.parent().filter(|c| c.kind() == "call_expression")?;
+    let callee = call.child_by_field_name("function")?;
+    // A dynamic import names a keyword node; `require` an identifier.
+    let module_op = callee.kind() == "import"
+        || (callee.kind() == "identifier" && callee.utf8_text(src) == Ok("require"));
+    if !module_op {
+        return None;
+    }
+    let mut cursor = node.walk();
+    let mut args = node.named_children(&mut cursor);
+    let first = args.next().filter(|a| a.kind() == "string")?;
+    args.next().is_none().then_some(first)
+}
+
+/// Expressions that pass a call's value straight through, between the
+/// call and the declaration that names it: `const g = await
+/// import("./g")`, `const y = require("./f").y`.
+const FORWARDERS: &[&str] = &[
+    "await_expression",
+    "member_expression",
+    "non_null_expression",
+    "as_expression",
+    "parenthesized_expression",
+];
+
+/// The declaration a call-shaped import's value lands in, given the
+/// argument list. `module.exports = require("./x")` lands in an
+/// assignment and binds nothing.
+fn call_binder<'t>(args: Node<'t>) -> Option<Node<'t>> {
+    let mut node = args.parent()?;
+    for _ in 0..FORWARDERS.len() {
+        let parent = node.parent()?;
+        if parent.kind() == "variable_declarator" {
+            return Some(parent);
+        }
+        if !FORWARDERS.contains(&parent.kind()) {
+            return None;
+        }
+        node = parent;
+    }
+    None
+}
+
+/// Every local a specifier binds, collected from the node that holds
+/// the bindings.
+fn bound_names(root: Node, src: &[u8]) -> Vec<Box<str>> {
     let text = |n: Node| n.utf8_text(src).unwrap_or("");
-    let Some(source) = node.child_by_field_name("source") else {
-        return Vec::new();
-    };
     let mut names: Vec<Box<str>> = Vec::new();
-    let mut stack = vec![node];
+    let mut stack = vec![root];
     while let Some(n) = stack.pop() {
         let mut cursor = n.walk();
         for child in n.named_children(&mut cursor) {
@@ -265,6 +347,33 @@ pub(super) fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
             }
         }
     }
+    names
+}
+
+/// `import d, { a, b as c }, * as ns from "./x"` — one edge, every
+/// bound local collected. A re-export reads the same way: `export { a }
+/// from "./x"` is the barrel depending on ./x. Without a source there
+/// is no dependency, so `export function f()` yields nothing.
+///
+/// `require("./x")` and `import("./x")` state the same dependency in
+/// call form, and reading only the statement forms left mithril — 103
+/// files, 296 requires, not one import statement — with no module graph
+/// at all: `production_view` needs an edge to exist, so the whole
+/// architecture section was absent from its report.
+pub(super) fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    let text = |n: Node| n.utf8_text(src).unwrap_or("");
+    let (source, names) = match node.kind() {
+        "arguments" => (
+            call_specifier(node, src),
+            call_binder(node)
+                .map(|d| bound_names(d, src))
+                .unwrap_or_default(),
+        ),
+        _ => (statement_source(node), bound_names(node, src)),
+    };
+    let Some(source) = source else {
+        return Vec::new();
+    };
     vec![super::ImportInfo {
         target: text(source).trim_matches(['"', '\'']).into(),
         names,
@@ -591,6 +700,10 @@ pub(super) fn test_label(node: Node) -> Option<Node> {
 
 pub(super) fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
+        // The argument list of `require("./x")` / `import("./x")` is
+        // where a call-shaped import states its specifier. It carries no
+        // Sem otherwise, so this adds an edge and moves no metric.
+        Sem::None if call_specifier(node, src).is_some() => Sem::Import,
         // else if -> flat chain, exactly as in the Rust pack.
         Sem::If if node.parent().is_some_and(|p| p.kind() == "else_clause") => Sem::ElseIf,
         Sem::Else
@@ -725,6 +838,95 @@ fn is_override(node: Node, src: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::Lang;
+    use std::path::Path;
+
+    fn facts(lang: Lang, path: &str, source: &str) -> crate::facts::FileFacts {
+        let pack = lang.pack();
+        let mut parser = pack.make_parser();
+        crate::facts::extract(pack, &mut parser, Path::new(path), source)
+    }
+
+    #[test]
+    fn a_module_named_by_a_call_is_a_dependency_all_the_same() {
+        // mithril states every one of its 296 dependencies with
+        // `require`, and reading only the statement forms left it with
+        // no module graph at all: `production_view` needs one edge to
+        // exist, so 103 files and 26153 lines reported no architecture
+        // section whatsoever. vscode writes 337 `require` and 617
+        // `import(...)` besides.
+        //
+        // `import File = require("vinyl")` is an import_statement whose
+        // `source` field hangs on the clause beneath it, so reading the
+        // statement alone answered None — 18 of those in vscode.
+        const SRC: &str = concat!(
+            "import a from \"./a\";\n",
+            "const { b, c: d } = require(\"./b\");\n",
+            "const e = require(\"pkg\");\n",
+            "import F = require(\"./f\");\n",
+            "const g = await import(\"./g\");\n",
+            "const h = require(join(dir, \"h\"));\n",
+            "const i = import(base + \"/i\");\n",
+        );
+        for (lang, path) in [
+            (Lang::TypeScript, "m.ts"),
+            (Lang::Tsx, "m.tsx"),
+            (Lang::JavaScript, "m.js"),
+        ] {
+            let f = facts(lang, path, SRC);
+            let mut targets: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
+            targets.sort_unstable();
+            assert_eq!(
+                targets,
+                ["./a", "./b", "./f", "./g", "pkg"],
+                "{path}: a specifier assembled at run time names no file that can be checked"
+            );
+            let mut bound: Vec<&str> = f
+                .imports
+                .iter()
+                .flat_map(|i| &i.names)
+                .map(|n| &**n)
+                .collect();
+            bound.sort_unstable();
+            // `import F = require(...)` is TypeScript's form; the
+            // JavaScript grammar has no clause for it, so the call
+            // inside still states the dependency and binds nothing.
+            let want: &[&str] = match lang {
+                Lang::JavaScript => &["a", "b", "d", "e", "g"],
+                _ => &["F", "a", "b", "d", "e", "g"],
+            };
+            assert_eq!(
+                bound, want,
+                "{path}: a destructured require binds its halves"
+            );
+        }
+    }
+
+    #[test]
+    fn a_call_that_names_a_module_stays_a_call() {
+        // The edge is emitted from the ARGUMENT LIST, which carries no
+        // Sem of its own, so the call ledger, cyclomatic complexity and
+        // clone hashing see exactly what they saw before. Refining the
+        // call itself would have moved all three.
+        use crate::sem::Sem;
+        let pack = Lang::TypeScript.pack();
+        let mut parser = pack.make_parser();
+        let src = "const m = require(\"./b\");\n";
+        let tree = parser.parse(src, None).expect("parses");
+        let mut stack = vec![tree.root_node()];
+        let (mut calls, mut imports) = (0, 0);
+        while let Some(n) = stack.pop() {
+            let mut cursor = n.walk();
+            stack.extend(n.named_children(&mut cursor));
+            match pack.sem_of(n, src.as_bytes()) {
+                Sem::Call => calls += 1,
+                Sem::Import => imports += 1,
+                _ => {}
+            }
+        }
+        assert_eq!((calls, imports), (1, 1), "one call, and one edge out of it");
+    }
+
     #[test]
     fn test_directories_are_segments_not_substrings() {
         let cases = [
