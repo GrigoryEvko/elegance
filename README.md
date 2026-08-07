@@ -652,7 +652,7 @@ excluded, visibly counted in the report header. `#if`/`#elif`/`#else`
 count as real branches: conditional compilation is control flow the
 reader must follow.
 
-**C++ gold reads cognitive p99 = 30 and length p99 = 115, against C's 80
+**C++ gold reads cognitive p99 = 32 and length p99 = 115, against C's 80
 and 205** — for a language very nearly a superset of the other.
 Conditional compilation is much of it, RAII most of the rest, since a
 destructor removes the error path a C function writes by hand.

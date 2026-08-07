@@ -88,7 +88,11 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
         let extra: Vec<Option<usize>> = f
             .imports
             .iter()
-            .flat_map(|imp| index.under_directory(f.lang, &imp.target))
+            .zip(&row)
+            .flat_map(|(imp, tgt)| {
+                let dirs = index.under_directory(f.lang, &imp.target);
+                dirs.into_iter().chain(index.submodules(*tgt, imp, f.lang))
+            })
             .map(Some)
             .collect();
         row.extend(extra);
@@ -834,6 +838,35 @@ impl Index {
             }
         }
         Class::External
+    }
+
+    /// The submodules an import's bound names denote. `from . import
+    /// errors, themes` binds two MODULES, not two symbols, and the
+    /// dependency that matters is on themes.py rather than on the
+    /// package's __init__.py -- rich's console.py:36 is that line and
+    /// themes.py had no other importer in the corpus. attrs names five
+    /// submodules in one statement, which is why the first name alone
+    /// is not enough.
+    fn submodules(
+        &self,
+        resolved: Option<usize>,
+        imp: &crate::facts::ImportFact,
+        lang: Lang,
+    ) -> Vec<usize> {
+        let Some(m) = resolved.filter(|_| lang == Lang::Python) else {
+            return Vec::new();
+        };
+        let base: PathBuf = self.file_comps[m].iter().map(|c| &**c).collect();
+        imp.names
+            .iter()
+            .filter_map(|n| {
+                let child = base.join(&**n);
+                self.paths
+                    .get(&child.with_extension("py"))
+                    .or_else(|| self.paths.get(&child.join("__init__.py")))
+                    .copied()
+            })
+            .collect()
     }
 
     /// Every module directly under the directory a prefix names.
