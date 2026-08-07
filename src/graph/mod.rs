@@ -992,7 +992,7 @@ impl Index {
             Lang::Lua if imp.reach == crate::lang::Reach::Mention && !imp.target.contains('*') => {
                 self.beside(from, &imp.target).into_iter().collect()
             }
-            Lang::Lua | Lang::Ruby => self.glob_modules(from, imp),
+            Lang::Lua | Lang::Ruby | Lang::Python => self.glob_modules(from, imp),
             Lang::C | Lang::Cpp | Lang::Cuda => self.nearest_includes(from, &imp.target),
             _ if imp.reach == crate::lang::Reach::Mention => self
                 .declared
@@ -1030,7 +1030,7 @@ impl Index {
     /// Only real files are ever named, so unlike completing the literal
     /// this manufactures no external dependency.
     fn glob_modules(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Vec<usize> {
-        if !matches!(from.lang, Lang::Lua | Lang::Ruby) {
+        if !matches!(from.lang, Lang::Lua | Lang::Ruby | Lang::Python) {
             return Vec::new();
         }
         let segs: Vec<&str> = imp
@@ -1859,6 +1859,38 @@ mod tests {
         // keeps counting modules from outside rather than every type
         // name the compiler found somewhere else.
         assert_eq!((res.internal, res.external, res.unresolved), (0, 1, 0));
+    }
+
+    #[test]
+    fn a_package_named_where_the_module_is_computed_names_every_module_in_it() {
+        // rich writes `import_module(f".unicode{version}",
+        // "rich._unicode_data")`. The module cannot be read and the
+        // package can, so every module under it is a candidate. 22 of
+        // Python's 28 orphans sat in that one package.
+        use crate::facts::ImportFact;
+        use crate::lang::Reach;
+        let mut loader = file(Lang::Python, "rich/_unicode_data/__init__.py", &[]);
+        loader.imports = vec![ImportFact {
+            target: "rich._unicode_data.*".into(),
+            names: Vec::new(),
+            reach: Reach::Mention,
+        }];
+        let files = [
+            loader,
+            file(Lang::Python, "rich/_unicode_data/unicode14.py", &[]),
+            file(Lang::Python, "rich/_unicode_data/unicode15.py", &[]),
+            // One level deeper is not in the package.
+            file(Lang::Python, "rich/_unicode_data/old/unicode9.py", &[]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        for m in ["unicode14.py", "unicode15.py"] {
+            assert!(targets[0].contains(&Some(idx(m))), "{m} is a candidate");
+        }
+        assert!(!targets[0].contains(&Some(idx("old/unicode9.py"))));
+        // The file states a package, not a module, so nothing is
+        // tallied: which one it loads is settled at run time.
+        assert_eq!((res.internal, res.external, res.unresolved), (0, 0, 0));
     }
 
     #[test]

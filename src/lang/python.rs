@@ -242,6 +242,16 @@ fn returned_arity(node: Node) -> u16 {
 /// `import a.b, c as d` and `from ..pkg import x, y as z` — one edge per
 /// module; relative dots ride along in the target text.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    if let Some(package) = imported_package(node, src) {
+        return vec![super::ImportInfo {
+            target: format!("{package}.*").into(),
+            names: Vec::new(),
+            // The file states a package, not a module: which one it
+            // loads is settled at run time, so this earns an edge and
+            // never a tally entry.
+            reach: super::Reach::Mention,
+        }];
+    }
     match node.kind() {
         "import_statement" => plain_imports(node, src),
         "import_from_statement" => vec![from_import(node, src)],
@@ -328,8 +338,33 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
         Sem::Lambda if node.parent().is_some_and(|p| p.kind() == "assignment") => Sem::FnDef,
         Sem::Call if callee_leaf(node, src) == Some("cast") => Sem::Cast,
+        // `import_module(name, package)` loads a name built at run time
+        // from a package the source DOES state. rich computes
+        // `f".unicode{version}"` and passes `"rich._unicode_data"`,
+        // whose 23 modules are the candidates.
+        Sem::Call if imported_package(node, src).is_some() => Sem::Import,
         _ => sem,
     }
+}
+
+/// The package an `import_module` names, where its module argument is
+/// computed and its package argument is a literal.
+///
+/// `rich/_unicode_data/__init__.py:90` writes
+/// `import_module(f".unicode{version}", "rich._unicode_data")`. The
+/// module cannot be read and the package can, so every module under it
+/// is a candidate -- the directory fan-out, resolved against the
+/// package the call names. 22 of Python's 28 orphans sit in that one
+/// package.
+fn imported_package<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
+    if callee_leaf(call, src)? != "import_module" {
+        return None;
+    }
+    let args = call.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let package = args.named_children(&mut cursor).nth(1)?;
+    let text = package.utf8_text(src).ok()?.trim_matches(['"', '\'']);
+    (package.kind() == "string" && !text.is_empty() && !text.starts_with('.')).then_some(text)
 }
 
 /// Trailing name of a call's target: `cast` for both `cast(..)` and

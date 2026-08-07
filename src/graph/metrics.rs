@@ -862,8 +862,31 @@ fn judgeable(files: &[&GraphFacts], fan_in: &[u32]) -> Vec<bool> {
     files
         .iter()
         .zip(fan_in)
-        .map(|(f, &reached)| !(f.lang.is_sink(&f.path) || reached == 0 && runs_once(&f.path)))
+        .map(|(f, &reached)| {
+            let sink = f.lang.is_sink(&f.path) || declares_types_only(f);
+            !(sink || reached == 0 && runs_once(&f.path))
+        })
         .collect()
+}
+
+/// A LuaCATS declaration file: `---@meta` on line one marks a file as
+/// TYPES for a runtime, never loaded as code.
+///
+/// The same argument `is_sink` already makes for a `.d.ts`, and the
+/// marker is the language server's own. 36 files carry it, 35 of them
+/// Lua, and 19 read as orphans -- lua-language-server's
+/// `meta/template/*.lua`, which are declarations for `debug`, `ffi` and
+/// the rest of the standard library.
+fn declares_types_only(f: &GraphFacts) -> bool {
+    use crate::lang::Lang;
+    if f.lang != Lang::Lua {
+        return false;
+    }
+    std::fs::read_to_string(&f.path).is_ok_and(|text| {
+        text.lines()
+            .next()
+            .is_some_and(|l| l.starts_with("---@meta"))
+    })
 }
 
 /// A demo, a benchmark or a codegen script that NOTHING reaches. The
