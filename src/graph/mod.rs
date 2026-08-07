@@ -152,9 +152,10 @@ struct Index {
     rust_exports: HashMap<Box<str>, Vec<usize>>,
     /// Each file's nearest enclosing crate root, precomputed.
     file_crate_root: Vec<Option<usize>>,
-    /// Workspace package name -> the directory whose package.json
-    /// declares it. A monorepo's own packages are spelled exactly like a
-    /// third-party dependency, and 3843 tsx specifiers name one.
+    /// A module name -> the directory holding it, where a MANIFEST says
+    /// so rather than the tree. Covers a monorepo's own npm packages
+    /// (3843 tsx specifiers name one) and a SwiftPM target whose
+    /// `path:` moves it off the Sources/<name> convention.
     workspaces: HashMap<Box<str>, PathBuf>,
     /// Each file's language. A module name binds a file of the language
     /// that named it: the OCaml corpus ships util.h, config.h and
@@ -186,7 +187,11 @@ impl Index {
             file_crate_root: Vec::new(),
             file_comps: Vec::new(),
             langs: files.iter().map(|f| f.lang).collect(),
-            workspaces: workspace_packages(files),
+            workspaces: {
+                let mut m = workspace_packages(files);
+                m.extend(swift_targets(files));
+                m
+            },
         };
         for (i, f) in files.iter().enumerate() {
             idx.paths.entry(f.path.clone()).or_insert(i);
@@ -570,12 +575,29 @@ impl Index {
     /// repository, and put its 84 fabricated dependents at the top of
     /// the report. 140 of the 170 stem matches were wrong that way.
     fn swift(&self, target: &str) -> Class {
+        // A `path:` in Package.swift beats the convention. Alamofire
+        // puts its target in `Source/`, so the only directory named
+        // Alamofire is the REPOSITORY ROOT -- and resolving there made
+        // every one of its 43 files inherit a dependent from one bogus
+        // edge, whitewashing the repository wholesale.
+        if let Some(dir) = self.workspaces.get(target) {
+            return self.first_under(dir);
+        }
         let dir = self
             .dirs
             .get(target)
             .and_then(|c| c.iter().min_by_key(|(comps, _)| comps.len()));
         match dir {
             Some(&(_, i)) => Class::Internal(i),
+            None => Class::External,
+        }
+    }
+
+    /// A representative file of a directory: the first in path order,
+    /// which is how a Go package already answers for itself.
+    fn first_under(&self, dir: &Path) -> Class {
+        match self.paths.iter().filter(|(p, _)| p.starts_with(dir)).min() {
+            Some((_, &i)) => Class::Internal(i),
             None => Class::External,
         }
     }
@@ -1035,6 +1057,48 @@ fn split_package(target: &str) -> (&str, Vec<&str>) {
     let rest = target.get(cut + 1..).unwrap_or("");
     let sub = rest.split('/').filter(|s| !s.is_empty()).collect();
     (&target[..cut], sub)
+}
+
+/// Every SwiftPM target whose manifest moves it off the
+/// `Sources/<name>` convention, mapped to the directory it names.
+/// Alamofire declares `.target(name: "Alamofire", path: "Source")`, and
+/// swift-nio seven more.
+///
+/// Read textually rather than parsed: a manifest is Swift, and the two
+/// fields wanted are adjacent literals inside one `.target(` call.
+fn swift_targets(files: &[GraphFacts]) -> HashMap<Box<str>, PathBuf> {
+    let mut seen: HashSet<&Path> = HashSet::new();
+    let mut out = HashMap::new();
+    for f in files.iter().filter(|f| f.lang == Lang::Swift) {
+        for dir in f.path.ancestors().skip(1) {
+            if !seen.insert(dir) {
+                break;
+            }
+            let Ok(text) = std::fs::read_to_string(dir.join("Package.swift")) else {
+                continue;
+            };
+            for call in text.split(".target(").skip(1) {
+                let Some((name, path)) = target_path(call) else {
+                    continue;
+                };
+                out.insert(name.into(), dir.join(path));
+            }
+        }
+    }
+    out
+}
+
+/// The `name:` and `path:` literals of one target declaration, when it
+/// carries both and neither is separated from it by the next `)`.
+fn target_path(call: &str) -> Option<(&str, &str)> {
+    let head = call.split_once(')').map_or(call, |(h, _)| h);
+    Some((quoted_after(head, "name:")?, quoted_after(head, "path:")?))
+}
+
+/// The string literal following `field` in a manifest fragment.
+fn quoted_after<'a>(text: &'a str, field: &str) -> Option<&'a str> {
+    let rest = text.split_once(field)?.1;
+    rest.split_once('"')?.1.split_once('"').map(|(v, _)| v)
 }
 
 /// Every package name a `package.json` beside the scanned files
