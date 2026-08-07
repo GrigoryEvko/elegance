@@ -144,7 +144,7 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
         orphan_count,
         orphans,
         tested_only,
-        by_language: orphans_by_language(&files, &fan_in, &judged),
+        by_language: orphans_by_language(&files, &fan_in, &judged, &from_tests),
         interfaces,
     })
 }
@@ -808,14 +808,20 @@ fn orphans_by_language(
     files: &[&GraphFacts],
     fan_in: &[u32],
     judged: &[bool],
+    from_tests: &[u32],
 ) -> Vec<(&'static str, u32, u32)> {
     let mut tally: HashMap<&'static str, (u32, u32)> = HashMap::new();
-    for ((f, &reached), &judge) in files.iter().zip(fan_in).zip(judged) {
-        if !judge {
+    for (i, f) in files.iter().enumerate() {
+        if !judged[i] {
             continue;
         }
         let row = tally.entry(f.lang.name()).or_default();
-        row.0 += u32::from(reached == 0 && !entryish(&f.path));
+        // The same question the headline asks, so it must make the same
+        // two exclusions: an entry point, and a module its own suite
+        // exercises. Without the second the rows summed to the headline
+        // PLUS `tested_only` — php read 174 against a stated 56.
+        let orphan = fan_in[i] == 0 && from_tests[i] == 0 && !entryish(&f.path);
+        row.0 += u32::from(orphan);
         row.1 += 1;
     }
     if tally.len() < 2 {
@@ -1009,6 +1015,39 @@ mod tests {
         // Nothing imports Demo, and that is the answer worth reading.
         assert_eq!(arch.orphans, ["Sources/Demo/Server.swift"]);
         assert_eq!(arch.orphan_count, 1);
+    }
+
+    #[test]
+    fn the_per_language_rows_answer_the_same_question_as_the_headline() {
+        // The rows summed to the headline PLUS `tested_only`, because
+        // they made one of its two exclusions and not the other. Gold
+        // php reported 174 orphans across its rows against a stated 56,
+        // and a reader who trusted the breakdown read a rate three
+        // times the one the tool had just printed.
+        let mut suite = fixture(Lang::Python, "tests/test_client.py", &["app.testing"]);
+        suite.is_test = true;
+        let files = [
+            suite,
+            fixture(Lang::Python, "app/main.py", &["app.core"]),
+            fixture(Lang::Python, "app/core.py", &[]),
+            fixture(Lang::Python, "app/testing.py", &[]),
+            fixture(Lang::Python, "app/unused.py", &[]),
+            fixture(Lang::Ruby, "lib/unused.rb", &[]),
+        ];
+        let arch = arch(&files);
+        assert_eq!(arch.orphan_count, 2, "app/unused.py and lib/unused.rb");
+        assert_eq!(
+            arch.tested_only, 1,
+            "app/testing.py, exercised by its suite"
+        );
+        let rows: Vec<_> = arch
+            .by_language
+            .iter()
+            .map(|&(l, o, n)| (l, o, n))
+            .collect();
+        assert_eq!(rows, [("rb", 1, 1), ("py", 1, 4)]);
+        let summed: u32 = arch.by_language.iter().map(|r| r.1).sum();
+        assert_eq!(summed, arch.orphan_count);
     }
 
     #[test]

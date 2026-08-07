@@ -1624,6 +1624,44 @@ mod tests {
     }
 
     #[test]
+    fn a_php_class_named_inline_is_reached_without_being_counted() {
+        // `use` covers only the classes of ANOTHER namespace. One in the
+        // file's own namespace is named bare, and one BELOW it is
+        // written out: PHP-Parser spells `Comment\Doc`, `Lexer\Emulative`
+        // and `Builder\Class_` that way and imports none of them, which
+        // is why 181 of its 274 modules read as orphans while only 4 are
+        // never named by another production file.
+        use crate::facts::ImportFact;
+        use crate::lang::Reach;
+        let imp = |target: &str, reach| ImportFact {
+            target: target.into(),
+            names: Vec::new(),
+            reach,
+        };
+        let mut parser = file(Lang::Php, "lib/PhpParser/Parser.php", &[]);
+        parser.imports = vec![
+            imp("Node\\Stmt", Reach::Project),
+            imp("Comment\\Doc", Reach::Mention),
+            imp("Runtime\\Missing", Reach::Mention),
+        ];
+        let files = [
+            parser,
+            file(Lang::Php, "lib/PhpParser/Node/Stmt.php", &[]),
+            file(Lang::Php, "lib/PhpParser/Comment/Doc.php", &[]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[0][0], Some(idx("Node/Stmt.php")));
+        assert_eq!(targets[0][1], Some(idx("Comment/Doc.php")));
+        // Only the `use` statement is a dependency the file declares.
+        // The name it merely writes down is neither internal nor
+        // external, and the one naming nothing here is not a failure to
+        // resolve — an inline name is not a promise that the file is
+        // present.
+        assert_eq!((res.internal, res.external, res.unresolved), (1, 0, 0));
+    }
+
+    #[test]
     fn a_csharp_type_reference_reaches_what_declares_it_and_states_no_dependency() {
         // A `using` opens a namespace and binds no file: it makes short
         // names visible and nothing more, and a type in the file's own

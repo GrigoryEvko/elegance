@@ -54,6 +54,10 @@ const KINDS: &[(&str, Sem)] = &[
     ("cast_expression", Sem::Cast),
     ("comment", Sem::Comment),
     ("namespace_use_declaration", Sem::Import),
+    // The file itself is asked for its imports, because most of a PHP
+    // file's dependencies are not `use` statements. See
+    // `class_references`.
+    ("program", Sem::Import),
     ("name", Sem::Ident),
     ("variable_name", Sem::Ident),
     ("integer", Sem::NumLit),
@@ -167,7 +171,168 @@ fn name_node(node: Node) -> Option<Node> {
 /// `use Foo\Bar;` when asked of the declaration, and every other way a
 /// PHP file names a class when asked of the file.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    namespace_uses(node, src)
+    match node.kind() {
+        "namespace_use_declaration" => namespace_uses(node, src),
+        _ => class_references(node, src),
+    }
+}
+
+/// Node kinds every one of whose class-shaped children is a class: an
+/// extends list, an implements list, an attribute, a trait use, a `new`,
+/// and a type hint (every declared type in the grammar — parameter,
+/// return, property, `catch` — reaches a `named_type`).
+const CLASS_SITES: &[&str] = &[
+    "base_clause",
+    "class_interface_clause",
+    "attribute",
+    "use_declaration",
+    "object_creation_expression",
+    "named_type",
+];
+
+/// A class name is a reference whether or not a `use` introduced it.
+///
+/// `use` covers only the classes from ANOTHER namespace. A class in the
+/// file's own namespace is named bare and imports nothing, and a class
+/// in a namespace below it is written out: PHP-Parser spells
+/// `Comment\Doc`, `Lexer\Emulative` and `Builder\Class_` that way and
+/// imports none of them, which is why 181 of its 274 modules read as
+/// orphans while only 4 are never named by another production file.
+///
+/// A bare name that a `use` already bound is skipped: it names that
+/// import, which is recorded at the declaration, and recording it again
+/// under its short name would let it match an unrelated file that
+/// happens to carry the name.
+fn class_references(root: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    let mut found = Classes {
+        own: own_namespace(root, src),
+        bound: bound_names(root, src),
+        seen: std::collections::HashSet::new(),
+        out: Vec::new(),
+    };
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        // A `use` is read as a whole above, and reading it again would
+        // double every one in the file.
+        if matches!(
+            node.kind(),
+            "namespace_use_declaration" | "namespace_definition"
+        ) {
+            continue;
+        }
+        if matches!(node.kind(), "qualified_name" | "relative_name") {
+            found.take(node, src);
+            continue;
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node> = node.named_children(&mut cursor).collect();
+        let every = CLASS_SITES.contains(&node.kind());
+        for site in names_a_class(node, src, &children) {
+            found.take(site, src);
+        }
+        for child in children {
+            if every {
+                found.take(child, src);
+            }
+            stack.push(child);
+        }
+    }
+    found.out
+}
+
+/// The class names one node holds, where its own shape says which child
+/// is one: the scope of a `::` access, the right of `instanceof`, and
+/// the first child of `Foo::class` or `Foo::CONST`.
+fn names_a_class<'t>(node: Node<'t>, src: &[u8], children: &[Node<'t>]) -> Vec<Node<'t>> {
+    let kind = node.kind();
+    let scoped = matches!(
+        kind,
+        "scoped_call_expression" | "scoped_property_access_expression"
+    );
+    let instance_of = kind == "binary_expression"
+        && super::field_text_is(node, "operator", src) == Some("instanceof");
+    [
+        scoped.then(|| node.child_by_field_name("scope")).flatten(),
+        instance_of
+            .then(|| node.child_by_field_name("right"))
+            .flatten(),
+        (kind == "class_constant_access_expression")
+            .then(|| children.first().copied())
+            .flatten(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// The class names read so far, with what it takes to judge the next
+/// one: the file's own namespace, the short names its `use` statements
+/// already bound, and the names already recorded.
+struct Classes<'a> {
+    own: Vec<&'a str>,
+    bound: std::collections::HashSet<&'a str>,
+    seen: std::collections::HashSet<Box<str>>,
+    out: Vec<super::ImportInfo>,
+}
+
+/// `self`, `static` and `parent` are the declaring class under another
+/// spelling, and reach no other file.
+const OWN_CLASS: &[&str] = &["self", "static", "parent", "class"];
+
+impl<'a> Classes<'a> {
+    /// Record the class this node names, if it names one this file has
+    /// not already accounted for.
+    fn take(&mut self, node: Node, src: &'a [u8]) {
+        if !matches!(node.kind(), "name" | "qualified_name" | "relative_name") {
+            return;
+        }
+        let Ok(text) = node.utf8_text(src) else {
+            return;
+        };
+        if OWN_CLASS.contains(&text) || self.bound.contains(text) || !self.seen.insert(text.into())
+        {
+            return;
+        }
+        // A name the code USES states no dependency — PHP-Parser writes
+        // `Comment\Doc` inline and imports nothing — so it supplies an
+        // edge and never a tally entry. Only the `use` statements above
+        // are dependencies the file declares.
+        self.out.push(super::ImportInfo {
+            reach: super::Reach::Mention,
+            ..qualified(text, &self.own)
+        });
+    }
+}
+
+/// The short names the file's own `use` statements bind — the alias when
+/// one is written, the last segment otherwise.
+fn bound_names<'a>(root: Node, src: &'a [u8]) -> std::collections::HashSet<&'a str> {
+    let mut names = std::collections::HashSet::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "namespace_use_clause" {
+            let alias = node
+                .child_by_field_name("alias")
+                .and_then(|a| a.utf8_text(src).ok());
+            let mut inner = node.walk();
+            let written = node
+                .named_children(&mut inner)
+                .find(|c| matches!(c.kind(), "qualified_name" | "name"))
+                .and_then(|n| n.utf8_text(src).ok())
+                .map(|t| t.rsplit('\\').next().unwrap_or(t));
+            names.extend(alias.or(written));
+            continue;
+        }
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            // A `use` is a top-level or class-body statement; nothing
+            // below an expression holds one.
+            if !matches!(child.kind(), "name" | "qualified_name" | "comment") {
+                stack.push(child);
+            }
+        }
+    }
+    names
 }
 
 /// `use Foo\Bar;`, `use Foo\Bar as Baz;`, and the grouped
