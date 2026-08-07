@@ -426,6 +426,20 @@ impl Lang {
             // is a keyword, so `import a.b.package` is not legal and no
             // import in the gold corpus names one. 37 orphans.
             Lang::Scala => path.file_name().and_then(|n| n.to_str()) == Some("package.scala"),
+            // A `.rake` is loaded by Rake and never required: rubocop's
+            // own Rakefile writes `Dir['tasks/**/*.rake'].each { |t|
+            // load t }`, so the glob is in the repository.
+            Lang::Ruby => ext == Some("rake"),
+            // `config/*.exs` is evaluated by Mix, not imported. All
+            // eight in the gold corpus open with `import Config` or
+            // `use Mix.Config`, which is what a config script is.
+            Lang::Elixir => {
+                ext == Some("exs")
+                    && path
+                        .parent()
+                        .and_then(|d| d.file_name()?.to_str())
+                        .is_some_and(|d| d == "config")
+            }
             // C# assembly-level attributes and suppression lists. They
             // declare no type, so nothing can reference them, and the
             // compiler reads them from the compilation rather than from

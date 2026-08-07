@@ -755,11 +755,14 @@ fn dune_root(path: &Path, name: &str, stem: &str) -> bool {
     let Ok(text) = std::fs::read_to_string(dir.join("dune")) else {
         return false;
     };
-    ["(name ", "(public_name "]
+    // `(names ...)` is the plural: core's `bench-bin/dune` declares
+    // twelve executables in one stanza, and each is an entry point.
+    ["(name ", "(public_name ", "(names "]
         .iter()
         .flat_map(|field| text.match_indices(field).map(|(at, f)| at + f.len()))
         .filter_map(|at| text[at..].split(')').next())
-        .any(|declared| declared.trim().rsplit('.').next() == Some(stem))
+        .flat_map(str::split_whitespace)
+        .any(|declared| declared.rsplit('.').next() == Some(stem))
 }
 
 /// A Mix task, which `mix` resolves from the MODULE name — running
@@ -1178,6 +1181,26 @@ mod tests {
     }
 
     #[test]
+    fn a_file_its_own_toolchain_loads_is_not_asked_who_requires_it() {
+        // rubocop's Rakefile writes `Dir['tasks/**/*.rake'].each { |t|
+        // load t }`, so the glob is in the repository; Mix evaluates
+        // `config/*.exs`, and all eight in the corpus open with
+        // `import Config`. Neither is ever named by a require.
+        let files = [
+            fixture(Lang::Ruby, "lib/rubocop/cop.rb", &["rubocop/version"]),
+            fixture(Lang::Ruby, "lib/rubocop/version.rb", &[]),
+            fixture(Lang::Ruby, "tasks/cut_release.rake", &[]),
+            fixture(Lang::Elixir, "config/config.exs", &[]),
+            // An `.exs` elsewhere is an ordinary script and stays
+            // judged: `config/` is the whole of the claim.
+            fixture(Lang::Elixir, "priv/seeds.exs", &[]),
+        ];
+        let arch = arch(&files);
+        assert_eq!(arch.judged_modules, 3);
+        assert_eq!(arch.orphans, ["lib/rubocop/cop.rb", "priv/seeds.exs"]);
+    }
+
+    #[test]
     fn a_mix_task_is_reached_by_its_name_and_never_by_an_import() {
         // `mix phx.server` resolves `Mix.Tasks.Phx.Server` from the
         // module name, so nothing imports a task. 33 of gold Elixir's
@@ -1215,6 +1238,14 @@ mod tests {
         std::fs::write(dir.join("dune"), "(library (name containers_cbor))\n").unwrap();
         assert!(entryish(&dir.join("containers_cbor.ml")));
         assert!(!entryish(&dir.join("encode.ml")), "an ordinary module");
+        // `(names ...)` is the plural, and core's `bench-bin/dune`
+        // declares twelve executables in one stanza — each an entry
+        // point, and 23 of OCaml's orphans were among them.
+        let many = "(executables (modes byte exe) (names array_iter bench_hashtbl))\n";
+        std::fs::write(dir.join("dune"), many).unwrap();
+        assert!(entryish(&dir.join("array_iter.ml")));
+        assert!(entryish(&dir.join("bench_hashtbl.ml")));
+        assert!(!entryish(&dir.join("byte.ml")), "a mode is not a module");
         // The declaration is what answers, so a file whose stem matches
         // nothing the manifest names is judged.
         std::fs::write(dir.join("dune"), "(library (name other))\n").unwrap();
