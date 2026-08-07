@@ -699,6 +699,56 @@ impl Index {
         }
     }
 
+    /// Every file an include names where its tail matches several, and
+    /// the search path deciding which is not in the source.
+    ///
+    /// musl's Makefile compiles with `-Iarch/$(ARCH)`, so
+    /// `#include <bits/fcntl.h>` means one of eleven real files and the
+    /// source cannot say which. 456 of musl's 655 headers had no
+    /// includer for that reason -- a claim about the build system
+    /// stated as a claim about the code, since every one of them IS
+    /// depended on, each in its own configuration.
+    ///
+    /// So the nearest candidate answers where there IS one: 295 musl
+    /// sources write `#include "syscall.h"` and mean the
+    /// `src/internal/syscall.h` beside them, not the public
+    /// `include/sys/syscall.h`. Where several tie -- every arch is
+    /// equally far from `include/fcntl.h` -- they are all candidates,
+    /// which manufactures no external dependency because only real
+    /// files are ever named. Picking one of a tie would be arbitrary,
+    /// and `arch/or1k/crt_arch.h` is what arbitrary looks like.
+    ///
+    /// Outside musl this is nearly inert: across c, cpp and cuda it
+    /// moves three files, all of them correctly.
+    fn nearest_includes(&self, from: &GraphFacts, target: &str) -> Vec<usize> {
+        let angled = target.starts_with('<');
+        let path = target.trim_matches(['<', '>']);
+        let dir = from.path.parent().unwrap_or(Path::new(""));
+        if !angled && self.paths.contains_key(&normalize(dir, path)) {
+            return Vec::new();
+        }
+        let segs = segments(path);
+        if segs.is_empty() {
+            return Vec::new();
+        }
+        let mine = components(&from.path);
+        // A bare `<name.h>` may still only mean a file the include
+        // convention puts on the search path.
+        let rooted = |c: &[Box<str>]| c.len() >= 2 && &*c[c.len() - 2] == "include";
+        let hits: Vec<(usize, usize)> = self
+            .suffix_matches(&segs)
+            .filter(|(c, _)| !(angled && segs.len() == 1) || rooted(c))
+            .map(|(c, i)| (shared(&mine, c), *i))
+            .collect();
+        let Some(&near) = hits.iter().map(|(n, _)| n).max().filter(|_| hits.len() > 1) else {
+            return Vec::new();
+        };
+        hits.iter()
+            .filter(|(n, _)| *n == near)
+            .map(|&(_, i)| i)
+            .collect()
+    }
+
     /// `path_suffix`, narrowed to a file sitting DIRECTLY in a directory
     /// named `include` — C's convention for "this is on the -I path",
     /// and the only evidence in the tree that a bare `<name.h>` could
@@ -920,12 +970,13 @@ impl Index {
     /// a directory whose contents are chosen at run time, or a name
     /// whose declaration the language lets you split across files.
     fn named_modules(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Vec<usize> {
-        match imp.reach {
-            crate::lang::Reach::Mention => self
+        match (from.lang, imp.reach) {
+            (_, crate::lang::Reach::Mention) => self
                 .declared
                 .get(&(from.lang, imp.target.clone()))
                 .cloned()
                 .unwrap_or_default(),
+            (Lang::C | Lang::Cpp | Lang::Cuda, _) => self.nearest_includes(from, &imp.target),
             _ => self.under_directory(from, imp),
         }
     }
@@ -1004,13 +1055,19 @@ impl Index {
     /// specifier means is decided by a search path or a remapping
     /// table that is not in the source.
     fn path_suffix(&self, segs: &[&str]) -> Option<usize> {
-        let mut hits = self
-            .basenames
-            .get(*segs.last()?)?
-            .iter()
-            .filter(|(c, _)| ends_with(c, segs));
+        let mut hits = self.suffix_matches(segs);
         let &(_, i) = hits.next()?;
         hits.next().is_none().then_some(i)
+    }
+
+    /// Every file whose path ends with these segments, with its own
+    /// path components — what says how near it is to the includer.
+    fn suffix_matches<'a>(&'a self, segs: &'a [&str]) -> impl Iterator<Item = &'a CompEntry> + 'a {
+        segs.last()
+            .and_then(|last| self.basenames.get(*last))
+            .into_iter()
+            .flatten()
+            .filter(move |(c, _)| ends_with(c, segs))
     }
 
     /// The shallowest module whose component vector the segments
@@ -1485,23 +1542,47 @@ mod tests {
     }
 
     #[test]
-    fn an_include_that_two_headers_answer_to_resolves_to_neither() {
+    fn an_include_several_headers_answer_to_names_the_nearest_or_all_of_them() {
         // musl carries eighteen copies of syscall_arch.h, one per
-        // architecture. Which one a build sees is decided by
-        // -Iarch/$ARCH, which is nowhere in the source.
+        // architecture, and compiles with `-Iarch/$(ARCH)`. WHICH one a
+        // build sees is still nowhere in the source — but reporting
+        // that as a failure to resolve left 456 of musl's 655 headers
+        // with no includer, which states a fact about the build system
+        // as though it were one about the code. Every one of them IS
+        // depended on, each in its own configuration.
+        //
+        // So a tie names them all, and manufactures no external
+        // dependency because only real files are ever named. Where one
+        // candidate is strictly nearer it answers alone: 295 musl
+        // sources write `#include "syscall.h"` meaning the
+        // src/internal/syscall.h beside them, not the public
+        // include/sys/syscall.h. Picking one of a TIE would be
+        // arbitrary, and `arch/or1k/crt_arch.h` is what arbitrary looks
+        // like.
         let files = [
             file(Lang::C, "arch/aarch64/syscall_arch.h", &[]),
             file(Lang::C, "arch/x86_64/syscall_arch.h", &[]),
-            file(Lang::C, "src/internal/syscall.c", &["syscall_arch.h"]),
+            file(Lang::C, "include/sys/syscall.h", &[]),
+            file(Lang::C, "src/internal/syscall.h", &[]),
+            file(
+                Lang::C,
+                "src/unistd/read.c",
+                &["syscall_arch.h", "syscall.h"],
+            ),
         ];
-        assert_eq!(
-            resolve(&files),
-            Resolution {
-                internal: 0,
-                external: 0,
-                unresolved: 1
-            }
-        );
+        let (res, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[4][1], Some(idx("src/internal/syscall.h")));
+        let arches = [
+            idx("arch/aarch64/syscall_arch.h"),
+            idx("arch/x86_64/syscall_arch.h"),
+        ];
+        for a in arches {
+            assert!(targets[4].contains(&Some(a)), "every arch is depended on");
+        }
+        // Two includes, two dependencies: the extra arch rides past the
+        // row without being tallied twice.
+        assert_eq!((res.internal, res.external, res.unresolved), (2, 0, 0));
     }
 
     #[test]
