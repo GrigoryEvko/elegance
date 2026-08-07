@@ -2313,6 +2313,13 @@ fn render_orphans(arch: &crate::graph::metrics::Architecture, out: &mut String) 
             .collect();
         let _ = writeln!(out, "  orphans by language: {}", rows.join("  "));
     }
+    if arch.tested_only > 0 {
+        let _ = writeln!(
+            out,
+            "  {} more are imported only by tests — exercised, not unreferenced",
+            arch.tested_only,
+        );
+    }
     if arch.orphan_count == 0 {
         return;
     }

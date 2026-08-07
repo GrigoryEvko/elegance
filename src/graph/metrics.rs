@@ -47,6 +47,11 @@ pub struct Architecture {
     /// total count and a capped sample.
     pub orphan_count: u32,
     pub orphans: Vec<String>,
+    /// Judged modules no production file imports but a TEST does. Not
+    /// orphans: a library exercised only by its own suite is a finding
+    /// of its own, and calling it unreferenced is a false positive on
+    /// public API.
+    pub tested_only: u32,
     /// Orphans and judged modules per language, worst rate first, for
     /// trees holding more than one. A pooled figure over a polyglot
     /// directory says nothing about any language in it: gold `zig/`
@@ -91,7 +96,7 @@ const ENTRY_STEMS: &[&str] = &[
 ];
 
 pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> {
-    let (resolution, files, edge_list, targets) = production_view(all)?;
+    let (resolution, files, edge_list, targets, from_tests) = production_view(all)?;
     let n = files.len();
     let mut succ: Vec<Vec<u32>> = vec![Vec::new(); n];
     let mut fan_in = vec![0u32; n];
@@ -117,7 +122,7 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
     let judged = judgeable(&files, &fan_in);
     let (judged_modules, deletable_pct) = deletability(&blasts, &judged);
     let load = load_bearing(&file_labels, &blasts);
-    let (orphan_count, orphans) = find_orphans(&files, &fan_in, &judged);
+    let (orphan_count, orphans, tested_only) = find_orphans(&files, &fan_in, &judged, &from_tests);
     let interfaces = interfaces(&files, &targets, &file_labels, mentions);
 
     Some(Architecture {
@@ -138,6 +143,7 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
         load_bearing: load,
         orphan_count,
         orphans,
+        tested_only,
         by_language: orphans_by_language(&files, &fan_in, &judged),
         interfaces,
     })
@@ -152,6 +158,11 @@ type ProdView<'a> = (
     Vec<&'a GraphFacts>,
     Vec<(u32, u32)>,
     Vec<Vec<Option<usize>>>,
+    // Last element: per kept file, how many TEST files import it. A
+    // test importing production code is not production coupling, so it
+    // earns no edge — but it is not nothing either, and a file reached
+    // only that way is a different finding from one reached by nobody.
+    Vec<u32>,
 );
 
 fn production_view(all: &[GraphFacts]) -> Option<ProdView<'_>> {
@@ -181,7 +192,19 @@ fn production_view(all: &[GraphFacts]) -> Option<ProdView<'_>> {
             }
         }
     }
-    (files.len() >= 2 && !edge_list.is_empty()).then_some((resolution, files, edge_list, targets))
+    let mut from_tests = vec![0u32; files.len()];
+    for (old, facts) in all.iter().enumerate() {
+        if !facts.is_test {
+            continue;
+        }
+        for &j in all_targets[old].iter().flatten() {
+            if let Some(&new) = renum.get(&j) {
+                from_tests[new] += 1;
+            }
+        }
+    }
+    (files.len() >= 2 && !edge_list.is_empty())
+        .then_some((resolution, files, edge_list, targets, from_tests))
 }
 
 /// Strongly connected components with per-component sizes.
@@ -752,18 +775,30 @@ fn deletability(blasts: &[u32], judged: &[bool]) -> (u32, f64) {
 /// Modules with no importers and no entry-point name: count plus a
 /// capped, sorted sample. `judged` excludes the files whose fan-in the
 /// language fixes at zero.
-fn find_orphans(files: &[&GraphFacts], fan_in: &[u32], judged: &[bool]) -> (u32, Vec<String>) {
-    let mut orphans: Vec<String> = files
-        .iter()
-        .zip(fan_in)
-        .zip(judged)
-        .filter(|((f, fi), j)| **j && **fi == 0 && !entryish(&f.path))
-        .map(|((f, _), _)| f.path.display().to_string())
+fn find_orphans(
+    files: &[&GraphFacts],
+    fan_in: &[u32],
+    judged: &[bool],
+    from_tests: &[u32],
+) -> (u32, Vec<String>, u32) {
+    let unreached = |i: usize| judged[i] && fan_in[i] == 0 && !entryish(&files[i].path);
+    let mut orphans: Vec<String> = (0..files.len())
+        .filter(|&i| unreached(i) && from_tests[i] == 0)
+        .map(|i| files[i].path.display().to_string())
         .collect();
+    // A file its own suite exercises and nothing else is a DIFFERENT
+    // finding from one nothing references at all, and conflating them
+    // is a false positive on public API: starlette's testclient.py has
+    // 11 such importers, click's testing.py 8, and 88 of Solidity's 145
+    // production orphans are imported by a mock or a harness. Counted,
+    // not listed, because the reader's next question is how many.
+    let tested = (0..files.len())
+        .filter(|&i| unreached(i) && from_tests[i] > 0)
+        .count() as u32;
     orphans.sort_unstable();
     let count = orphans.len() as u32;
     orphans.truncate(ORPHAN_SHOW);
-    (count, orphans)
+    (count, orphans, tested)
 }
 
 /// Orphans and judged modules per language, worst rate first. Only

@@ -136,6 +136,11 @@ struct ArchitectureOut {
     /// Orphans and judged modules per language, worst rate first. Empty
     /// for a single-language tree, where it would repeat the headline.
     orphans_by_language: Vec<LangOrphans>,
+    /// NOT counted in `orphan_count`: judged modules no production file
+    /// imports but a test does. A library exercised only by its own
+    /// suite is its own finding, and calling it unreferenced is a false
+    /// positive on public API.
+    tested_only: u32,
     /// Median mass-per-surface-unit over exporting modules.
     interface_median_depth: u32,
     shallow_modules: Vec<ShallowModule>,
@@ -295,6 +300,7 @@ fn architecture_out(a: crate::graph::metrics::Architecture) -> ArchitectureOut {
                 judged,
             })
             .collect(),
+        tested_only: a.tested_only,
         interface_median_depth: iface.median_depth,
         shallow_modules: iface
             .shallow
