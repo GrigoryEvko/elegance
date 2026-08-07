@@ -142,7 +142,7 @@ pub fn pack() -> Pack {
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
-        test_path: |p| p.contains("/test") || p.ends_with("Tests.cs") || p.ends_with("Test.cs"),
+        test_path,
         asserty,
         is_hook: |_, _| false,
         // One return value; a tuple return is declared as a type and
@@ -157,6 +157,60 @@ pub fn pack() -> Pack {
 
 fn name_node(node: Node) -> Option<Node> {
     node.child_by_field_name("name")
+}
+
+/// The words a test directory or file is built from: `.` separates the
+/// parts of a project name and case separates the words inside one, so
+/// `Newtonsoft.Json.Tests`, `UnitTests` and `FuzzTests` all yield
+/// `tests` while `Latest` yields only itself.
+const TEST_WORDS: &[&str] = &[
+    "test",
+    "tests",
+    "testing",
+    "spec",
+    "specs",
+    "bench",
+    "benches",
+    "benchmark",
+    "benchmarks",
+];
+
+/// A C# test lives in a project of its own, and the project DIRECTORY
+/// carries the word: `src/UnitTests`, `Src/Newtonsoft.Json.Tests`,
+/// `test/Polly.Specs`, `benchmarks/Dapper.Tests.Performance`. Matching
+/// `/test` and a `Tests.cs` suffix caught 595 of the gold corpus's 1668
+/// test-tree files, so the C# module population read 2032 where the
+/// production code is 965 — over half of it test code, and nearly all
+/// of that orphaned, since nothing imports a test.
+fn test_path(path: &str) -> bool {
+    path.split('/').any(|segment| {
+        segment
+            .split('.')
+            .flat_map(camel_words)
+            .any(|word| TEST_WORDS.contains(&word.to_ascii_lowercase().as_str()))
+    })
+}
+
+/// `UnitTests` -> `Unit`, `Tests`. An uppercase run stays whole so `DI`
+/// and `IOStream` split as written.
+fn camel_words(name: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let chars: Vec<(usize, char)> = name.char_indices().collect();
+    for w in chars.windows(2) {
+        let (i, this) = w[0];
+        let (j, next) = w[1];
+        let boundary = (this.is_lowercase() || this.is_numeric()) && next.is_uppercase();
+        if boundary {
+            out.push(&name[start..j]);
+            start = j;
+        } else if this.is_uppercase() && next.is_lowercase() && i > start {
+            out.push(&name[start..i]);
+            start = i;
+        }
+    }
+    out.push(&name[start..]);
+    out
 }
 
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {

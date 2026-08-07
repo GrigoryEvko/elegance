@@ -336,15 +336,14 @@
 "params" = { hi = 5.0 }
 "expr depth" = { hi = 14.0 }
 "live span" = { hi = 41.0 }
-"magic numbers" = { hi = 1.0 }
+"magic numbers" = { hi = 2.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
 "comment ratio" = { lo = 0.00, hi = 0.70 }
 "loose types" = { hi = 1.0 }
-"casts" = { hi = 1.0 }
+"casts" = { hi = 2.0 }
 "confusable" = { hi = 2.0 }
 "loop depth" = { hi = 1.0 }
 "interface width" = { hi = 26.0 }
-"magic strings" = { hi = 1.0 }
 # 15 runs is under the 200 a percentile needs: borrowed from cs's pooled doc p99
 "module doc" = { hi = 209.0 }
 "type doc" = { hi = 95.0 }
