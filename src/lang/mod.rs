@@ -411,6 +411,16 @@ impl Lang {
                 matches!(ext, Some("c" | "cc" | "cpp" | "cxx" | "c++" | "cu"))
             }
             Lang::OCaml => ext == Some("mli"),
+            // `package-info.java` carries a package's annotations and
+            // its Javadoc, and `module-info.java` the module's
+            // declaration. Neither declares a TYPE, so no import can
+            // name one — `import io.netty.buffer.package-info` is not
+            // even legal syntax. 89 sit in the orphan list across the
+            // gold corpus by construction.
+            Lang::Java => matches!(
+                path.file_name().and_then(|n| n.to_str()),
+                Some("package-info.java" | "module-info.java")
+            ),
             // A `.d.ts` states types for code written elsewhere and no
             // import statement can name it: tsc loads it through
             // `include`, `files` or `types`. 256 of the TypeScript

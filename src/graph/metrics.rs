@@ -1127,6 +1127,37 @@ mod tests {
     }
 
     #[test]
+    fn a_package_info_declares_no_type_so_no_import_can_name_it() {
+        // `package-info.java` carries a package's annotations and its
+        // Javadoc; `import io.netty.buffer.package-info` is not legal
+        // syntax. 89 sat in the gold orphan list by construction, 53 of
+        // them netty's.
+        let files = [
+            fixture(
+                Lang::Java,
+                "io/netty/buffer/ByteBuf.java",
+                &["io.netty.util.Recycler"],
+            ),
+            fixture(Lang::Java, "io/netty/util/Recycler.java", &[]),
+            fixture(Lang::Java, "io/netty/util/package-info.java", &[]),
+            fixture(Lang::Java, "io/netty/unused/Unused.java", &[]),
+            fixture(Lang::Java, "io/netty/unused/package-info.java", &[]),
+        ];
+        let arch = arch(&files);
+        // Both leave the population, whether or not their own package
+        // is depended on — the package fold fills the zero for `util`
+        // and not for `unused`, and neither answer is the one to give.
+        assert_eq!(arch.judged_modules, 3);
+        assert_eq!(
+            arch.orphans,
+            [
+                "io/netty/buffer/ByteBuf.java",
+                "io/netty/unused/Unused.java"
+            ]
+        );
+    }
+
+    #[test]
     fn a_translation_unit_is_not_asked_whether_anything_depends_on_it() {
         // kakoune's src/buffer.hh is included by 13 files and buffer.cc
         // by none, because nothing ever includes a .cc. They are one

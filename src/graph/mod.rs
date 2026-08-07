@@ -1282,9 +1282,33 @@ fn workspace_packages(files: &[GraphFacts]) -> HashMap<Box<str>, PathBuf> {
                 out.entry(Box::<str>::from(name))
                     .or_insert_with(|| dir.to_path_buf());
             }
+            for (name, dir) in subpath_imports(&json, dir) {
+                out.entry(name).or_insert(dir);
+            }
         }
     }
     out
+}
+
+/// Node's own private-name mechanism: a `package.json` may map `#app/*`
+/// onto `./src/*`, and a specifier starting `#` is resolvable ONLY
+/// through that map. ariakit writes 313 of them, every one of which
+/// read as a third-party package.
+///
+/// The name and the directory are exactly what a workspace package
+/// contributes, so a subpath entry joins the same map: `#app` is a
+/// package whose root happens to be `src`.
+fn subpath_imports(json: &serde_json::Value, dir: &Path) -> Vec<(Box<str>, PathBuf)> {
+    let Some(map) = json.get("imports").and_then(|i| i.as_object()) else {
+        return Vec::new();
+    };
+    map.iter()
+        .filter_map(|(key, value)| {
+            let root = key.strip_suffix("/*")?;
+            let target = value.as_str()?.strip_suffix("/*")?;
+            Some((root.into(), normalize(dir, target)))
+        })
+        .collect()
 }
 
 /// A path specifier's components, with the segments that name nothing

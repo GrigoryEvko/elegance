@@ -3417,9 +3417,23 @@ pub(crate) fn one_shot_dir(norm: &str) -> bool {
         "/script/",
         "/benchmarks/",
         "/benchmark/",
+        // netty spells its harness `microbench` and cats `bench`; the
+        // singular of every other name here was already spelled out,
+        // and `example` was the one left plural-only -- 177 orphans
+        // across netty, dune and swift-nio sit under it.
+        "/microbench/",
+        "/bench/",
         "/perf-measures/",
         "/examples/",
+        "/example/",
         "/samples/",
+        "/sample/",
+        // ariakit keeps 678 standalone demos under `sandbox`, each
+        // found by `readdir` at build time rather than imported.
+        "/sandbox/",
+        "/demo/",
+        "/demos/",
+        "/playground/",
         "/codegen/",
         "/tools/",
     ];
