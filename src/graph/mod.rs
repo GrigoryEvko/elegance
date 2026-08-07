@@ -970,39 +970,63 @@ impl Index {
     /// a directory whose contents are chosen at run time, or a name
     /// whose declaration the language lets you split across files.
     fn named_modules(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Vec<usize> {
-        match (from.lang, imp.reach) {
-            (_, crate::lang::Reach::Mention) => self
+        match from.lang {
+            Lang::Lua | Lang::Ruby => self.glob_modules(from, imp),
+            Lang::C | Lang::Cpp | Lang::Cuda => self.nearest_includes(from, &imp.target),
+            _ if imp.reach == crate::lang::Reach::Mention => self
                 .declared
                 .get(&(from.lang, imp.target.clone()))
                 .cloned()
                 .unwrap_or_default(),
-            (Lang::C | Lang::Cpp | Lang::Cuda, _) => self.nearest_includes(from, &imp.target),
-            _ => self.under_directory(from, imp),
+            _ => Vec::new(),
         }
     }
 
-    /// Every module directly under the directory a prefix names.
+    /// Every module a specifier with a run-time component names.
     ///
-    /// `kong/db/schema/plugin_loader.lua:16` writes
+    /// `kong/db/schema/plugin_loader.lua:17` writes
     /// `require("kong.plugins." .. plugin .. ".schema")`, and roda
-    /// writes the same thing as `require "roda/plugins/#{name}"`. The
-    /// name it builds cannot be read from the source -- but the
-    /// directory can. 362 of gold Lua's 550 orphans sit under one of 40
-    /// such prefixes and 417 of Ruby's 490 under one of six, and of
-    /// every Lua completion that resolved at all, 175 of 175 landed
-    /// DIRECTLY under its prefix directory and none elsewhere. Only
-    /// real files are ever named, so unlike completing the literal this
-    /// manufactures no external dependency.
-    fn under_directory(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Vec<usize> {
-        let roots = self.prefix_dirs(from, imp);
+    /// writes the same thing as `require "roda/plugins/#{name}"`. What
+    /// the name builds cannot be read from the source, but everything
+    /// around it can, so the pack hands over `kong.plugins.*.schema`
+    /// and `*` matches exactly one component.
+    ///
+    /// The part AFTER the star is what makes the Lua case work at all:
+    /// nothing sits directly under `kong/plugins`, because each of its
+    /// 150 plugins is a directory, so the prefix alone reaches nothing
+    /// while `kong.plugins.*.handler` names 35 real files. 417 of gold
+    /// Ruby's 490 orphans and 276 of Lua's 342 sit under one of these.
+    /// Only real files are ever named, so unlike completing the literal
+    /// this manufactures no external dependency.
+    fn glob_modules(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Vec<usize> {
+        if !matches!(from.lang, Lang::Lua | Lang::Ruby) {
+            return Vec::new();
+        }
+        let segs: Vec<&str> = imp
+            .target
+            .split(component_separators(from.lang))
+            .filter(|s| !s.is_empty())
+            .collect();
+        let Some(star) = segs.iter().position(|s| *s == "*") else {
+            return Vec::new();
+        };
+        let (before, after) = (&segs[..star], &segs[star + 1..]);
+        if before.is_empty() {
+            return Vec::new();
+        }
+        let rooted = self.glob_root(from, imp, before);
+        // One unknown component, so the prefix ends at a known offset
+        // from the end and there is exactly one place to look.
+        let fits = |c: &[Box<str>]| {
+            let Some(k) = c.len().checked_sub(1 + after.len()) else {
+                return false;
+            };
+            rooted(&c[..k]) && c[k + 1..].iter().zip(after).all(|(a, b)| &**a == *b)
+        };
         self.file_comps
             .iter()
             .enumerate()
-            .filter(|(_, comps)| {
-                roots
-                    .iter()
-                    .any(|r| comps.len() == r.len() + 1 && comps.starts_with(r))
-            })
+            .filter(|(_, c)| fits(c))
             .map(|(i, _)| i)
             .collect()
     }
@@ -1019,35 +1043,30 @@ impl Index {
     /// calls "the necessary JDBC support via a gem". A
     /// `require_relative` prefix is a directory beside the requiring
     /// file, and is not on the load path at all.
-    fn prefix_dirs(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Vec<Vec<Box<str>>> {
-        let target = &*imp.target;
-        if !matches!(from.lang, Lang::Lua | Lang::Ruby) || !target.ends_with(['.', '/']) {
-            return Vec::new();
-        }
-        let segs: Vec<&str> = target
-            .split(component_separators(from.lang))
-            .filter(|s| !s.is_empty())
-            .collect();
-        let Some(last) = segs.last() else {
-            return Vec::new();
-        };
-        if from.lang == Lang::Ruby && imp.reach == crate::lang::Reach::Project {
+    fn glob_root<'a>(
+        &self,
+        from: &GraphFacts,
+        imp: &crate::facts::ImportFact,
+        before: &'a [&str],
+    ) -> impl Fn(&[Box<str>]) -> bool + use<'a> {
+        let lang = from.lang;
+        let beside = (lang == Lang::Ruby && imp.reach == crate::lang::Reach::Project).then(|| {
             let base = from.path.parent().unwrap_or(Path::new(""));
-            return vec![components(&normalize(base, target))];
+            components(&normalize(base, &before.join("/")))
+        });
+        move |dir: &[Box<str>]| match &beside {
+            Some(base) => dir == base.as_slice(),
+            None if !ends_with(dir, before) => false,
+            // Rubygems puts exactly one directory of a gem on
+            // $LOAD_PATH, so a `require` prefix names a directory
+            // directly under one.
+            None => {
+                lang != Lang::Ruby
+                    || dir[..dir.len() - before.len()]
+                        .last()
+                        .is_none_or(|d| &**d == "lib")
+            }
         }
-        let anchored = |c: &[Box<str>]| match from.lang {
-            Lang::Ruby => c[..c.len() - segs.len()]
-                .last()
-                .is_none_or(|d| &**d == "lib"),
-            _ => true,
-        };
-        self.dirs
-            .get(*last)
-            .into_iter()
-            .flatten()
-            .filter(|(c, _)| ends_with(c, &segs) && anchored(c))
-            .map(|(c, _)| c.clone())
-            .collect()
     }
 
     /// The one file whose path ends with these segments. `None` when
@@ -1788,6 +1807,48 @@ mod tests {
     }
 
     #[test]
+    fn a_built_module_name_is_read_on_both_sides_of_what_it_cannot_read() {
+        // kong writes `local plugin_handler = "kong.plugins." .. plugin
+        // .. ".handler"` and requires the local three lines later. The
+        // prefix alone reaches NOTHING — each of kong's 150 plugins is
+        // a directory, so no file sits directly under kong/plugins —
+        // while the suffix names one real file per plugin. 174 of gold
+        // Lua's 342 orphans are inside that directory.
+        use crate::facts::ImportFact;
+        use crate::lang::Reach;
+        let imp = |target: &str, reach| ImportFact {
+            target: target.into(),
+            names: Vec::new(),
+            reach,
+        };
+        let mut loader = file(Lang::Lua, "kong/db/dao/plugins.lua", &[]);
+        loader.imports = vec![
+            imp("kong.plugins.*.handler", Reach::Mention),
+            imp("kong.plugins.*", Reach::Anywhere),
+        ];
+        let files = [
+            loader,
+            file(Lang::Lua, "kong/plugins/acl/handler.lua", &[]),
+            file(Lang::Lua, "kong/plugins/acl/schema.lua", &[]),
+            file(Lang::Lua, "kong/plugins/acme/handler.lua", &[]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        for h in ["acl/handler.lua", "acme/handler.lua"] {
+            assert!(targets[0].contains(&Some(idx(h))), "{h} is loaded that way");
+        }
+        assert!(
+            !targets[0].contains(&Some(idx("acl/schema.lua"))),
+            "the suffix is what tells the files of a plugin apart"
+        );
+        // The bare prefix names a plugin DIRECTORY and no file is
+        // directly inside one, so it resolves to nothing — and the
+        // built name that did resolve is not tallied, because writing a
+        // string is not stating a dependency.
+        assert_eq!((res.internal, res.external, res.unresolved), (0, 1, 0));
+    }
+
+    #[test]
     fn a_ruby_directory_prefix_is_anchored_at_a_load_path_root() {
         // `require "roda/plugins/#{name}"` names a directory the way
         // Lua's concatenated require does, and 417 of gold Ruby's 490
@@ -1804,13 +1865,13 @@ mod tests {
             reach,
         };
         let mut plugins = file(Lang::Ruby, "roda/lib/roda/plugins.rb", &[]);
-        plugins.imports = vec![imp("roda/plugins/", Reach::Anywhere)];
+        plugins.imports = vec![imp("roda/plugins/*", Reach::Anywhere)];
         let mut rodauth = file(Lang::Ruby, "rodauth/lib/rodauth.rb", &[]);
-        rodauth.imports = vec![imp("rodauth/features/", Reach::Anywhere)];
+        rodauth.imports = vec![imp("rodauth/features/*", Reach::Anywhere)];
         let mut jdbc = file(Lang::Ruby, "sequel/lib/sequel/adapters/jdbc.rb", &[]);
-        jdbc.imports = vec![imp("jdbc/", Reach::Anywhere)];
+        jdbc.imports = vec![imp("jdbc/*", Reach::Anywhere)];
         let mut pool = file(Lang::Ruby, "sequel/lib/sequel/connection_pool.rb", &[]);
-        pool.imports = vec![imp("connection_pool/", Reach::Project)];
+        pool.imports = vec![imp("connection_pool/*", Reach::Project)];
         let files = [
             plugins,
             rodauth,
@@ -1839,10 +1900,10 @@ mod tests {
         // `require_relative` is not on the load path at all; it names a
         // directory beside the requiring file.
         assert_eq!(targets[3], [Some(idx("connection_pool/thread.rb"))]);
-        // And a prefix that names modules of this project is not a
-        // third-party dependency. `jdbc/` falls back to the ordinary
-        // matcher, which finds the requiring file itself.
-        assert_eq!((res.internal, res.external, res.unresolved), (4, 0, 0));
+        // A prefix that names modules of this project is not a
+        // third-party dependency, and the one that names a gem is
+        // exactly that.
+        assert_eq!((res.internal, res.external, res.unresolved), (3, 1, 0));
     }
 
     #[test]

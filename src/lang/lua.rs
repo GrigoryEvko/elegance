@@ -191,19 +191,42 @@ fn requires(call: Node, src: &[u8]) -> bool {
 }
 
 /// `require "x"`, `require("x")` and `pcall(require, "x")` — the target
-/// is the first string argument in every spelling.
+/// is the first string argument in every spelling — plus the
+/// concatenation that builds a module name wherever it is written.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    if !requires(node, src) {
-        return Vec::new();
-    }
-    let Some(target) = first_string(node, src) else {
-        return Vec::new();
+    let built = node.kind() == "binary_expression";
+    let target = match built {
+        true => concatenated(node, src),
+        false => requires(node, src)
+            .then(|| first_string(node, src))
+            .flatten(),
     };
-    vec![super::ImportInfo {
-        target: target.into(),
-        names: Vec::new(),
-        reach: super::Reach::Anywhere,
-    }]
+    // A name built where no `require` is looking states no dependency:
+    // the file writes a string, and whether it is a module is settled
+    // by whether one exists. kong assigns
+    // `"kong.plugins." .. plugin .. ".handler"` to a local and requires
+    // it three lines later, so the reach follows the CALL and not the
+    // concatenation's own position.
+    let stated = !built || required(node, src);
+    target
+        .into_iter()
+        .map(|target| super::ImportInfo {
+            target: target.into(),
+            names: Vec::new(),
+            reach: match stated {
+                true => super::Reach::Anywhere,
+                false => super::Reach::Mention,
+            },
+        })
+        .collect()
+}
+
+/// Is this expression the argument of a `require`?
+fn required(node: Node, src: &[u8]) -> bool {
+    node.parent()
+        .filter(|p| p.kind() == "arguments")
+        .and_then(|a| a.parent())
+        .is_some_and(|call| requires(call, src))
 }
 
 /// Parameters carry no types and no defaults; `...` is the variadic
@@ -250,23 +273,53 @@ fn callee_qualified<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
     call.child_by_field_name("name")?.utf8_text(src).ok()
 }
 
-fn first_string<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
+fn first_string(call: Node, src: &[u8]) -> Option<String> {
     let args = call.child_by_field_name("arguments")?;
     let mut cursor = args.walk();
     let arg = args
         .named_children(&mut cursor)
-        .find(|c| matches!(c.kind(), "string" | "binary_expression"))?;
-    match arg.kind() {
-        "string" => Some(quoted(arg, src)),
-        // `require("kong.plugins." .. name .. ".schema")` — the left
-        // operand is everything the source states about the target, and
-        // it names a DIRECTORY. The trailing separator marks it as one;
-        // a concatenation starting anywhere else states no path at all.
-        _ => {
-            let text = quoted(arg.child_by_field_name("left")?, src);
-            text.ends_with(['.', '/']).then_some(text)
+        .find(|c| c.kind() == "string")?;
+    Some(quoted(arg, src).to_string())
+}
+
+/// The module name a concatenation builds, with `*` where the source
+/// stops being able to say.
+///
+/// `"kong.plugins." .. name .. ".schema"` names every module of the
+/// form `kong.plugins.<anything>.schema`. Both literals are readable
+/// and only the middle is not. The prefix must end at a separator; a
+/// concatenation starting anywhere else states no path at all.
+///
+/// The suffix is what tells kong's 150 plugin DIRECTORIES apart from
+/// the files inside them: nothing sits directly under `kong/plugins`,
+/// so the prefix alone reaches nothing while `kong.plugins.*.handler`
+/// names 35 real files.
+fn concatenated(node: Node, src: &[u8]) -> Option<String> {
+    // `..` is RIGHT-associative, so the two literals sit at the ends of
+    // the two spines rather than as children of the outermost node.
+    let (prefix, suffix) = (
+        quoted(spine(node, "left"), src),
+        quoted(spine(node, "right"), src),
+    );
+    if !prefix.ends_with(['.', '/']) {
+        return None;
+    }
+    // A literal must meet the run-time value at a separator, or `*`
+    // would stand for part of a name rather than a whole one.
+    let tail = suffix.starts_with(['.', '/']).then_some(suffix);
+    Some(format!("{prefix}*{}", tail.unwrap_or("")))
+}
+
+/// The far end of a concatenation's spine — the outermost literal on
+/// one side, which is as far as the source keeps saying.
+fn spine<'t>(mut node: Node<'t>, side: &str) -> Node<'t> {
+    while node.kind() == "binary_expression" {
+        match node.child_by_field_name(side) {
+            Some(next) => node = next,
+            None => break,
         }
     }
+    node
 }
 
 /// A string literal's text, without its quotes.
@@ -360,6 +413,12 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         Sem::Lambda if declaring_test(node, src).is_some() => Sem::FnDef,
         Sem::BoolOp => match super::field_text_is(node, "operator", src) {
             Some("and" | "or") => Sem::BoolOp,
+            // A concatenation that BUILDS a module name is where the
+            // dependency is stated, and it is often nowhere near the
+            // `require`: kong writes `local plugin_handler =
+            // "kong.plugins." .. plugin .. ".handler"` on one line and
+            // requires the local on another.
+            Some("..") if concatenated(node, src).is_some() => Sem::Import,
             _ => Sem::None,
         },
         // Lua's import is a CALL, and the core asks about imports at
