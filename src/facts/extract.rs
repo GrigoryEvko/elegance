@@ -3436,8 +3436,13 @@ pub(crate) fn one_shot_dir(norm: &str) -> bool {
         "/playground/",
         "/codegen/",
         "/tools/",
+        "/snippets/",
     ];
-    ONE_SHOT.iter().any(|d| norm.contains(d))
+    // Matched case-insensitively: C# and Swift capitalise a directory
+    // name where every other ecosystem does not, and Polly keeps its 22
+    // documentation snippets under `src/Snippets`.
+    let lower = norm.to_ascii_lowercase();
+    ONE_SHOT.iter().any(|d| lower.contains(d))
 }
 
 fn starts_a_statement(raw: &str) -> bool {

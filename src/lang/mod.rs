@@ -421,6 +421,19 @@ impl Lang {
                 path.file_name().and_then(|n| n.to_str()),
                 Some("package-info.java" | "module-info.java")
             ),
+            // `package.scala` holds a package object, whose members are
+            // visible to the package rather than importable: `package`
+            // is a keyword, so `import a.b.package` is not legal and no
+            // import in the gold corpus names one. 37 orphans.
+            Lang::Scala => path.file_name().and_then(|n| n.to_str()) == Some("package.scala"),
+            // C# assembly-level attributes and suppression lists. They
+            // declare no type, so nothing can reference them, and the
+            // compiler reads them from the compilation rather than from
+            // a using directive.
+            Lang::CSharp => matches!(
+                path.file_name().and_then(|n| n.to_str()),
+                Some("AssemblyInfo.cs" | "GlobalSuppressions.cs")
+            ),
             // A `.d.ts` states types for code written elsewhere and no
             // import statement can name it: tsc loads it through
             // `include`, `files` or `types`. 256 of the TypeScript

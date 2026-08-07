@@ -92,7 +92,7 @@ const ORPHAN_SHOW: usize = 8;
 
 /// Entry-point stems that legitimately have no importers.
 const ENTRY_STEMS: &[&str] = &[
-    "main", "lib", "index", "__init__", "__main__", "app", "cli", "build", "Package",
+    "main", "lib", "index", "__init__", "__main__", "app", "cli", "build", "Package", "mix",
 ];
 
 pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> {
@@ -730,7 +730,33 @@ fn package_of(path: &Path) -> String {
 fn entryish(path: &Path) -> bool {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
     let stem = name.split('.').next().unwrap_or("");
-    ENTRY_STEMS.contains(&stem) || routed(path, name, stem)
+    ENTRY_STEMS.contains(&stem) || routed(path, name, stem) || dune_root(path, name, stem)
+}
+
+/// The root module of a dune library or executable, which the `dune`
+/// file beside it names.
+///
+/// `containers/src/core/dune` says `(name containers)` and
+/// `containers.ml` is what consumers `open`; nothing inside the project
+/// imports it, exactly as nothing imports a `lib.rs`. 53 of gold
+/// OCaml's 134 orphans are one, and the name is read from the manifest
+/// rather than guessed from the path — a library's module is called
+/// after the library, not after the directory holding it.
+fn dune_root(path: &Path, name: &str, stem: &str) -> bool {
+    if !name.ends_with(".ml") && !name.ends_with(".mli") {
+        return false;
+    }
+    let Some(dir) = path.parent() else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(dir.join("dune")) else {
+        return false;
+    };
+    ["(name ", "(public_name "]
+        .iter()
+        .flat_map(|field| text.match_indices(field).map(|(at, f)| at + f.len()))
+        .filter_map(|at| text[at..].split(')').next())
+        .any(|declared| declared.trim().rsplit('.').next() == Some(stem))
 }
 
 /// The eight filenames Next.js reserves inside an `app/` or `pages/`
@@ -1049,9 +1075,14 @@ mod tests {
         // them, because Swift has no syntax that would say so. At file
         // granularity 98% of Swift was orphaned by construction, and Go
         // sat at 52% for the same reason one tier milder.
+        //
+        // The odd target out is `Reporter` and not a `Demo`: a demo
+        // target joined the one-shot directories, so it would leave the
+        // population here for a reason that has nothing to do with the
+        // fold this test is about.
         let files = [
             fixture(Lang::Swift, "Sources/App/main.swift", &["NIOCore"]),
-            fixture(Lang::Swift, "Sources/Demo/Server.swift", &["NIOCore"]),
+            fixture(Lang::Swift, "Sources/Reporter/Server.swift", &["NIOCore"]),
             fixture(
                 Lang::Swift,
                 "Sources/NIOCore/AsyncChannel/Inbound.swift",
@@ -1062,8 +1093,8 @@ mod tests {
         let arch = arch(&files);
         // The import lands on one file of NIOCore; the other is a
         // directory deeper and belongs to the same target either way.
-        // Nothing imports Demo, and that is the answer worth reading.
-        assert_eq!(arch.orphans, ["Sources/Demo/Server.swift"]);
+        // Nothing imports Reporter, and that is the answer worth reading.
+        assert_eq!(arch.orphans, ["Sources/Reporter/Server.swift"]);
         assert_eq!(arch.orphan_count, 1);
     }
 
@@ -1124,6 +1155,26 @@ mod tests {
         assert_eq!(rows, [("rb", 1, 1), ("py", 1, 4)]);
         let summed: u32 = arch.by_language.iter().map(|r| r.1).sum();
         assert_eq!(summed, arch.orphan_count);
+    }
+
+    #[test]
+    fn a_manifest_names_the_module_its_library_is_reached_through() {
+        // `containers/src/core/dune` says `(name containers)`, and
+        // `containers.ml` is what a consumer opens — nothing inside the
+        // project imports it, exactly as nothing imports a `lib.rs`.
+        // The name is READ rather than guessed: a library's module is
+        // called after the library, not after the directory holding it,
+        // and `containers_cbor.ml` sits in `src/cbor`.
+        let dir = std::env::temp_dir().join("elegance-dune-root");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("dune"), "(library (name containers_cbor))\n").unwrap();
+        assert!(entryish(&dir.join("containers_cbor.ml")));
+        assert!(!entryish(&dir.join("encode.ml")), "an ordinary module");
+        // The declaration is what answers, so a file whose stem matches
+        // nothing the manifest names is judged.
+        std::fs::write(dir.join("dune"), "(library (name other))\n").unwrap();
+        assert!(!entryish(&dir.join("containers_cbor.ml")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
