@@ -3375,6 +3375,23 @@ fn names_a_shell(text: &str) -> bool {
 /// exemption is not extended to any other, because for every other one
 /// the question a script raises is the same question a program does.
 fn runs_once(path: &str) -> bool {
+    let norm = rooted(path);
+    one_shot_dir(&norm) || crate::lang::config_file(&norm)
+}
+
+/// A leading separator added, so a directory at the ROOT of a relative
+/// path matches the same rule as one further down: `examples/demo.ts`
+/// and `pkg/examples/demo.ts` are both examples.
+pub(crate) fn rooted(path: &str) -> String {
+    format!("/{}", path.replace('\\', "/").trim_start_matches('/'))
+}
+
+/// A directory whose files RUN rather than get imported: a build step, a
+/// codegen pass, a benchmark harness, a demo. Nothing imports
+/// rich/examples/table.py, and that is a property of what the file is
+/// rather than of the code — 54 of the gold Python corpus's 104 orphans
+/// live in one of these.
+pub(crate) fn one_shot_dir(norm: &str) -> bool {
     const ONE_SHOT: &[&str] = &[
         "/build/",
         "/scripts/",
@@ -3387,11 +3404,7 @@ fn runs_once(path: &str) -> bool {
         "/codegen/",
         "/tools/",
     ];
-    // Leading separator added, so a directory at the ROOT of a
-    // relative path matches the same rule as one further down:
-    // `examples/demo.ts` and `pkg/examples/demo.ts` are both examples.
-    let norm = format!("/{}", path.replace('\\', "/").trim_start_matches('/'));
-    ONE_SHOT.iter().any(|d| norm.contains(d)) || crate::lang::config_file(&norm)
+    ONE_SHOT.iter().any(|d| norm.contains(d))
 }
 
 fn starts_a_statement(raw: &str) -> bool {

@@ -310,12 +310,40 @@ impl Index {
         }
     }
 
+    /// Could an absolute import of `segs` segments have named this file?
+    /// Only if the directory `segs` levels above its module path is on
+    /// sys.path, and a directory holding `__init__.py` never is: it is
+    /// the inside of a package, and code inside a package still spells
+    /// an absolute import from the root.
+    ///
+    /// Fails open on PEP 420 namespace packages, which is the safe
+    /// direction.
+    fn import_root(&self, i: usize, segs: usize) -> bool {
+        let comps = &self.file_comps[i];
+        let anchor: PathBuf = comps[..comps.len().saturating_sub(segs)]
+            .iter()
+            .map(|c| &**c)
+            .collect();
+        !self.paths.contains_key(&anchor.join("__init__.py"))
+    }
+
     fn python(&self, from: &GraphFacts, target: &str) -> Class {
         if !target.starts_with('.') {
             // Absolute: internal if the dotted path is a module suffix
-            // here; otherwise a dependency.
+            // here AND the match is anchored at an import root. A
+            // top-level name is ONE segment long, so a bare suffix match
+            // reads any same-named file as the target: `import types`
+            // landed on starlette/starlette/types.py, `from abc import
+            // ABC` at rich/rich/console.py:4 on rich/rich/abc.py. 77 of
+            // the gold corpus's 1760 internal Python imports were a
+            // stdlib module resolving to project code, and the false
+            // attrs -> rich edges merged two unrelated repositories into
+            // one 73-module cycle.
             let segs: Vec<&str> = target.split('.').collect();
-            return match self.suffix(&segs) {
+            let hit = self
+                .suffix(&segs)
+                .filter(|&i| self.import_root(i, segs.len()));
+            return match hit {
                 Some(i) => Class::Internal(i),
                 None => Class::External,
             };

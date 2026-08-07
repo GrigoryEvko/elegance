@@ -4,6 +4,9 @@
 mod extract;
 
 pub use extract::{extract, is_leaked_credential};
+/// A directory whose files RUN rather than get imported — the graph asks
+/// the same question `is_sink` answers for a C translation unit.
+pub(crate) use extract::{one_shot_dir, rooted};
 
 use std::path::PathBuf;
 

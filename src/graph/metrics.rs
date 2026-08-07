@@ -683,7 +683,13 @@ fn package_of(path: &Path) -> String {
 /// on it? A translation unit is a sink by construction, so its answer
 /// is settled before the code is read. See `Lang::is_sink`.
 fn judgeable(files: &[&GraphFacts]) -> Vec<bool> {
-    files.iter().map(|f| !f.lang.is_sink(&f.path)).collect()
+    files
+        .iter()
+        .map(|f| {
+            let path = f.path.display().to_string();
+            !f.lang.is_sink(&f.path) && !crate::facts::one_shot_dir(&crate::facts::rooted(&path))
+        })
+        .collect()
 }
 
 /// The judged population, and the share of it that nothing transitively
