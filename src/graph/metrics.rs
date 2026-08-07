@@ -96,7 +96,7 @@ const ENTRY_STEMS: &[&str] = &[
 ];
 
 pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> {
-    let (resolution, files, edge_list, targets, from_tests) = production_view(all)?;
+    let (resolution, files, edge_list, targets, mut from_tests) = production_view(all)?;
     let n = files.len();
     let mut succ: Vec<Vec<u32>> = vec![Vec::new(); n];
     let mut fan_in = vec![0u32; n];
@@ -119,6 +119,7 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
     let mut blasts = blast_radii(&sccs, &comp_succ, n);
     fold_over_modules(&files, &edge_list, &mut fan_in, &mut blasts);
     fold_over_packages(&files, &edge_list, &mut fan_in, &mut blasts);
+    fold_test_reach(&files, &mut from_tests);
     let judged = judgeable(&files, &fan_in);
     let (judged_modules, deletable_pct) = deletability(&blasts, &judged);
     let load = load_bearing(&file_labels, &blasts);
@@ -647,6 +648,44 @@ fn fold_over_modules(
         fan_in[i] = u32::from(module);
         blasts[i] = u32::from(module);
     }
+}
+
+/// The same fold, for the OTHER thing an import can credit.
+///
+/// `fan_in` is folded over the module for every language whose imports
+/// name one, and `from_tests` never was — so a test importing a Go
+/// package credited only the file standing for it, and the package's
+/// other files read as reached by nobody. Every one of go-cmp's
+/// `internal/teststructs/project1..4.go` is that: `compare_test.go`
+/// imports the package, and the four files the representative did not
+/// stand for were orphans. 11 of Go's 15 remaining orphans were this
+/// one gap, and it reached Java, Scala and Swift the same way.
+///
+/// A zero is filled and a count is never overwritten: the question is
+/// only whether a test reaches the module at all.
+fn fold_test_reach(files: &[&GraphFacts], from_tests: &mut [u32]) {
+    let reached: HashSet<(usize, String)> = files
+        .iter()
+        .zip(from_tests.iter())
+        .filter(|&(_, &n)| n > 0)
+        .filter_map(|(f, _)| module_key(f))
+        .collect();
+    for (i, f) in files.iter().enumerate() {
+        let held = module_key(f).is_some_and(|k| reached.contains(&k));
+        from_tests[i] = from_tests[i].max(u32::from(held));
+    }
+}
+
+/// What a module means for the language, where its imports name one: a
+/// directory for Go and Swift, a declared package for Java and Scala.
+fn module_key(f: &GraphFacts) -> Option<(usize, String)> {
+    use crate::lang::Lang;
+    let name = match f.lang {
+        Lang::Go | Lang::Swift => f.path.parent()?.display().to_string(),
+        Lang::Java | Lang::Scala => package_of(&f.path),
+        _ => return None,
+    };
+    Some((f.lang as usize, name))
 }
 
 /// A Java or Scala PACKAGE is the unit of visibility — package-private
@@ -1184,6 +1223,40 @@ mod tests {
         assert_eq!(rows, [("rb", 1, 1), ("py", 1, 4)]);
         let summed: u32 = arch.by_language.iter().map(|r| r.1).sum();
         assert_eq!(summed, arch.orphan_count);
+    }
+
+    #[test]
+    fn a_test_reaching_a_module_reaches_every_file_of_it() {
+        // `fan_in` was folded over the module and `from_tests` was not,
+        // so a test importing a Go PACKAGE credited only the file
+        // standing for it. go-cmp's `internal/teststructs/` is exactly
+        // that: `compare_test.go` imports the package, and the files the
+        // representative did not stand for read as reached by nobody.
+        // 11 of Go's 15 remaining orphans were this one gap.
+        const ROOT: &str = "github.com/google/go-cmp/cmp";
+        let mut suite = fixture(
+            Lang::Go,
+            "cmp/compare_test.go",
+            &[&format!("{ROOT}/internal/teststructs")],
+        );
+        suite.is_test = true;
+        let files = [
+            suite,
+            fixture(
+                Lang::Go,
+                "cmd/dump/main.go",
+                &[&format!("{ROOT}/internal/value")],
+            ),
+            fixture(Lang::Go, "cmp/internal/value/value.go", &[]),
+            fixture(Lang::Go, "cmp/internal/teststructs/structs.go", &[]),
+            fixture(Lang::Go, "cmp/internal/teststructs/project1.go", &[]),
+            fixture(Lang::Go, "cmp/unused/gone.go", &[]),
+        ];
+        let arch = arch(&files);
+        // Neither teststructs file is an orphan, and both are counted
+        // as reached by a test rather than by production code.
+        assert_eq!(arch.orphans, ["cmp/unused/gone.go"]);
+        assert_eq!(arch.tested_only, 2);
     }
 
     #[test]
