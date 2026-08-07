@@ -125,9 +125,16 @@ impl Sem {
         )
     }
 
+    /// Where a grammar's own kind ids start once shifted clear of the
+    /// abstracted buckets above. A kind id and a bucket both feed the
+    /// same hash, so an unshifted `identifier` kind would hash as some
+    /// other language's literal.
+    pub const KIND_BASE: u64 = 16;
+
     /// Normalization bucket for clone hashing: nodes in the same bucket hash
     /// identically regardless of spelling (Type-2 clones). `None` means the
-    /// node keeps its grammar identity.
+    /// node keeps its grammar identity, shifted clear of these by
+    /// [`KIND_BASE`].
     pub fn clone_bucket(self) -> Option<u64> {
         match self {
             Sem::Ident => Some(1),

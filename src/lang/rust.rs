@@ -347,25 +347,23 @@ fn use_edges(node: Node, prefix: &str, src: &[u8], out: &mut Vec<super::ImportIn
             // `use crate::cmd::find::r#match::X` names the module
             // `match`; the escape is the parser's, not the path's.
             let full = join(&text(node).replace("r#", ""));
-            let leaf = full.rsplit("::").next().unwrap_or("").to_string();
+            let leaf: Box<str> = full.rsplit("::").next().unwrap_or("").into();
+            let bound = (!leaf.is_empty()).then_some(leaf);
             out.push(super::ImportInfo {
                 target: full.into(),
-                names: (!leaf.is_empty())
-                    .then(|| leaf.into())
-                    .into_iter()
-                    .collect(),
+                names: bound.into_iter().collect(),
                 reach: super::Reach::Anywhere,
             });
         }
-        "use_as_clause" => out.push(super::ImportInfo {
-            target: join(node.child_by_field_name("path").map(text).unwrap_or("")).into(),
-            names: node
-                .child_by_field_name("alias")
-                .map(|a| text(a).into())
-                .into_iter()
-                .collect(),
-            reach: super::Reach::Anywhere,
-        }),
+        "use_as_clause" => {
+            let path = node.child_by_field_name("path").map(text).unwrap_or("");
+            let alias = node.child_by_field_name("alias").map(|a| text(a).into());
+            out.push(super::ImportInfo {
+                target: join(path).into(),
+                names: alias.into_iter().collect(),
+                reach: super::Reach::Anywhere,
+            });
+        }
         "scoped_use_list" => {
             let deeper = join(node.child_by_field_name("path").map(text).unwrap_or(""));
             if let Some(list) = node.child_by_field_name("list") {

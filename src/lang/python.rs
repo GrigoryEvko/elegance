@@ -242,67 +242,62 @@ fn returned_arity(node: Node) -> u16 {
 /// `import a.b, c as d` and `from ..pkg import x, y as z` — one edge per
 /// module; relative dots ride along in the target text.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    let text = |n: Node| n.utf8_text(src).unwrap_or("");
-    let mut out = Vec::new();
-    let mut cursor = node.walk();
     match node.kind() {
-        "import_statement" => {
-            for child in node.named_children(&mut cursor) {
-                match child.kind() {
-                    // `import a.b` binds the root `a`.
-                    "dotted_name" => out.push(super::ImportInfo {
-                        target: text(child).into(),
-                        names: child
-                            .named_child(0)
-                            .map(|r| text(r).into())
-                            .into_iter()
-                            .collect(),
-                        reach: super::Reach::Anywhere,
-                    }),
-                    "aliased_import" => out.push(super::ImportInfo {
-                        target: child
-                            .child_by_field_name("name")
-                            .map(text)
-                            .unwrap_or("")
-                            .into(),
-                        names: child
-                            .child_by_field_name("alias")
-                            .map(|a| text(a).into())
-                            .into_iter()
-                            .collect(),
-                        reach: super::Reach::Anywhere,
-                    }),
-                    _ => {}
-                }
-            }
-        }
-        "import_from_statement" => {
-            let module = node.child_by_field_name("module_name");
-            let target: Box<str> = module.map(text).unwrap_or("").into();
-            let mut names: Vec<Box<str>> = Vec::new();
-            for child in node.named_children(&mut cursor) {
-                if module.is_some_and(|m| m.id() == child.id()) {
-                    continue;
-                }
-                match child.kind() {
-                    "dotted_name" => names.push(text(child).into()),
-                    "aliased_import" => {
-                        if let Some(a) = child.child_by_field_name("alias") {
-                            names.push(text(a).into());
-                        }
-                    }
-                    _ => {} // wildcard binds unknowable names
-                }
-            }
-            out.push(super::ImportInfo {
-                target,
-                names,
-                reach: super::Reach::Anywhere,
-            });
-        }
-        _ => {}
+        "import_statement" => plain_imports(node, src),
+        "import_from_statement" => vec![from_import(node, src)],
+        _ => Vec::new(),
     }
-    out
+}
+
+/// `import a.b, c as d` — one edge per module named.
+fn plain_imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter_map(|child| one_import(child, src))
+        .collect()
+}
+
+/// One clause of an `import` statement, and the single local it binds:
+/// the ROOT of a dotted path, or the alias where one is written.
+fn one_import(child: Node, src: &[u8]) -> Option<super::ImportInfo> {
+    let text = |n: Node| n.utf8_text(src).unwrap_or("");
+    let (target, bound) = match child.kind() {
+        "dotted_name" => (child, child.named_child(0)),
+        "aliased_import" => (
+            child.child_by_field_name("name")?,
+            child.child_by_field_name("alias"),
+        ),
+        _ => return None,
+    };
+    Some(super::ImportInfo {
+        target: text(target).into(),
+        names: super::binds(bound, src),
+        reach: super::Reach::Anywhere,
+    })
+}
+
+/// `from ..pkg import x, y as z` — ONE edge, because one module is
+/// named; every local it binds rides along. The leading dots ride along
+/// in the target text. A wildcard binds names nothing can enumerate, so
+/// it contributes none.
+fn from_import(node: Node, src: &[u8]) -> super::ImportInfo {
+    let text = |n: Node| n.utf8_text(src).unwrap_or("");
+    let module = node.child_by_field_name("module_name");
+    let mut cursor = node.walk();
+    let names = node
+        .named_children(&mut cursor)
+        .filter(|c| module.is_none_or(|m| m.id() != c.id()))
+        .filter_map(|c| match c.kind() {
+            "dotted_name" => Some(text(c).into()),
+            "aliased_import" => c.child_by_field_name("alias").map(|a| text(a).into()),
+            _ => None,
+        })
+        .collect();
+    super::ImportInfo {
+        target: module.map(text).unwrap_or("").into(),
+        names,
+        reach: super::Reach::Anywhere,
+    }
 }
 
 /// Public: conventionally-named (no underscore) and not local to a function.

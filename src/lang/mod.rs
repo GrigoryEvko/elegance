@@ -503,6 +503,17 @@ pub struct ImportInfo {
     pub reach: Reach,
 }
 
+/// The at-most-one local an import binds, as the list the fact carries.
+/// A `use x as y`, an `import a.b` and a `from p import q` each bind one
+/// name per clause, and every pack spelled the same three-step chain to
+/// say so.
+pub(super) fn binds(name: Option<Node>, src: &[u8]) -> Vec<Box<str>> {
+    name.and_then(|n| n.utf8_text(src).ok())
+        .map(Into::into)
+        .into_iter()
+        .collect()
+}
+
 /// The field names of an anonymous record, when a node is one.
 pub type RecordKeys = fn(Node, &[u8]) -> Option<Vec<Box<str>>>;
 

@@ -45,20 +45,15 @@ fn retune(pack: &Pack, parser: &mut Parser, path: &Path) {
     }
 }
 
-pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> FileFacts {
-    retune(pack, parser, path);
-    let mut blank = Rows::new(source.lines().count());
-    for (row, line) in source.lines().enumerate() {
-        if line.trim().is_empty() {
-            blank.set(row);
-        }
-    }
-    let lines = blank.len as u32;
-    let mut facts = FileFacts {
+/// The empty fact sheet a walk fills in: the counts a file gives up
+/// without being parsed, plus the synthetic `<module>` unit every file
+/// has whether or not it declares anything.
+fn blank_facts(pack: &Pack, path: &Path, lines: u32, blank_lines: u32) -> FileFacts {
+    FileFacts {
         path: path.to_path_buf(),
         lang: pack.lang,
         lines,
-        blank_lines: blank.count() as u32,
+        blank_lines,
         comment_lines: 0,
         parse_errors: 0,
         too_deep: false,
@@ -95,7 +90,18 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         classes: Vec::new(),
         interfaces: Vec::new(),
         comments: Vec::new(),
-    };
+    }
+}
+
+pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> FileFacts {
+    retune(pack, parser, path);
+    let mut blank = Rows::new(source.lines().count());
+    for (row, line) in source.lines().enumerate() {
+        if line.trim().is_empty() {
+            blank.set(row);
+        }
+    }
+    let mut facts = blank_facts(pack, path, blank.len as u32, blank.count() as u32);
     let Some(tree) = parser.parse(source, None) else {
         facts.parse_errors = 1;
         return facts;
@@ -1163,7 +1169,9 @@ impl Extractor<'_> {
             depth: ctx.depth + 1,
             ..ctx
         };
-        let key = sem.clone_bucket().unwrap_or(node.kind_id() as u64 + 16);
+        let key = sem
+            .clone_bucket()
+            .unwrap_or(node.kind_id() as u64 + Sem::KIND_BASE);
         self.tokens[ctx.unit].push(key);
         let mut hash = mix(self.seed, key);
         let mut mass = 1u32;
@@ -1174,7 +1182,7 @@ impl Extractor<'_> {
         for child in node.children(&mut cursor) {
             if !child.is_named() {
                 // Anonymous tokens (operators, keywords) shape identity too.
-                hash = mix(hash, child.kind_id() as u64 + 16);
+                hash = mix(hash, child.kind_id() as u64 + Sem::KIND_BASE);
                 continue;
             }
             let Some(sub) = self.walk(child, ctx) else {
@@ -4050,12 +4058,22 @@ fn push_word(word: &str, glue: &[&str], out: &mut std::collections::HashSet<Stri
     }
 }
 
+/// splitmix64's published constants, named for their role in it: the
+/// golden-ratio multiplier that spreads one input across the word, the
+/// two xor-shift-multiply rounds of its finalizer, and the final shift.
+/// The algorithm IS these numbers, so they are cited rather than
+/// paraphrased.
+const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
+const ROUNDS: [(u32, u64); 2] = [(30, 0xBF58_476D_1CE4_E5B9), (27, 0x94D0_49BB_1331_11EB)];
+const FINAL_SHIFT: u32 = 31;
+
 /// splitmix64-style combiner: order-sensitive, statistically strong, cheap.
 fn mix(h: u64, x: u64) -> u64 {
-    let mut z = h ^ x.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
+    let mut z = h ^ x.wrapping_mul(GOLDEN);
+    for (shift, multiplier) in ROUNDS {
+        z = (z ^ (z >> shift)).wrapping_mul(multiplier);
+    }
+    z ^ (z >> FINAL_SHIFT)
 }
 
 #[cfg(test)]
