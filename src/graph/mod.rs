@@ -210,21 +210,43 @@ impl Index {
     }
 
     fn classify(&self, i: usize, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Class {
+        match self.by_language(i, from, imp) {
+            Some(class) => class,
+            // Everything else resolves the same way: split the target on
+            // whatever this language uses to separate namespace or path
+            // components, then match the tail against the scanned files.
+            // Only the separators differ.
+            //
+            //   Lua       `require "a.b.c"` walks package.path
+            //   Ruby      `require` searches $LOAD_PATH
+            //   Perl      `use Foo::Bar` mirrors the namespace
+            //   PHP       `use Foo\\Bar` likewise
+            //   the rest  a package or namespace names a directory
+            None => self.by_components(from.lang, imp),
+        }
+    }
+
+    /// The resolver a language states its own dependencies with, where
+    /// it has one. `None` hands the target to the component matcher.
+    fn by_language(
+        &self,
+        i: usize,
+        from: &GraphFacts,
+        imp: &crate::facts::ImportFact,
+    ) -> Option<Class> {
+        self.by_path(from, imp)
+            .or_else(|| self.by_name(i, from, &imp.target))
+    }
+
+    /// Languages whose specifier is a PATH, resolved against the file
+    /// it names rather than against a namespace.
+    fn by_path(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Option<Class> {
         let target = &*imp.target;
-        match from.lang {
-            Lang::Python => self.python(from, target),
-            Lang::Rust => self.rust(i, from, target),
+        Some(match from.lang {
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => self.web(from, target),
-            Lang::Go => self.go(target),
-            Lang::Swift => self.swift(target),
             // An import names a FILE, and the generic arm dropped the
             // extension on one side of the comparison only.
             Lang::Solidity => self.solidity(from, imp),
-            // A module name is CamelCase and its path is snake_case,
-            // and nothing bridged the two.
-            Lang::Elixir => self.elixir(target),
-            // A module IS a file, and the file is not capitalised.
-            Lang::OCaml => self.ocaml(i, target),
             Lang::Zig => self.zig(from, target),
             // C++ includes resolve exactly as C's do: a quoted path is
             // relative to the including file, an angled one is a
@@ -241,19 +263,30 @@ impl Index {
             Lang::Ruby if imp.reach == crate::lang::Reach::Project => {
                 self.ruby_relative(from, target)
             }
-            // Everything below resolves the same way: split the target
-            // on whatever this language uses to separate namespace or
-            // path components, then match the tail against the scanned
-            // files. Only the separators differ.
-            //
-            //   Lua       `require "a.b.c"` walks package.path
-            //   Ruby      `require_relative "a/b"` is a path
-            //   Perl      `use Foo::Bar` mirrors the namespace
-            //   PHP       `use Foo\\Bar` likewise
-            //   Solidity  an import names a FILE path
-            //   the rest  a package or namespace names a directory
-            lang => self.by_components(lang, imp),
-        }
+            _ => return None,
+        })
+    }
+
+    /// Languages whose specifier is a NAME, resolved against what the
+    /// language calls a module rather than against a path.
+    fn by_name(&self, i: usize, from: &GraphFacts, target: &str) -> Option<Class> {
+        Some(match from.lang {
+            Lang::Python => self.python(from, target),
+            Lang::Rust => self.rust(i, from, target),
+            Lang::Go => self.go(target),
+            Lang::Swift => self.swift(target),
+            // A module name is CamelCase and its path is snake_case,
+            // and nothing bridged the two.
+            Lang::Elixir => self.elixir(target),
+            // A module IS a file, and the file is not capitalised.
+            Lang::OCaml => self.ocaml(i, target),
+            // The packs cut a JVM import back to the TYPE, whose file it
+            // is. What is left uncut names a PACKAGE — `import a.b.*`,
+            // `import cats.data.{X, Y}` — and a package is a directory
+            // exactly as a Go package is.
+            Lang::Java | Lang::Scala => self.jvm(target),
+            _ => return None,
+        })
     }
 
     /// Split the target on whatever separates this language's namespace
@@ -632,6 +665,29 @@ impl Index {
             .rev()
             .find_map(|take| self.path_suffix(&segs[segs.len() - take..]))
             .map_or(Class::External, Class::Internal)
+    }
+
+    /// A dotted JVM name: the file it names, or the package directory it
+    /// names when no file answers to it. 770 Java and 1018 Scala targets
+    /// in the gold corpus name a package and no file — an on-demand
+    /// import and a selector list both state one.
+    fn jvm(&self, target: &str) -> Class {
+        let parts: Vec<&str> = target.split('.').filter(|p| !p.is_empty()).collect();
+        match self.suffix(&parts).or_else(|| self.dir_suffix(&parts)) {
+            Some(i) => Class::Internal(i),
+            None => Class::External,
+        }
+    }
+
+    /// The shallowest package directory whose components these segments
+    /// suffix-match, answered by a representative file of it.
+    fn dir_suffix(&self, segs: &[&str]) -> Option<usize> {
+        self.dirs
+            .get(*segs.last()?)?
+            .iter()
+            .filter(|(c, _)| ends_with(c, segs))
+            .min_by_key(|(c, _)| c.len())
+            .map(|(_, i)| *i)
     }
 
     /// The one file whose path ends with these segments. `None` when

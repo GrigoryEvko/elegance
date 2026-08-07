@@ -107,6 +107,7 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
 
     let mut blasts = blast_radii(&sccs, &comp_succ, n);
     fold_over_modules(&files, &edge_list, &mut fan_in, &mut blasts);
+    fold_over_packages(&files, &edge_list, &mut fan_in, &mut blasts);
     let judged = judgeable(&files);
     let (judged_modules, deletable_pct) = deletability(&blasts, &judged);
     let load = load_bearing(&file_labels, &blasts);
@@ -604,6 +605,78 @@ fn fold_over_modules(
         fan_in[i] = u32::from(module);
         blasts[i] = u32::from(module);
     }
+}
+
+/// A Java or Scala PACKAGE is the unit of visibility — package-private
+/// is Java's default access — and a reference between two files of one
+/// package needs no import at all. Nobody writes the redundant one: 11
+/// of the gold corpus's 71978 Java imports name the importer's own
+/// package, and 1961 of Java's 2939 orphans are named by a same-package
+/// sibling. There is no edge to resolve better.
+///
+/// Where the import IS written it names the file, so unlike a Go package
+/// the count is kept and only a zero is filled: a file nothing imports
+/// inherits whatever depends on its package, and a package nobody
+/// imports keeps its zero.
+fn fold_over_packages(
+    files: &[&GraphFacts],
+    edges: &[(u32, u32)],
+    fan_in: &mut [u32],
+    blasts: &mut [u32],
+) {
+    use crate::lang::Lang;
+    let jvm = |f: &GraphFacts| matches!(f.lang, Lang::Java | Lang::Scala);
+    if !files.iter().any(|f| jvm(f)) {
+        return;
+    }
+    let key = |f: &GraphFacts| (f.lang as usize, package_of(&f.path));
+    let depended: HashSet<(usize, String)> = edges
+        .iter()
+        .map(|&(_, b)| files[b as usize])
+        .filter(|f| jvm(f))
+        .map(key)
+        .collect();
+    for (i, f) in files.iter().enumerate() {
+        if !jvm(f) {
+            continue;
+        }
+        let held = u32::from(depended.contains(&key(f)));
+        fan_in[i] = fan_in[i].max(held);
+        blasts[i] = blasts[i].max(held);
+    }
+}
+
+/// The package a JVM source file declares, read off its path: whatever
+/// lies below the source root.
+///
+/// A package is not a directory. sbt cross-building spreads one over
+/// `shared/`, `js/`, `scala-2/` and `scala-3/` source roots and Gradle
+/// spreads it over `src/main/java` and `src/testFixtures/java`; keying
+/// on the directory left 496 of Scala's modules orphaned where the
+/// package leaves 290.
+fn package_of(path: &Path) -> String {
+    let comps: Vec<&str> = path
+        .parent()
+        .unwrap_or(Path::new(""))
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    let root = |c: &str| {
+        matches!(c, "java" | "scala" | "kotlin")
+            || c.starts_with("scala-")
+            || c.starts_with("java-")
+    };
+    // `src/<set>/<language>/<package>` is what Maven, Gradle and sbt all
+    // write. `java` is a package name too — netty declares
+    // java.lang.invoke — so the root is found by the `src` above it
+    // rather than by its name alone.
+    let below = comps
+        .windows(3)
+        .rposition(|w| w[0] == "src" && root(w[2]))
+        .map(|k| k + 3)
+        .or_else(|| comps.iter().rposition(|c| root(c)).map(|k| k + 1))
+        .unwrap_or(0);
+    comps[below..].join("/")
 }
 
 /// One flag per file: can this module be asked whether anything depends
