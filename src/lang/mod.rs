@@ -274,6 +274,20 @@ const DESCS: [Desc; LANGS.len()] = [
     },
 ];
 
+/// Does the filesystem mark this file as something to run? Unix only;
+/// elsewhere every file reads as non-executable, which keeps the graph
+/// question being asked rather than silently skipped.
+#[cfg(unix)]
+fn executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable(_path: &Path) -> bool {
+    false
+}
+
 impl Lang {
     pub fn from_path(path: &Path) -> Option<Lang> {
         let ext = path.extension()?.to_str()?;
@@ -367,6 +381,14 @@ impl Lang {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.ends_with(".d.ts")),
+            // A shell script you RUN is not a module anyone sources.
+            // git/git-submodule.sh is dispatched by git's C binary and
+            // git/ci/*.sh from workflow YAML; 100 of the 105 remaining
+            // gold shell orphans are that, against 5 library-shaped
+            // files. The EXECUTABLE BIT is the signal and the shebang is
+            // not: bats-core's libraries all carry `#!/usr/bin/env bash`
+            // for shellcheck and none of them is executable.
+            Lang::Shell => executable(path),
             _ => false,
         }
     }
