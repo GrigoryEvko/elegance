@@ -75,7 +75,12 @@ const KINDS: &[(&str, Sem)] = &[
     ("cast_expression", Sem::Cast),
     ("comment", Sem::Comment),
     ("preproc_include", Sem::Import),
-    ("using_declaration", Sem::Import),
+    // Inside a class or enum body `#include` is not a declaration
+    // position, and the grammar reads the line as the generic
+    // `preproc_call` it shares with `#pragma` and `#error`.
+    ("preproc_call", Sem::Import),
+    // `using_declaration` is absent by decision: it names a namespace
+    // member, and the graph resolves against file paths. See `imports`.
     ("identifier", Sem::Ident),
     ("field_identifier", Sem::Ident),
     ("type_identifier", Sem::Ident),
@@ -401,18 +406,23 @@ fn suite_argument(node: Node) -> Option<Node> {
     params.named_child(0)?.child_by_field_name("type")
 }
 
-/// `#include <x>` keeps its brackets (definitionally external);
-/// `using namespace ns` and `using ns::name` are import edges too.
+/// `#include <x>` keeps its brackets (definitionally external), and an
+/// include is the only thing here that names a module.
+///
+/// `using ns::name` and `using namespace ns` are deliberately NOT import
+/// edges. A C++ namespace has no file it corresponds to, so the graph's
+/// path resolver can never match one: every such target fell through to
+/// the unresolved bucket, which is supposed to mean "this names
+/// something that should be HERE and is not". Across the gold corpus
+/// 2,480 of the 3,236 imports reported unresolved under cpp and cuda
+/// were `using` declarations — cutlass 1,386 of 1,617, transformer-
+/// engine 596 of 727, kakoune 57 of 57 — and none of them could ever
+/// have resolved.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    let text = |n: Node| n.utf8_text(src).unwrap_or("");
-    let target = match node.kind() {
-        "preproc_include" => node.child_by_field_name("path").map(text),
-        _ => node.named_child(0).map(text),
-    };
-    target
+    super::c::include_target(node, src)
         .map(|t| {
             vec![super::ImportInfo {
-                target: t.trim_matches('"').into(),
+                target: t.into(),
                 names: Vec::new(),
                 reach: super::Reach::Anywhere,
             }]
@@ -687,6 +697,29 @@ mod tests {
         let ctor = facts("struct S {\n  S(int a, int b) { x = a + b; }\n};\n");
         assert_eq!(&*ctor.units[1].name, "S");
         assert!(!ctor.units[1].named_test);
+    }
+
+    #[test]
+    fn a_using_declaration_is_not_a_module_and_an_include_in_a_class_body_is() {
+        // `using` names a namespace member, and no file corresponds to a
+        // C++ namespace, so treating one as an import edge could only
+        // ever fill the unresolved bucket: 2,480 of the 3,236 imports
+        // the gold corpus reported unresolved under cpp and cuda were
+        // these.
+        let f = facts(
+            "#include <vector>\n#include \"local.hpp\"\nusing std::vector;\nusing namespace detail;\n",
+        );
+        let targets: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
+        assert_eq!(targets, ["<vector>", "local.hpp"]);
+        // Inside a class body `#include` is not a declaration position,
+        // so the grammar yields `preproc_call` — the kind it also gives
+        // `#pragma`. ctre's pcre_actions.hpp keeps 17 of its 22 includes
+        // there and every one of those headers read as an orphan.
+        let g = facts(
+            "#pragma once\nstruct actions {\n#include \"a.inc.hpp\"\n#include <b.hpp>  // trailing\n};\n",
+        );
+        let inner: Vec<&str> = g.imports.iter().map(|i| &*i.target).collect();
+        assert_eq!(inner, ["a.inc.hpp", "<b.hpp>"], "#pragma names nothing");
     }
 
     #[test]

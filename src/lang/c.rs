@@ -42,6 +42,11 @@ const KINDS: &[(&str, Sem)] = &[
     ("cast_expression", Sem::Cast),
     ("comment", Sem::Comment),
     ("preproc_include", Sem::Import),
+    // `#include` is only a `preproc_include` where a declaration may
+    // stand. Inside a struct or enum body the grammar reads it as the
+    // generic `preproc_call`, and every other directive shares that
+    // kind — `include_target` is what tells them apart.
+    ("preproc_call", Sem::Import),
     ("identifier", Sem::Ident),
     ("field_identifier", Sem::Ident),
     ("type_identifier", Sem::Ident),
@@ -156,16 +161,51 @@ pub fn pack() -> Pack {
 /// Quotes stripped, angle brackets kept: `<stdio.h>` is definitionally
 /// external. C binds no names.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    node.child_by_field_name("path")
-        .and_then(|p| p.utf8_text(src).ok())
+    include_target(node, src)
         .map(|t| {
             vec![super::ImportInfo {
-                target: t.trim_matches('"').into(),
+                target: t.into(),
                 names: Vec::new(),
                 reach: super::Reach::Anywhere,
             }]
         })
         .unwrap_or_default()
+}
+
+/// The header an include node names, or None when the node is not an
+/// include at all.
+///
+/// `preproc_include` carries a `path` field and is what the grammar
+/// produces wherever a declaration may stand. Where one may not — a
+/// struct body, an enum body — the same line parses as `preproc_call`,
+/// which is also `#pragma`, `#error` and `#line`, so the directive has
+/// to be read. ctre's pcre_actions.hpp holds 17 of its 22 includes
+/// inside `struct pcre_actions { … }` and every one of those headers
+/// read as an orphan; cutlass, musl and fmt spell the same idiom in
+/// enum bodies.
+///
+/// `#include FOO` stays invisible, as the module caveat states: the
+/// argument is a macro name and expansion is not run.
+pub(super) fn include_target<'a>(node: Node, src: &'a [u8]) -> Option<&'a str> {
+    if let Some(path) = node.child_by_field_name("path") {
+        return path.utf8_text(src).ok().map(|t| t.trim_matches('"'));
+    }
+    let directive = node.child_by_field_name("directive")?.utf8_text(src).ok()?;
+    if !matches!(directive, "#include" | "#include_next" | "#import") {
+        return None;
+    }
+    // A `preproc_arg` runs to end of line, so it carries any trailing
+    // comment with it; the specifier ends at its own closing delimiter.
+    let arg = node
+        .child_by_field_name("argument")?
+        .utf8_text(src)
+        .ok()?
+        .trim_start();
+    match arg.as_bytes().first()? {
+        b'"' => arg[1..].split('"').next(),
+        b'<' => arg.split_once('>').map(|(head, _)| &arg[..head.len() + 1]),
+        _ => None,
+    }
 }
 
 /// abort() is C's panic; exit() is judgment we don't make.
@@ -289,6 +329,23 @@ mod tests {
         let (cog, cyc) = complexity(&f.units[1]);
         // #ifdef +1, #else +1, if +1, goto +1 = 4; decisions ifdef+if = 3.
         assert_eq!((cog, cyc), (4, 3));
+    }
+
+    #[test]
+    fn an_include_in_an_enum_body_is_still_an_include() {
+        // `#include` is a `preproc_include` only where a declaration may
+        // stand; inside a struct or enum body the grammar reads it as
+        // `preproc_call`, the kind it shares with `#pragma`.
+        let pack = Lang::C.pack();
+        let mut parser = pack.make_parser();
+        let f = extract(
+            pack,
+            &mut parser,
+            Path::new("t.h"),
+            "#pragma once\n#include <stdio.h>\nenum codes {\n#include \"codes.h\"\n};\nstruct s {\n#include \"fields.h\"  /* trailing */\n};\n",
+        );
+        let targets: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
+        assert_eq!(targets, ["<stdio.h>", "codes.h", "fields.h"]);
     }
 
     #[test]
