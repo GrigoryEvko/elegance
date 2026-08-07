@@ -148,6 +148,10 @@ struct Index {
     rust_exports: HashMap<Box<str>, Vec<usize>>,
     /// Each file's nearest enclosing crate root, precomputed.
     file_crate_root: Vec<Option<usize>>,
+    /// Workspace package name -> the directory whose package.json
+    /// declares it. A monorepo's own packages are spelled exactly like a
+    /// third-party dependency, and 3843 tsx specifiers name one.
+    workspaces: HashMap<Box<str>, PathBuf>,
     /// Each file's language. A module name binds a file of the language
     /// that named it: the OCaml corpus ships util.h, config.h and
     /// sha256.c beside OCaml modules of the same stem.
@@ -178,6 +182,7 @@ impl Index {
             file_crate_root: Vec::new(),
             file_comps: Vec::new(),
             langs: files.iter().map(|f| f.lang).collect(),
+            workspaces: workspace_packages(files),
         };
         for (i, f) in files.iter().enumerate() {
             idx.paths.entry(f.path.clone()).or_insert(i);
@@ -494,21 +499,12 @@ impl Index {
 
     fn web(&self, from: &GraphFacts, target: &str) -> Class {
         if !target.starts_with('.') {
-            return Class::External; // package imports, path aliases
+            return self.workspace(target);
         }
         let joined = normalize(from.path.parent().unwrap_or(Path::new("")), target);
         const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
-        if let Some(&i) = self.paths.get(&joined) {
+        if let Class::Internal(i) = self.web_file(&joined) {
             return Class::Internal(i);
-        }
-        for ext in EXTS {
-            if let Some(&i) = self
-                .paths
-                .get(&joined.with_extension(ext))
-                .or_else(|| self.paths.get(&joined.join("index").with_extension(ext)))
-            {
-                return Class::Internal(i);
-            }
         }
         // nodenext style: `./x.js` on disk as x.ts.
         if joined.extension().is_some_and(|e| e == "js" || e == "jsx")
@@ -796,6 +792,50 @@ impl Index {
             .map(|(_, i)| *i)
     }
 
+    /// A web path with the extension left off, as every specifier in
+    /// these languages leaves it: the file itself, then each extension,
+    /// then the directory's index.
+    fn web_file(&self, base: &Path) -> Class {
+        const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
+        if let Some(&i) = self.paths.get(base) {
+            return Class::Internal(i);
+        }
+        for ext in EXTS {
+            if let Some(&i) = self
+                .paths
+                .get(&base.with_extension(ext))
+                .or_else(|| self.paths.get(&base.join("index").with_extension(ext)))
+            {
+                return Class::Internal(i);
+            }
+        }
+        Class::External
+    }
+
+    /// A bare specifier naming a package this repository declares.
+    /// ariakit writes 1500+ `@ariakit/*` and excalidraw 567
+    /// `@excalidraw/element`; all of them read as third-party because a
+    /// specifier that is not a path was External by definition.
+    ///
+    /// The probe is `<dir>/src/<sub>` then `<dir>/<sub>`, and the
+    /// `exports` map is deliberately not read: the plain probe finds
+    /// 3819 of the 3824 specifiers the full exports lookup finds, and a
+    /// resolver-grade manifest parser is not worth five.
+    fn workspace(&self, target: &str) -> Class {
+        let (name, sub) = split_package(target);
+        let Some(dir) = self.workspaces.get(name) else {
+            return Class::External;
+        };
+        let roots = [dir.join("src"), dir.clone()];
+        for root in roots {
+            let base = sub.iter().fold(root, |p, s| p.join(s));
+            if let Class::Internal(i) = self.web_file(&base) {
+                return Class::Internal(i);
+            }
+        }
+        Class::External
+    }
+
     /// Every module directly under the directory a prefix names.
     ///
     /// `kong/db/schema/plugin_loader.lua:16` writes
@@ -943,6 +983,55 @@ fn nearest_crate_roots(
                 .find_map(|n| roots.get(&comps[..n]).copied())
         })
         .collect()
+}
+
+/// `@scope/name/sub/path` -> ("@scope/name", ["sub", "path"]); an
+/// unscoped `name/sub` -> ("name", ["sub"]).
+fn split_package(target: &str) -> (&str, Vec<&str>) {
+    // A scoped package spends two segments on its name, an unscoped one.
+    let take = if target.starts_with('@') { 2 } else { 1 };
+    let mut cut = target.len();
+    let mut seen = 0;
+    for (at, c) in target.char_indices() {
+        seen += usize::from(c == '/');
+        if seen == take {
+            cut = at;
+            break;
+        }
+    }
+    let rest = target.get(cut + 1..).unwrap_or("");
+    let sub = rest.split('/').filter(|s| !s.is_empty()).collect();
+    (&target[..cut], sub)
+}
+
+/// Every package name a `package.json` beside the scanned files
+/// declares, mapped to the directory holding it. Only the ancestors of
+/// web-language files are probed, so a repository without any pays
+/// nothing.
+fn workspace_packages(files: &[GraphFacts]) -> HashMap<Box<str>, PathBuf> {
+    let mut seen: HashSet<&Path> = HashSet::new();
+    let mut out = HashMap::new();
+    for f in files {
+        if !matches!(f.lang, Lang::TypeScript | Lang::Tsx | Lang::JavaScript) {
+            continue;
+        }
+        for dir in f.path.ancestors().skip(1) {
+            if !seen.insert(dir) {
+                break;
+            }
+            let Ok(text) = std::fs::read_to_string(dir.join("package.json")) else {
+                continue;
+            };
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
+            if let Some(name) = json.get("name").and_then(|n| n.as_str()) {
+                out.entry(Box::<str>::from(name))
+                    .or_insert_with(|| dir.to_path_buf());
+            }
+        }
+    }
+    out
 }
 
 /// A path specifier's components, with the segments that name nothing
