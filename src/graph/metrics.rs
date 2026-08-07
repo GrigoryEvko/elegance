@@ -730,7 +730,10 @@ fn package_of(path: &Path) -> String {
 fn entryish(path: &Path) -> bool {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
     let stem = name.split('.').next().unwrap_or("");
-    ENTRY_STEMS.contains(&stem) || routed(path, name, stem) || dune_root(path, name, stem)
+    ENTRY_STEMS.contains(&stem)
+        || routed(path, name, stem)
+        || dune_root(path, name, stem)
+        || mix_task(path)
 }
 
 /// The root module of a dune library or executable, which the `dune`
@@ -757,6 +760,23 @@ fn dune_root(path: &Path, name: &str, stem: &str) -> bool {
         .flat_map(|field| text.match_indices(field).map(|(at, f)| at + f.len()))
         .filter_map(|at| text[at..].split(')').next())
         .any(|declared| declared.trim().rsplit('.').next() == Some(stem))
+}
+
+/// A Mix task, which `mix` resolves from the MODULE name — running
+/// `mix phx.server` finds `Mix.Tasks.Phx.Server` — so nothing imports
+/// one and 33 of gold Elixir's 93 orphans are one.
+///
+/// The path answers as precisely as the declaration does: the corpus
+/// holds 35 files under `mix/tasks/` and 35 declaring `Mix.Tasks.`, and
+/// they are the same 35. No other language puts anything there.
+///
+/// Deliberately an entry point rather than a one-shot directory. A task
+/// legitimately has no importers, which is what this says — but
+/// `mix phx.server` starts a server and waits, so claiming nothing is
+/// waiting on its executor would be the wrong second claim to make.
+fn mix_task(path: &Path) -> bool {
+    let norm = crate::facts::rooted(&path.display().to_string());
+    norm.contains("/mix/tasks/")
 }
 
 /// The eight filenames Next.js reserves inside an `app/` or `pages/`
@@ -1155,6 +1175,31 @@ mod tests {
         assert_eq!(rows, [("rb", 1, 1), ("py", 1, 4)]);
         let summed: u32 = arch.by_language.iter().map(|r| r.1).sum();
         assert_eq!(summed, arch.orphan_count);
+    }
+
+    #[test]
+    fn a_mix_task_is_reached_by_its_name_and_never_by_an_import() {
+        // `mix phx.server` resolves `Mix.Tasks.Phx.Server` from the
+        // module name, so nothing imports a task. 33 of gold Elixir's
+        // 93 orphans were one, and the corpus holds 35 files under
+        // `mix/tasks/` against 35 declaring `Mix.Tasks.` — the same 35,
+        // so the path answers as precisely as the declaration.
+        let files = [
+            fixture(
+                Lang::Elixir,
+                "lib/mix/tasks/phx.server.ex",
+                &["Phoenix.Endpoint"],
+            ),
+            fixture(Lang::Elixir, "lib/phoenix/endpoint.ex", &[]),
+            fixture(Lang::Elixir, "lib/phoenix/unused.ex", &[]),
+        ];
+        let arch = arch(&files);
+        // It stays in the population: a task is a real module, and the
+        // claim is only that having no importer is not a finding for
+        // one. `mix phx.server` starts a server and waits, so the
+        // stronger one-shot claim would be the wrong one to make.
+        assert_eq!(arch.judged_modules, 3);
+        assert_eq!(arch.orphans, ["lib/phoenix/unused.ex"]);
     }
 
     #[test]
