@@ -358,6 +358,15 @@ impl Lang {
                 matches!(ext, Some("c" | "cc" | "cpp" | "cxx" | "c++" | "cu"))
             }
             Lang::OCaml => ext == Some("mli"),
+            // A `.d.ts` states types for code written elsewhere and no
+            // import statement can name it: tsc loads it through
+            // `include`, `files` or `types`. 256 of the TypeScript
+            // corpus's orphans are one, and 241 of those carry a
+            // `declare module`, `declare global` or `declare namespace`.
+            Lang::TypeScript | Lang::Tsx => path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".d.ts")),
             _ => false,
         }
     }

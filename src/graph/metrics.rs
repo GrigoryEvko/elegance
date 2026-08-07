@@ -692,9 +692,15 @@ fn package_of(path: &Path) -> String {
 }
 
 /// A file whose stem declares it an entry point or an API surface.
+///
+/// The FIRST dot-segment, not `file_stem`: ariakit writes
+/// `index.react.tsx`, whose stem is `index.react`, and no entry name
+/// ever matched. Reading the first segment exempts 360 tsx files and
+/// exactly none in ts or js.
 fn entryish(path: &Path) -> bool {
-    path.file_stem()
+    path.file_name()
         .and_then(|s| s.to_str())
+        .and_then(|s| s.split('.').next())
         .is_some_and(|s| ENTRY_STEMS.contains(&s))
 }
 
