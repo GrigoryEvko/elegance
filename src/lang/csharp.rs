@@ -50,6 +50,9 @@ const KINDS: &[(&str, Sem)] = &[
     ("await_expression", Sem::Await),
     ("comment", Sem::Comment),
     ("using_directive", Sem::Import),
+    // The file itself is asked for its imports, because a C# file's
+    // dependencies are not written as directives. See `type_references`.
+    ("compilation_unit", Sem::Import),
     ("identifier", Sem::Ident),
     ("integer_literal", Sem::NumLit),
     ("real_literal", Sem::NumLit),
@@ -214,6 +217,9 @@ fn camel_words(name: &str) -> Vec<&str> {
 }
 
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    if node.kind() == "compilation_unit" {
+        return type_references(node, src);
+    }
     let text = node.utf8_text(src).unwrap_or("");
     let target = text
         .trim_start_matches("global ")
@@ -232,6 +238,134 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
         names: Vec::new(),
         reach: super::Reach::Anywhere,
     }]
+}
+
+/// Node kinds whose every child is a type: a base list, a type-argument
+/// list, and a generic constraint clause each hold nothing else.
+const TYPE_LISTS: &[&str] = &[
+    "base_list",
+    "type_argument_list",
+    "type_parameter_constraints_clause",
+];
+
+/// What a C# file depends on, read from the types it NAMES.
+///
+/// A `using` opens a namespace and binds no file: it makes short names
+/// visible and nothing more, and a type in the file's own namespace
+/// needs no `using` at all. Across the gold corpus the 7032 using
+/// directives resolved 23 internal edges, and 2025 of 2032 modules read
+/// as orphans with 99.8% of the corpus deletable.
+///
+/// The type is what names another file, and a C# file carries the name
+/// of the type it declares: 907 of the gold corpus's 962 production
+/// files do. So a type reference resolves by file stem, the way a Rust
+/// `use crate::Symbol` resolves by defining module.
+///
+/// It is a `Mention`, not an import. The file states no dependency on
+/// anything — the compiler finds `Policy` across the whole assembly and
+/// nothing in the source says where it came from — so the reference
+/// supplies an EDGE and never a tally entry. Counting these as imports
+/// would put `imports_external` at 23815 against 7009 using directives,
+/// where every other language reports modules from outside rather than
+/// type names the compiler resolved elsewhere.
+///
+/// A reference is a type when the grammar puts it in a type position:
+/// the `type` field of any of the 37 kinds that have one, the `returns`
+/// field of a signature, an entry of a type list, or an attribute name.
+/// Outside a type position the qualifier of a member access counts too
+/// — `ReflectionHelper.GetMap(x)` reaches another file's static member
+/// without naming a type anywhere else.
+fn type_references(root: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    let mut stack = vec![(root, false)];
+    while let Some((node, in_type)) = stack.pop() {
+        if let Some(name) = names_a_type(node, in_type) {
+            take(name, src, &mut seen, &mut out);
+        }
+        if sealed(node.kind(), in_type) {
+            continue;
+        }
+        let typed = type_positions(node);
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            stack.push((child, in_type || typed.contains(&child.id())));
+        }
+    }
+    out
+}
+
+/// The node naming a type, where this one names one.
+fn names_a_type<'t>(node: Node<'t>, in_type: bool) -> Option<Node<'t>> {
+    match (node.kind(), in_type) {
+        // `System.Collections.Generic.List` names one type; the
+        // qualifier is the namespace it lives in.
+        ("qualified_name", true) => node.child_by_field_name("name"),
+        ("identifier", true) => Some(node),
+        ("member_access_expression", false) => node
+            .child_by_field_name("expression")
+            .filter(|qualifier| qualifier.kind() == "identifier"),
+        _ => None,
+    }
+}
+
+/// Nodes holding no further type reference: a using directive names a
+/// namespace and is recorded as one, a type PARAMETER is a declaration
+/// rather than a reference, and a qualified name has already given up
+/// the one type it holds.
+fn sealed(kind: &str, in_type: bool) -> bool {
+    matches!(kind, "using_directive" | "type_parameter_list")
+        || (in_type && kind == "qualified_name")
+}
+
+/// The children this node puts in a type position: a declaration's
+/// `type`, a signature's `returns`, an attribute's name, and the right
+/// of `as`/`is` — which the grammar fields as `right` rather than
+/// `type`, so `x as Policy` would otherwise name nothing. Every child
+/// of a type list is one.
+fn type_positions(node: Node) -> Vec<usize> {
+    let mut cursor = node.walk();
+    if TYPE_LISTS.contains(&node.kind()) {
+        return node.named_children(&mut cursor).map(|c| c.id()).collect();
+    }
+    let kind = node.kind();
+    let field = |name: &str| node.child_by_field_name(name).map(|c| c.id());
+    let tested = matches!(kind, "as_expression" | "is_expression");
+    [
+        field("type"),
+        field("returns"),
+        (kind == "attribute").then(|| field("name")).flatten(),
+        tested.then(|| field("right")).flatten(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// One type reference, if the name can be a type at all. A lowercase
+/// name is a local or a member; `T`, `TKey`, `TResult` are the generic
+/// parameters the .NET naming guidelines spell exactly that way, and a
+/// declared type never does.
+fn take(
+    node: Node,
+    src: &[u8],
+    seen: &mut std::collections::HashSet<Box<str>>,
+    out: &mut Vec<super::ImportInfo>,
+) {
+    let Ok(text) = node.utf8_text(src) else {
+        return;
+    };
+    let generic_param = text
+        .strip_prefix('T')
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_uppercase()));
+    if !text.starts_with(char::is_uppercase) || generic_param || !seen.insert(text.into()) {
+        return;
+    }
+    out.push(super::ImportInfo {
+        target: text.into(),
+        names: Vec::new(),
+        reach: super::Reach::Mention,
+    });
 }
 
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {

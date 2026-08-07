@@ -88,15 +88,20 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
         // without disturbing the alignment.
         let mut extra: Vec<Option<usize>> = Vec::new();
         for imp in &f.imports {
-            let mut dirs = index.under_directory(f, imp).into_iter();
+            let mut named = index.named_modules(f, imp).into_iter();
             // A prefix that names modules of this project is not a
             // third-party dependency, whatever the rest of its name
             // turns out to be at run time.
-            let class = dirs
+            let class = named
                 .next()
                 .map_or_else(|| index.classify(i, f, imp), Class::Internal);
-            let target = r.count(class);
-            extra.extend(dirs.map(Some));
+            // A mention states no dependency, so it reaches the graph
+            // without reaching the tally.
+            let target = match imp.reach {
+                crate::lang::Reach::Mention => class.module(),
+                _ => r.count(class),
+            };
+            extra.extend(named.map(Some));
             extra.extend(index.submodules(target, imp, f.lang).into_iter().map(Some));
             row.push(target);
         }
@@ -125,10 +130,21 @@ pub fn resolve(files: &[GraphFacts]) -> Resolution {
     edges(files).0
 }
 
+#[derive(Clone, Copy)]
 enum Class {
     Internal(usize),
     External,
     Unresolved,
+}
+
+impl Class {
+    /// The module of this project it names, if it names one.
+    fn module(self) -> Option<usize> {
+        match self {
+            Class::Internal(j) => Some(j),
+            _ => None,
+        }
+    }
 }
 
 /// Module component path (`["src", "attr", "validators"]`) plus the
@@ -151,10 +167,16 @@ struct Index {
     basenames: HashMap<Box<str>, Vec<CompEntry>>,
     /// Rust crate roots (lib.rs/main.rs) by their directory components.
     crate_roots: HashMap<Vec<Box<str>>, usize>,
-    /// Rust symbol -> defining files, for `use crate::Symbol` edges:
-    /// attributing root re-exports to lib.rs would manufacture hub
-    /// cycles the code does not have.
-    rust_exports: HashMap<Box<str>, Vec<usize>>,
+    /// Exported symbol -> the files declaring it, keyed by language so a
+    /// C# `Policy` cannot bind an OCaml one.
+    ///
+    /// Rust needs it because attributing a root re-export to lib.rs
+    /// would manufacture hub cycles the code does not have. C# needs it
+    /// because the declaration is the ONLY statement about where a type
+    /// lives: a `partial` class is spread over `SqlMapper.cs`,
+    /// `SqlMapper.TypeHandler.cs` and eleven more, and 87 of the gold
+    /// corpus's 102 dotted-stem files are one.
+    declared: HashMap<(Lang, Box<str>), Vec<usize>>,
     /// Each file's nearest enclosing crate root, precomputed.
     file_crate_root: Vec<Option<usize>>,
     /// A module name -> the directory holding it, where a MANIFEST says
@@ -188,7 +210,6 @@ impl Index {
             dirs: HashMap::new(),
             basenames: HashMap::new(),
             crate_roots: HashMap::new(),
-            rust_exports: HashMap::new(),
             file_crate_root: Vec::new(),
             file_comps: Vec::new(),
             langs: files.iter().map(|f| f.lang).collect(),
@@ -197,6 +218,7 @@ impl Index {
                 m.extend(swift_targets(files));
                 m
             },
+            declared: declaring_files(files),
         };
         for (i, f) in files.iter().enumerate() {
             idx.paths.entry(f.path.clone()).or_insert(i);
@@ -208,16 +230,13 @@ impl Index {
                     .or_default()
                     .push((comps.clone(), i));
             }
-            if f.lang == Lang::Rust {
-                if matches!(
+            if f.lang == Lang::Rust
+                && matches!(
                     f.path.file_stem().and_then(|s| s.to_str()),
                     Some("lib" | "main")
-                ) {
-                    idx.crate_roots.entry(comps.clone()).or_insert(i);
-                }
-                for sym in &f.exports {
-                    idx.rust_exports.entry(sym.clone()).or_default().push(i);
-                }
+                )
+            {
+                idx.crate_roots.entry(comps.clone()).or_insert(i);
             }
             idx.modules.entry(comps).or_insert(i);
             // A package's representative file must be one the
@@ -344,7 +363,7 @@ impl Index {
             // resolved nothing reported itself fully resolved.
             None => match imp.reach {
                 crate::lang::Reach::Project => Class::Unresolved,
-                crate::lang::Reach::Anywhere => Class::External,
+                _ => Class::External,
             },
         }
     }
@@ -478,7 +497,8 @@ impl Index {
             return Class::Unresolved;
         }
         let root = self.file_crate_root[i];
-        let defined = self.rust_exports.get(rest[0]).and_then(|files| {
+        let key = (Lang::Rust, Box::<str>::from(rest[0]));
+        let defined = self.declared.get(&key).and_then(|files: &Vec<usize>| {
             files
                 .iter()
                 .find(|&&d| self.file_crate_root[d] == root)
@@ -896,6 +916,20 @@ impl Index {
             .collect()
     }
 
+    /// Every module one specifier names, where it names more than one:
+    /// a directory whose contents are chosen at run time, or a name
+    /// whose declaration the language lets you split across files.
+    fn named_modules(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Vec<usize> {
+        match imp.reach {
+            crate::lang::Reach::Mention => self
+                .declared
+                .get(&(from.lang, imp.target.clone()))
+                .cloned()
+                .unwrap_or_default(),
+            _ => self.under_directory(from, imp),
+        }
+    }
+
     /// Every module directly under the directory a prefix names.
     ///
     /// `kong/db/schema/plugin_loader.lua:16` writes
@@ -990,6 +1024,19 @@ impl Index {
             .min_by_key(|(c, _)| c.len())
             .map(|(_, i)| *i)
     }
+}
+
+/// Which files declare each exported symbol, for the two languages
+/// that resolve a name by its declaration rather than by where it sits.
+fn declaring_files(files: &[GraphFacts]) -> HashMap<(Lang, Box<str>), Vec<usize>> {
+    let mut out: HashMap<(Lang, Box<str>), Vec<usize>> = HashMap::new();
+    let named = |f: &GraphFacts| matches!(f.lang, Lang::Rust | Lang::CSharp);
+    for (i, f) in files.iter().enumerate().filter(|(_, f)| named(f)) {
+        for sym in &f.exports {
+            out.entry((f.lang, sym.clone())).or_default().push(i);
+        }
+    }
+    out
 }
 
 /// Leading components two files share — how near one is to the other.
@@ -1574,6 +1621,51 @@ mod tests {
         assert_eq!(targets[2][0], Some(idx("lib/sequel/sql.rb")));
         // The extension is normally left off, and legal when written.
         assert_eq!(targets[2][1], Some(idx("dataset/sql.rb")));
+    }
+
+    #[test]
+    fn a_csharp_type_reference_reaches_what_declares_it_and_states_no_dependency() {
+        // A `using` opens a namespace and binds no file: it makes short
+        // names visible and nothing more, and a type in the file's own
+        // namespace needs none at all. The corpus's 7032 directives
+        // resolved 23 edges, and 2025 of 2032 modules read as orphans.
+        //
+        // The TYPE is what names another file, and where it lives is
+        // said by the declaration and by nothing else — a `partial`
+        // class is spread over `SqlMapper.cs`, `SqlMapper.TypeHandler.cs`
+        // and eleven more, and 87 of the corpus's 102 dotted-stem files
+        // are one.
+        use crate::facts::ImportFact;
+        use crate::lang::Reach;
+        let imp = |target: &str, reach| ImportFact {
+            target: target.into(),
+            names: Vec::new(),
+            reach,
+        };
+        let mut execute = file(Lang::CSharp, "src/Dapper/Execute.cs", &[]);
+        execute.imports = vec![
+            imp("System.Threading", Reach::Anywhere),
+            imp("SqlMapper", Reach::Mention),
+            imp("Task", Reach::Mention),
+        ];
+        let mut whole = file(Lang::CSharp, "src/Dapper/SqlMapper.cs", &[]);
+        whole.exports = vec!["SqlMapper".into()];
+        let mut part = file(Lang::CSharp, "src/Dapper/SqlMapper.TypeHandler.cs", &[]);
+        part.exports = vec!["SqlMapper".into()];
+        let files = [execute, whole, part];
+        let (res, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert!(targets[0].contains(&Some(idx("SqlMapper.cs"))));
+        assert!(
+            targets[0].contains(&Some(idx("SqlMapper.TypeHandler.cs"))),
+            "a stem match cannot reach the other half of a partial type"
+        );
+        // Neither the reference that resolved nor the framework name
+        // that did not touches the tally: the one using directive is
+        // the only dependency this file STATES, so `imports_external`
+        // keeps counting modules from outside rather than every type
+        // name the compiler found somewhere else.
+        assert_eq!((res.internal, res.external, res.unresolved), (0, 1, 0));
     }
 
     #[test]

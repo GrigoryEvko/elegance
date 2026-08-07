@@ -39,7 +39,7 @@ use tree_sitter::{Language, Node, Parser};
 
 use crate::sem::Sem;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Lang {
     Python,
     Rust,
@@ -483,6 +483,13 @@ pub enum Reach {
     /// names something that is supposed to be HERE, so a miss is a
     /// failure to resolve and belongs in the honesty bucket.
     Project,
+    /// Not a dependency STATEMENT at all: a name the file happens to
+    /// use, where the language has no syntax that names the file it
+    /// comes from. It contributes an edge when it resolves and is never
+    /// tallied, so `imports_external` keeps meaning what it means in
+    /// the other twenty-one languages — a module from outside, not a
+    /// type name the compiler found somewhere else.
+    Mention,
 }
 
 #[derive(Default)]
