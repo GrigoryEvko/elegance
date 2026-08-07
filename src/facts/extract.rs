@@ -35,7 +35,18 @@ const MAX_TREE_DEPTH: u16 = 300;
 /// before the comment counts as an echo of that code.
 const ECHO_SHARE: f32 = 0.65;
 
+/// Point the parser at the grammar THIS file needs. One extension in
+/// the tool wants one its language's default is not: OCaml's `.mli` is
+/// a signature with a grammar of its own. The parser is reused across
+/// files, so the choice is remade for each.
+fn retune(pack: &Pack, parser: &mut Parser, path: &Path) {
+    if pack.lang == crate::lang::Lang::OCaml {
+        let _ = parser.set_language(&crate::lang::ocaml_grammar(path));
+    }
+}
+
 pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> FileFacts {
+    retune(pack, parser, path);
     let mut blank = Rows::new(source.lines().count());
     for (row, line) in source.lines().enumerate() {
         if line.trim().is_empty() {

@@ -52,6 +52,20 @@ const KINDS: &[(&str, Sem)] = &[
 
 const DEF_SITES: &[(&str, &str)] = &[];
 
+/// The grammar an OCaml file is parsed with. A `.mli` is a SIGNATURE,
+/// and tree-sitter-ocaml ships a separate grammar for it: parsing one
+/// with the implementation grammar left 140 of 300 gold `.mli` files
+/// carrying parse errors against 0 of 300 `.ml`, and
+/// dune/otherlibs/stdune/src/path.mli alone yields 58 ERROR nodes where
+/// path.ml yields none. Every fact read off an interface was unreliable,
+/// not merely its imports.
+pub(crate) fn grammar(path: &std::path::Path) -> tree_sitter::Language {
+    match path.extension().is_some_and(|e| e == "mli") {
+        true => tree_sitter_ocaml::LANGUAGE_OCAML_INTERFACE.into(),
+        false => tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+    }
+}
+
 pub fn pack() -> Pack {
     let ts: tree_sitter::Language = tree_sitter_ocaml::LANGUAGE_OCAML.into();
     let kinds: &[&[(&str, Sem)]] = &[KINDS];

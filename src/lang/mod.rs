@@ -12,6 +12,8 @@ mod elixir;
 pub(crate) use elixir::underscore;
 /// Lua's preloaded library names, which consult no file.
 pub(crate) use lua::preloaded;
+/// The grammar an OCaml file is parsed with; `.mli` has its own.
+pub(crate) use ocaml::grammar as ocaml_grammar;
 mod go;
 pub(crate) mod hooks;
 mod java;
