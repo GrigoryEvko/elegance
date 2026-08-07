@@ -170,6 +170,20 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
         return Vec::new();
     };
     let path = target.trim_matches(['"', '\'']);
+    // `import {Context} from "..."` binds `Context`, and the grammar
+    // labels it: 1478 of gold's 1619 imports are the braces form, so
+    // leaving the list empty told the surface metrics that no Solidity
+    // export is ever named by an importer.
+    //
+    // `import {A as B}` fields A under `import_name` and B under
+    // `alias`. A is the name the TARGET exports, which is the one the
+    // surface question asks about.
+    let mut cursor = node.walk();
+    let names = node
+        .children_by_field_name("import_name", &mut cursor)
+        .filter_map(|n| n.utf8_text(src).ok())
+        .map(Box::<str>::from)
+        .collect();
     vec![super::ImportInfo {
         target: path.into(),
         // `./x.sol` and `../utils/x.sol` name a file HERE, so failing to
@@ -180,7 +194,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
             true => super::Reach::Project,
             false => super::Reach::Anywhere,
         },
-        names: Vec::new(),
+        names,
     }]
 }
 
@@ -343,14 +357,36 @@ fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
     }]
 }
 
-/// The compiler requires a visibility keyword, so this reads a decision
-/// the author had to make rather than a default they inherited.
+/// On a function the compiler REQUIRES a visibility keyword, so this
+/// reads a decision the author had to make rather than a default they
+/// inherited.
+///
+/// On a declaration at file scope it forbids one, and asking for it
+/// anyway called every contract, interface and library private: gold's
+/// 681 .sol files declare 794 file-scope types and `exports` held none
+/// of them, which is the name 1478 braces imports bind. A declaration
+/// inside a contract body is that contract's member and is reached
+/// through it, so file scope is the line.
 fn is_public(node: Node, src: &[u8]) -> bool {
+    // A contract, an interface and a library all carry `contract_body`,
+    // so one kind answers for the three.
+    if pack_sem(node) == Sem::TypeDef {
+        return node.parent().is_none_or(|p| p.kind() != "contract_body");
+    }
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .filter(|c| c.kind() == "visibility")
         .filter_map(|v| v.utf8_text(src).ok())
         .any(|v| v == "public" || v == "external")
+}
+
+/// The ontology's own answer for this node kind, read from the table
+/// above rather than from the live pack, which is not in scope here.
+fn pack_sem(node: Node) -> Sem {
+    KINDS
+        .iter()
+        .find(|(k, _)| *k == node.kind())
+        .map_or(Sem::None, |(_, s)| *s)
 }
 
 fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
@@ -376,6 +412,59 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
 
 #[cfg(test)]
 mod tests {
+    use crate::lang::Lang;
+
+    fn facts(src: &str) -> crate::facts::FileFacts {
+        let pack = Lang::Solidity.pack();
+        let mut parser = pack.make_parser();
+        crate::facts::extract(pack, &mut parser, std::path::Path::new("a.sol"), src)
+    }
+
+    #[test]
+    fn a_braces_import_binds_the_names_it_lists() {
+        // 1478 of gold's 1619 Solidity imports are this form.
+        let f = facts(
+            "import {Context} from \"./Context.sol\";\n\
+             import {IERC20 as Token, IERC165} from \"./I.sol\";\n\
+             import \"./plain.sol\";\n\
+             import * as All from \"./all.sol\";\n",
+        );
+        let got: Vec<Vec<&str>> = f
+            .imports
+            .iter()
+            .map(|i| i.names.iter().map(|n| &**n).collect())
+            .collect();
+        // `IERC20 as Token` binds Token here and names IERC20 there; the
+        // surface question is about the name the TARGET exports.
+        assert_eq!(
+            got,
+            vec![
+                vec!["Context"],
+                vec!["IERC20", "IERC165"],
+                Vec::new(),
+                Vec::new()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_file_scope_declaration_is_surface_and_a_member_is_not() {
+        // The compiler forbids a visibility keyword on a contract, so
+        // reading one made every contract, interface and library
+        // private. gold declares 794 file-scope types.
+        let f = facts(
+            "library L { function a() public {} }\n\
+             interface I { function b() external; }\n\
+             abstract contract C {\n\
+               struct Inner { uint256 x; }\n\
+               function c() internal {}\n\
+             }\n",
+        );
+        let mut got: Vec<&str> = f.exports.iter().map(|e| &**e).collect();
+        got.sort_unstable();
+        assert_eq!(got, ["C", "I", "L", "a", "b"], "Inner is C's member");
+    }
+
     #[test]
     fn a_mock_and_a_verification_harness_are_not_deployed_code() {
         // openzeppelin files 108 mock contracts under contracts/mocks

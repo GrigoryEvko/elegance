@@ -363,7 +363,7 @@
 "expr depth" = { hi = 17.0 }
 "demeter" = { hi = 1.0 }
 "live span" = { hi = 61.0 }
-"magic numbers" = { hi = 7.0 }
+"magic numbers" = { hi = 6.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
 "comment ratio" = { lo = 0.00, hi = 0.65 }
 "casts" = { hi = 1.0 }

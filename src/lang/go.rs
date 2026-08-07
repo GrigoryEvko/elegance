@@ -107,6 +107,14 @@ pub fn pack() -> Pack {
         declares_test: |_, _| false,
         names_test,
         is_test_code: |_, _| false,
+        // cmd/go excludes every path element beginning with `_`, so the
+        // 20 .go files under `chi/_examples/` and `toml/_example/`
+        // belong to no package. Claiming them anyway costs more than it
+        // pays: their imports are the only production evidence in the
+        // repository that `chi/middleware` is used at all, and dropping
+        // them turned all 30 of its files into orphans against 2
+        // recovered. Example programs are consumers, and the graph reads
+        // them as such.
         test_path: |p| p.ends_with("_test.go"),
         asserty,
         // Hooks are a JS/TS framework idea; no analogue here.

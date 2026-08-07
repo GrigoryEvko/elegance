@@ -175,40 +175,155 @@ fn name_node(node: Node) -> Option<Node> {
     })
 }
 
-/// `use Foo::Bar;` and `require Foo::Bar;`. A `use` of a pragma —
-/// `strict`, `warnings`, `utf8` — turns a compiler switch on and is not
-/// a dependency, so those are dropped rather than counted as edges.
+/// A `use` of a pragma — `strict`, `warnings`, `utf8` — turns a
+/// compiler switch on and is not a dependency. `parent` and `base` are
+/// pragmas too, but their ARGUMENTS are the dependency, so they stay on
+/// this list and are read by `superclasses` instead.
+const PRAGMAS: &[&str] = &[
+    "strict",
+    "warnings",
+    "utf8",
+    "vars",
+    "lib",
+    "constant",
+    "parent",
+    "base",
+    "feature",
+    "overload",
+    "integer",
+    "bytes",
+    "experimental",
+    "builtin",
+];
+
+/// The modules whose `use` ARGUMENTS name classes rather than symbols.
+/// `parent` and `base` are the core pragmas that do it; `Mojo::Base` is
+/// Mojolicious spelling the same thing, and its non-class arguments
+/// (`-strict`, `-base`, `-role`, `-signatures`) are barewords rather
+/// than strings, so reading only the strings tells them apart.
+///
+/// Every other module's import list holds FUNCTION names — `use
+/// POSIX qw(strftime)` — and harvesting those would manufacture a
+/// dependency on `strftime`. In the gold corpus 63 `use` statements
+/// carry a `::`-shaped string argument and 61 of them are Mojo::Base.
+const SUPERCLASS_ARGS: &[&str] = &["parent", "base", "Mojo::Base"];
+
+/// Moo/Moose/Role::Tiny composition. `with` consumes roles and
+/// `extends` names a superclass; both take class names and nothing
+/// else. 25 of the corpus's 26 arguments resolve to a project file and
+/// the 26th is Exporter::Tiny, a CPAN dependency — which is the answer
+/// an unresolved one should get.
+const COMPOSERS: &[&str] = &["with", "extends"];
+
+/// Perl declares a dependency four ways and this pack used to read one.
+///
+///   use Foo::Bar;               the `module` field of `use_statement`
+///   require Foo::Bar;           `require_expression` carries NO fields
+///                               at all, so `child_by_field_name` never
+///                               matched and all 32 in the corpus were
+///                               dropped
+///   use parent qw(Foo::Bar);    67 superclass arguments, 57 of which
+///   use Mojo::Base 'Foo::Bar';  name a project file, plus 61 more
+///   with 'Foo::Role';           26 role compositions, read as ordinary
+///   extends 'Foo::Base';        calls
+///
+/// Inheritance and composition ARE the Perl dependency graph — Plack's
+/// middleware chain and Dancer2's roles are built from nothing else —
+/// and 186 of 410 judged modules read as orphaned while they went
+/// uncounted.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    let Some(text) = node
+    match node.kind() {
+        "require_expression" => require_target(node, src),
+        "use_statement" => use_targets(node, src),
+        _ => composed(node, src),
+    }
+}
+
+/// A module name is the only thing `use` and `require` can reach that a
+/// file might answer to; whether the file is in this project or on CPAN
+/// is what resolution decides, so a miss is an ordinary dependency.
+fn dependency(target: &str) -> super::ImportInfo {
+    super::ImportInfo {
+        target: target.into(),
+        names: Vec::new(),
+        reach: super::Reach::Anywhere,
+    }
+}
+
+/// `require Foo::Bar`. The node has no fields, so the module is its
+/// first child — and it must be a BAREWORD: `require "some/file.pl"`
+/// reads a file off `@INC` rather than naming a module, and `require
+/// $class` names one only at run time.
+fn require_target(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    node.named_child(0)
+        .filter(|c| c.kind() == "bareword")
+        .and_then(|c| c.utf8_text(src).ok())
+        .filter(|t| !t.is_empty() && !PRAGMAS.contains(t))
+        .map(dependency)
+        .into_iter()
+        .collect()
+}
+
+fn use_targets(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    let Some(module) = node
         .child_by_field_name("module")
         .and_then(|m| m.utf8_text(src).ok())
     else {
         return Vec::new();
     };
-    const PRAGMAS: &[&str] = &[
-        "strict",
-        "warnings",
-        "utf8",
-        "vars",
-        "lib",
-        "constant",
-        "parent",
-        "base",
-        "feature",
-        "overload",
-        "integer",
-        "bytes",
-        "experimental",
-        "builtin",
-    ];
-    if text.is_empty() || PRAGMAS.contains(&text) {
+    let mut out = Vec::new();
+    if !module.is_empty() && !PRAGMAS.contains(&module) {
+        out.push(dependency(module));
+    }
+    if SUPERCLASS_ARGS.contains(&module) {
+        out.extend(superclasses(node, src).iter().map(|c| dependency(c)));
+    }
+    out
+}
+
+/// `with 'Foo::Role'` and `extends 'Foo::Base'` — a call to the grammar,
+/// promoted to an import by `refine` the way shell promotes `source`.
+fn composed(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    if !is_composition(node, src) {
         return Vec::new();
     }
-    vec![super::ImportInfo {
-        target: text.into(),
-        names: Vec::new(),
-        reach: super::Reach::Anywhere,
-    }]
+    superclasses(node, src)
+        .iter()
+        .map(|c| dependency(c))
+        .collect()
+}
+
+fn is_composition(node: Node, src: &[u8]) -> bool {
+    matches!(
+        node.kind(),
+        "function_call_expression" | "ambiguous_function_call_expression"
+    ) && callee_text(node, src).is_some_and(|t| COMPOSERS.contains(&t))
+}
+
+/// The class names a statement quotes. Only STRING content counts: a
+/// `qw()` list holds several per node and a bareword option (`-norequire`,
+/// `-signatures`) holds none, which is exactly the distinction between
+/// an argument that names a class and one that sets a flag.
+/// The class names in one `qw()` word list. A leading `-` marks a flag
+/// — `-norequire`, `-signatures` — rather than a class.
+fn class_words(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.split_whitespace()
+        .filter(|w| !w.starts_with('-'))
+        .map(str::to_string)
+}
+
+fn superclasses(node: Node, src: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "string_content" {
+            out.extend(class_words(n.utf8_text(src).unwrap_or("")));
+            continue;
+        }
+        let mut cursor = n.walk();
+        stack.extend(n.named_children(&mut cursor));
+    }
+    out
 }
 
 /// Signatures, where the code has them. A sub that unpacks `@_` by hand
@@ -448,6 +563,11 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         // The anonymous sub handed to `subtest` IS the test; without
         // promoting it there is no unit for the test metrics to judge.
         Sem::Lambda if declaring_test(node, src).is_some() => Sem::FnDef,
+        // `with 'Foo::Role'` composes a role into this class. The
+        // grammar has only calls to offer, so the import has to be
+        // recognised as one — the move the shell pack makes for
+        // `source`.
+        Sem::Call if is_composition(node, src) => Sem::Import,
         Sem::BoolOp if node.kind() == "binary_expression" => {
             match super::field_text_is(node, "operator", src) {
                 Some("&&" | "||" | "//") => Sem::BoolOp,
@@ -455,5 +575,58 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
             }
         }
         _ => sem,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    fn targets(src: &str) -> Vec<String> {
+        let pack = super::Lang::Perl.pack();
+        let mut parser = pack.make_parser();
+        let facts = crate::facts::extract(pack, &mut parser, Path::new("lib/App/Core.pm"), src);
+        facts.imports.iter().map(|i| i.target.to_string()).collect()
+    }
+
+    #[test]
+    fn inheritance_and_composition_are_dependencies_too() {
+        // 67 `use parent`/`use base` arguments, 61 Mojo::Base parents,
+        // 32 `require`s and 26 role compositions in the Perl gold
+        // corpus, all of them unread while only `use MODULE` counted.
+        let got = targets(
+            "use parent qw( App::Base );\n\
+             use base 'App::Other';\n\
+             use Mojo::Base 'App::Mother', -signatures;\n\
+             with qw<\n  App::Role::Alpha\n  App::Role::Beta\n>;\n\
+             extends 'App::Sub::Deep';\n\
+             sub go { require App::Lazy; }\n",
+        );
+        for want in [
+            "App::Base",
+            "App::Other",
+            "Mojo::Base",
+            "App::Mother",
+            "App::Role::Alpha",
+            "App::Role::Beta",
+            "App::Sub::Deep",
+            "App::Lazy",
+        ] {
+            assert!(got.iter().any(|t| t == want), "{want} missing from {got:?}");
+        }
+    }
+
+    #[test]
+    fn a_pragma_and_a_flag_argument_are_not_dependencies() {
+        // `-norequire` and `-signatures` set options; `strict` switches
+        // the compiler on. None of the three names a module.
+        let got = targets(
+            "use strict;\nuse warnings;\n\
+             use parent -norequire, 'App::Base';\n\
+             use Mojo::Base -role;\n\
+             use POSIX qw(strftime setlocale);\n\
+             require \"some/file.pl\";\n",
+        );
+        assert_eq!(got, ["App::Base", "Mojo::Base", "POSIX"]);
     }
 }

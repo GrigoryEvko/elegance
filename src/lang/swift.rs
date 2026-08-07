@@ -127,7 +127,21 @@ pub fn pack() -> Pack {
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
-        test_path: |p| p.contains("/Tests/") || p.ends_with("Tests.swift"),
+        // `/Tests/` alone misses the directory swift-nio puts its
+        // integration suite in: 50 of gold's .swift files sit under
+        // `IntegrationTests/`, and all 50 read as depended on by
+        // nothing. The two distinct `*Tests` directory names in the
+        // swift corpus are `Tests` and `IntegrationTests`; no target
+        // that ships is named that way. `Benchmarks` is
+        // swift-package-benchmark's mandated directory (8 files in
+        // gold, 8 orphaned) and `Snippets` is SwiftPM's reserved
+        // sample-code directory (1 file, orphaned) — harness targets a
+        // library cannot import.
+        test_path: |p| {
+            p.ends_with("Tests.swift")
+                || p.split('/')
+                    .any(|seg| seg.ends_with("Tests") || matches!(seg, "Benchmarks" | "Snippets"))
+        },
         asserty,
         is_hook: |_, _| false,
         // A tuple return is declared in the type and read from there.
@@ -465,4 +479,30 @@ fn is_override(node: Node, src: &[u8]) -> bool {
         anc = a.parent();
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn integration_benchmark_and_snippet_targets_are_scaffolding() {
+        let is_test = super::pack().test_path;
+        for p in [
+            "swift-nio/Tests/NIOCoreTests/ByteBufferTest.swift",
+            "swift-nio/IntegrationTests/tests_04_performance/test_01_resources/shared.swift",
+            "swift-nio/IntegrationTests/allocation-counter-tests-framework/template/scaffolding.swift",
+            "swift-nio/Benchmarks/Benchmarks/NIOCoreBenchmarks/Benchmarks.swift",
+            "swift-nio/Snippets/NIOFileSystemTour.swift",
+        ] {
+            assert!(is_test(p), "{p}");
+        }
+        // A target whose name merely mentions testing still ships.
+        for p in [
+            "swift-nio/Sources/NIOCore/Channel.swift",
+            "swift-nio/Sources/NIOTestUtils/EventCounterHandler.swift",
+            "vapor/Sources/VaporTesting/withApp.swift",
+            "Alamofire/Source/Core/Session.swift",
+        ] {
+            assert!(!is_test(p), "{p}");
+        }
+    }
 }

@@ -15,7 +15,17 @@
 //!   real and common, but `Lang::from_path` is a pure path predicate
 //!   that several modes call during the walk, and sniffing every
 //!   extensionless file would change what a walk costs. Deferred, not
-//!   denied.
+//!   denied — and the deferral has a measured price: the shell gold
+//!   corpus holds 29 extensionless scripts carrying a shell shebang,
+//!   among them the eleven `bats-core/libexec/bats-core/bats-*` files
+//!   that source that project's ENTIRE library. They hold 28 sourcing
+//!   statements, 24 of which resolve on sight, and they give five of
+//!   `lib/bats-core/`'s libraries their first importer.
+//! - A library is written at its INSTALLED name, which has lost the
+//!   extension the file still carries: git spells `. git-sh-setup` and
+//!   ships `git-sh-setup.sh`. 15 of the corpus's 68 sourcing statements
+//!   are that shape and none of them resolve, because the basename
+//!   index is keyed by the file name including its extension.
 //! - `cmd || true` is EXPLICIT silencing — the Zen's own exemption —
 //!   so it is not counted as a swallowed error.
 
@@ -126,12 +136,7 @@ pub fn pack() -> Pack {
         // test, because nothing here can tell a real one from a helper.
         names_test: |_, _| false,
         is_test_code: |_, _| false,
-        test_path: |p| {
-            p.ends_with("_test.sh")
-                || p.ends_with(".test.sh")
-                || p.split('/')
-                    .any(|seg| matches!(seg, "test" | "tests" | "bats"))
-        },
+        test_path,
         asserty: |call, src| command_name(call, src).is_some_and(super::assertish),
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
@@ -194,11 +199,27 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     else {
         return Vec::new();
     };
+    // `source <(grep ... file)` sources a PROCESS, not a path — the
+    // corpus spells it once, at bats-core/contrib/release.sh:23, and
+    // the file name inside the substitution is an argument to grep
+    // rather than the thing being sourced. Nothing here can resolve and
+    // nothing should: it is not an import.
+    if target.starts_with("<(") || target.starts_with(">(") {
+        return Vec::new();
+    }
+    // Quoting is per-word, not per-argument: `. "$TEST_DIRECTORY"/lib.sh`
+    // arrives with a quote in the MIDDLE, which trimming the ends leaves
+    // in place. Two targets in the corpus are spelled that way.
+    //
     // Sourced paths are usually interpolated (`. "$DIR/lib.sh"`); the
     // graph resolves what it can and counts the rest as unresolved,
     // which is the honest bucket for a path assembled at run time.
+    let unquoted: String = target
+        .chars()
+        .filter(|c| !matches!(c, '"' | '\''))
+        .collect();
     vec![super::ImportInfo {
-        target: target.trim_matches(['"', '\'']).into(),
+        target: unquoted.into(),
         names: Vec::new(),
         reach: super::Reach::Anywhere,
     }]
@@ -221,8 +242,66 @@ fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
     super::doc_run(node, &["comment"], &[], src)
 }
 
+/// A test DIRECTORY, and the file's own name is not one of them:
+/// `bats` names the runner's entry script as well as the directory a
+/// project vendors it into, and matching the last segment filed
+/// bats-core's own bin/bats and libexec/bats-core/bats — the two
+/// scripts that source its whole library — as tests, dropping every
+/// edge they carry out of the production graph.
+fn test_path(p: &str) -> bool {
+    p.ends_with("_test.sh")
+        || p.ends_with(".test.sh")
+        || p.rsplit_once('/').is_some_and(|(dirs, _)| {
+            dirs.split('/')
+                .any(|seg| matches!(seg, "test" | "tests" | "bats"))
+        })
+}
+
 /// `eval` is the shell's own name for the gap between the text and the
 /// run: whatever the string holds becomes code.
 fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
     sem == Sem::Call && command_name(node, src) == Some("eval")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    #[test]
+    fn a_test_directory_is_test_code_and_a_runner_named_bats_is_not() {
+        // bats-core/bin/bats and bats-core/libexec/bats-core/bats are
+        // the only two files in the shell gold corpus whose OWN NAME is
+        // the sole "test" segment; the second is the script that sources
+        // the whole library, so filing it as a test deleted its edges
+        // from the production graph.
+        let is_test = super::pack().test_path;
+        for p in [
+            "bats-core/test/bats.bash",
+            "git/t/tests/lib.sh",
+            "proj/lib/thing_test.sh",
+        ] {
+            assert!(is_test(p), "{p}");
+        }
+        for p in [
+            "bats-core/bin/bats",
+            "bats-core/libexec/bats-core/bats",
+            "bats-core/lib/bats-core/common.bash",
+            "git/ci/lib.sh",
+        ] {
+            assert!(!is_test(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn a_process_substitution_is_not_a_sourced_file() {
+        // bats-core/contrib/release.sh:23 sources the OUTPUT of a grep;
+        // the path inside belongs to grep, not to the shell.
+        let pack = super::Lang::Shell.pack();
+        let mut parser = pack.make_parser();
+        let src = "source <(grep '^export V=' libexec/bats-core/bats)\n\
+                   . \"$TEST_DIRECTORY\"/test-lib.sh\n";
+        let facts = crate::facts::extract(pack, &mut parser, Path::new("t.sh"), src);
+        let got: Vec<&str> = facts.imports.iter().map(|i| &*i.target).collect();
+        assert_eq!(got, ["$TEST_DIRECTORY/test-lib.sh"]);
+    }
 }

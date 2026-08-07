@@ -116,7 +116,7 @@ pub fn pack() -> Pack {
         declares_test: |node, _| node.kind() == "test_declaration",
         names_test: |_, _| false,
         is_test_code: |_, _| false,
-        test_path: |p| p.ends_with("_test.zig") || p.contains("/test/"),
+        test_path,
         // std.debug.assert, wrapper assert_* fns, std.testing.expect and
         // its expectXxx family. Not `expected_value()`-style lookalikes.
         asserty: |call, src| {
@@ -151,9 +151,52 @@ pub fn pack() -> Pack {
     }
 }
 
+/// The build DSL names a source file with a PATH, not an `@import`:
+/// `b.path("src/main_bench.zig")` is how an executable, a test or a
+/// module states its root. Nothing else reaches those files, so
+/// reading only `@import` left ghostty's five `main_*.zig`,
+/// tigerbeetle's seven client-binding generators and river's two
+/// `common/` modules with no dependent at all.
+///
+/// Only a `.zig` argument is a module reference; `b.path` also carries
+/// C sources, assets and directories. 113 `b.path("*.zig")` sites are
+/// spelled across the corpus and every one names a file in the tree.
+fn build_path<'a>(node: Node, src: &'a [u8]) -> Option<&'a str> {
+    if node.kind() != "call_expression" {
+        return None;
+    }
+    let callee = node.child_by_field_name("function")?;
+    let field = |name| callee.child_by_field_name(name)?.utf8_text(src).ok();
+    if callee.kind() != "field_expression" || field("member") != Some("path") {
+        return None;
+    }
+    // `*std.Build` is `b` by universal convention, and requiring the
+    // name keeps `self.path(..)` and `dir.path(..)` out.
+    if field("object") != Some("b") {
+        return None;
+    }
+    // Arguments are direct children of a call_expression; only
+    // builtin_function wraps them in an `arguments` node.
+    let mut cursor = node.walk();
+    let arg = node
+        .named_children(&mut cursor)
+        .find(|c| c.kind() == "string")?;
+    let target = arg.utf8_text(src).ok()?.trim_matches('"');
+    target.ends_with(".zig").then_some(target)
+}
+
 /// `const std = @import("std");` — refine reclassifies the call; the
 /// binding is the declaration's leading identifier.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    if let Some(target) = build_path(node, src) {
+        return vec![super::ImportInfo {
+            target: target.into(),
+            names: Vec::new(),
+            // A build path names a file in THIS repository, so a miss
+            // is a miss rather than a package that lives elsewhere.
+            reach: super::Reach::Project,
+        }];
+    }
     let text = |n: Node| n.utf8_text(src).unwrap_or("");
     let mut cursor = node.walk();
     let args = node
@@ -201,6 +244,9 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         Sem::With if !has_block_child(node) => Sem::None,
         // @import is the module system, not a call.
         Sem::Call if builtin_name(node, src) == Some("@import") => Sem::Import,
+        // And so is `b.path("x.zig")`: the core asks about imports at
+        // Sem::Import nodes only.
+        Sem::Call if build_path(node, src).is_some() => Sem::Import,
         // The @xCast family: every one overrules the type checker.
         Sem::Call if builtin_name(node, src).is_some_and(is_cast_builtin) => Sem::Cast,
         _ => sem,
@@ -288,6 +334,26 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 /// `FromInt`/`FromPtr` family are casts, and `refine` says so.
 /// `@field(x, name)` looks like the computed attribute access this
 /// metric was written for, but it is how Zig iterates a struct at
+/// Both spellings of the plural. zls files its whole suite under
+/// `tests/` — 58 .zig files, rooted at `tests/tests.zig`, which
+/// build.zig:235 hands to `b.addTest` — and tigerbeetle names its four
+/// test roots `unit_tests.zig`, `integration_tests.zig`,
+/// `fuzz_tests.zig`, `state_machine_tests.zig`.
+///
+/// Both rules capture only test code: of the 63 files they add, the
+/// ones a non-captured non-test file imports are zls/build.zig reaching
+/// its two case-adders and a fuzzer reaching state_machine_tests.zig.
+/// `_fuzz.zig`, `_benchmark.zig`, `/testing/` and a bare `test.zig`
+/// were measured the same way and are NOT here: ewah.zig imports
+/// ewah_fuzz.zig, stdx.zig imports radix_benchmark.zig, 94 sites import
+/// src/testing/, and six ghostty packages import their own test.zig.
+fn test_path(p: &str) -> bool {
+    p.ends_with("_test.zig")
+        || p.ends_with("_tests.zig")
+        || p.contains("/test/")
+        || p.contains("/tests/")
+}
+
 /// comptime: 444 of the 454 uses in the gold corpus take a computed
 /// name, across 123 of 1,138 files. Counting those would measure the
 /// idiom, not a defect.
@@ -304,4 +370,58 @@ fn panicky(call: Node, src: &[u8]) -> bool {
         return false;
     };
     f.utf8_text(src).is_ok_and(|t| t.ends_with("panic"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_tests_directory_is_test_code_like_a_test_directory() {
+        let is_test = super::pack().test_path;
+        for p in [
+            "zls/tests/tests.zig",
+            "zls/tests/analysis/basic.zig",
+            "tigerbeetle/src/unit_tests.zig",
+            "tigerbeetle/src/clients/java/src/jni_tests.zig",
+            "ghostty/src/terminal/main_test.zig",
+            "tigerbeetle/src/clients/c/test/main.zig",
+        ] {
+            assert!(is_test(p), "{p}");
+        }
+        // Fuzzers and benchmarks stay production: ewah.zig imports
+        // ewah_fuzz.zig and stdx.zig imports radix_benchmark.zig.
+        for p in [
+            "tigerbeetle/src/ewah_fuzz.zig",
+            "tigerbeetle/src/stdx/radix_benchmark.zig",
+            "tigerbeetle/src/testing/fuzz.zig",
+            "ghostty/pkg/freetype/test.zig",
+        ] {
+            assert!(!is_test(p), "{p}");
+        }
+    }
+
+    /// The build DSL's path form, and the three shapes that look like
+    /// it: a non-.zig asset, another receiver, another method.
+    #[test]
+    fn a_build_path_names_a_module_and_a_receiver_that_is_not_the_builder_does_not() {
+        let src = r#"pub fn build(b: *std.Build) void {
+    const a = b.path("src/main_bench.zig");
+    const c = b.path("src/vendor/lib.c");
+    const d = self.path("src/other.zig");
+    const e = b.addPath("src/third.zig");
+}
+"#;
+        let pack = super::pack();
+        let mut parser = pack.make_parser();
+        let tree = parser.parse(src, None).expect("zig parses");
+        let mut found = Vec::new();
+        let mut stack = vec![tree.root_node()];
+        while let Some(node) = stack.pop() {
+            if let Some(target) = super::build_path(node, src.as_bytes()) {
+                found.push(target);
+            }
+            let mut cursor = node.walk();
+            stack.extend(node.named_children(&mut cursor));
+        }
+        assert_eq!(found, ["src/main_bench.zig"]);
+    }
 }
