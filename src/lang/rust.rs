@@ -221,8 +221,21 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
         // that declares it: `mod x;` in src/main.rs is src/x, and in
         // src/a/b.rs it is src/a/b/x. Resolving it as a bare root
         // instead would suffix-match any file called x anywhere.
+        //
+        // `#[path = "disabled.rs"] mod imp;` names a FILE instead, and
+        // the module's own name says nothing about which. ripgrep's
+        // crates/core/index declares enabled.rs and disabled.rs that
+        // way and neither had an importer.
+        //
+        // A raw identifier is the module `match`, not `r#match`:
+        // regex-cli's cmd/find declares `mod r#match;` and its
+        // directory is cmd/find/match.
+        let named = match preceding_attr_path(node, src) {
+            Some(file) => file.trim_end_matches(".rs").replace('/', "::"),
+            None => text.trim_start_matches("r#").to_string(),
+        };
         out.push(super::ImportInfo {
-            target: format!("self::{text}").into(),
+            target: format!("self::{named}").into(),
             names: Vec::new(),
             reach: super::Reach::Anywhere,
         });
@@ -268,6 +281,30 @@ fn preceding_attr_contains(item: Node, src: &[u8], needle: &str) -> bool {
     false
 }
 
+/// The file a `#[path = "..."]` attribute directly above the item
+/// names. A path that climbs out of the module's own directory names
+/// no module of it and is declined.
+fn preceding_attr_path<'a>(item: Node, src: &'a [u8]) -> Option<&'a str> {
+    let mut prev = item.prev_named_sibling();
+    while let Some(p) = prev {
+        match p.kind() {
+            "attribute_item" => {
+                if let Some((_, tail)) = p.utf8_text(src).ok()?.split_once("path")
+                    && let Some((_, tail)) = tail.split_once('"')
+                    && let Some((file, _)) = tail.split_once('"')
+                    && !file.contains("..")
+                {
+                    return Some(file);
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        prev = p.prev_named_sibling();
+    }
+    None
+}
+
 /// `#[ignore]`, bare or with a reason. The attribute must LEAD with
 /// it: `#[cfg_attr(not(panic = "unwind"), ignore)]` is a conditional
 /// ignore, which is stated judgment — the test runs wherever the
@@ -307,7 +344,9 @@ fn use_edges(node: Node, prefix: &str, src: &[u8], out: &mut Vec<super::ImportIn
     };
     match node.kind() {
         "identifier" | "scoped_identifier" | "crate" | "super" | "self" => {
-            let full = join(text(node));
+            // `use crate::cmd::find::r#match::X` names the module
+            // `match`; the escape is the parser's, not the path's.
+            let full = join(&text(node).replace("r#", ""));
             let leaf = full.rsplit("::").next().unwrap_or("").to_string();
             out.push(super::ImportInfo {
                 target: full.into(),

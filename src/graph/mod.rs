@@ -135,6 +135,10 @@ struct Index {
     rust_exports: HashMap<Box<str>, Vec<usize>>,
     /// Each file's nearest enclosing crate root, precomputed.
     file_crate_root: Vec<Option<usize>>,
+    /// Each file's language. A module name binds a file of the language
+    /// that named it: the OCaml corpus ships util.h, config.h and
+    /// sha256.c beside OCaml modules of the same stem.
+    langs: Vec<Lang>,
 }
 
 /// What separates one component of an import target from the next.
@@ -160,6 +164,7 @@ impl Index {
             rust_exports: HashMap::new(),
             file_crate_root: Vec::new(),
             file_comps: Vec::new(),
+            langs: files.iter().map(|f| f.lang).collect(),
         };
         for (i, f) in files.iter().enumerate() {
             idx.paths.entry(f.path.clone()).or_insert(i);
@@ -200,15 +205,7 @@ impl Index {
             }
         }
         // Second pass: crate roots are only complete now.
-        idx.file_crate_root = files
-            .iter()
-            .map(|f| {
-                let comps = module_components(f);
-                (0..=comps.len())
-                    .rev()
-                    .find_map(|n| idx.crate_roots.get(&comps[..n]).copied())
-            })
-            .collect();
+        idx.file_crate_root = nearest_crate_roots(files, &idx.crate_roots);
         idx
     }
 
@@ -226,6 +223,8 @@ impl Index {
             // A module name is CamelCase and its path is snake_case,
             // and nothing bridged the two.
             Lang::Elixir => self.elixir(target),
+            // A module IS a file, and the file is not capitalised.
+            Lang::OCaml => self.ocaml(i, target),
             Lang::Zig => self.zig(from, target),
             // C++ includes resolve exactly as C's do: a quoted path is
             // relative to the including file, an angled one is a
@@ -247,7 +246,6 @@ impl Index {
             // path components, then match the tail against the scanned
             // files. Only the separators differ.
             //
-            //   OCaml     `open Core` names a module, by its own name
             //   Lua       `require "a.b.c"` walks package.path
             //   Ruby      `require_relative "a/b"` is a path
             //   Perl      `use Foo::Bar` mirrors the namespace
@@ -332,6 +330,12 @@ impl Index {
         match *first {
             "crate" => self.rust_crate(i, rest),
             "super" | "self" => self.rust_relative(from, first, rest),
+            // The standard library is never this project. The bare-root
+            // arm drops the leaf and suffix-matches what is left, so
+            // `use core::cmp` asked for a module called `core` — which
+            // ripgrep's crates/core answers to, giving it 37 dependents
+            // in rayon and regex that no Cargo.toml declares.
+            "std" | "core" | "alloc" => Class::External,
             // Bare roots: a sibling top-level module (2015-style) or an
             // external crate.
             _ => match self
@@ -553,6 +557,61 @@ impl Index {
         }
     }
 
+    /// An OCaml module IS a compilation unit, and its name is the file
+    /// stem with the first letter capitalised: module `Path` is
+    /// `path.ml`, module `CCParse` is `CCParse.ml`. The generic arm
+    /// compared `Stdune` against the path component `stdune` and could
+    /// not match either spelling — all 2444 OCaml files in the corpus
+    /// produced 8 internal edges, and base on its own produced none at
+    /// all, so its report carried no architecture section.
+    ///
+    /// Only the HEAD of a dotted path names a unit: `Memo.O` is the
+    /// submodule O inside memo.ml, and `Stdune.Path` reaches stdune's
+    /// path.ml through the library's wrapper module, which is the file
+    /// the reference actually names. dune spells that same reference
+    /// `Stdune__Path`, where the unit is the LAST component instead.
+    ///
+    /// Which `list.ml` a bare `List.map` means is settled by the dune
+    /// library the importing file belongs to, and a dune library is a
+    /// directory — so the candidate sharing the longest path prefix
+    /// with the importer wins. Taking the shallowest instead sent all
+    /// 398 of containers' `List` references to base/src/list.ml, a
+    /// different repository.
+    fn ocaml(&self, i: usize, target: &str) -> Class {
+        // A functor application names its functor (`F(X).t`), and a
+        // wrapped-library alias names the module after the separator —
+        // both are the build system's spelling, not the language's.
+        let head = target
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .split('(')
+            .next()
+            .unwrap_or_default()
+            .trim();
+        let Some(unit) = head.rsplit("__").next().filter(|u| !u.is_empty()) else {
+            return Class::External;
+        };
+        let mut rest = unit.chars();
+        let lowered: String = match rest.next() {
+            Some(first) => first.to_lowercase().chain(rest).collect(),
+            None => return Class::External,
+        };
+        let here = &self.file_comps[i];
+        let best = [unit, lowered.as_str()]
+            .iter()
+            .filter_map(|stem| self.by_last.get(*stem))
+            .flatten()
+            .filter(|(c, j)| self.langs[*j] == Lang::OCaml && visible(c, here))
+            .min_by_key(|(c, _)| (std::cmp::Reverse(shared(c, here)), c.len()));
+        match best {
+            // Ties keep path order, which puts `foo.ml` before
+            // `foo.mli`: an edge lands on the implementation.
+            Some(&(_, j)) => Class::Internal(j),
+            None => Class::External,
+        }
+    }
+
     /// A Solidity import names a FILE. `./x.sol` and `../utils/x.sol`
     /// are paths from the importing file, so a miss there is a miss. A
     /// bare specifier is a remapping, and openzeppelin-contracts remaps
@@ -602,6 +661,32 @@ impl Index {
     }
 }
 
+/// Leading components two files share — how near one is to the other.
+fn shared(a: &[Box<str>], b: &[Box<str>]) -> usize {
+    a.iter().zip(b).take_while(|(x, y)| x == y).count()
+}
+
+/// Can a module name written bare reach this file? A dune library is a
+/// DIRECTORY, so its modules see each other by name; every other
+/// library is reached through its root module, the file dune names
+/// after the library and its users spell `open Stdune`.
+///
+/// A name that answers from neither is the standard library wearing a
+/// name this project also uses, or another library's private module.
+/// otherlibs/dyn/dyn.ml says `Float.to_string` and means Stdlib's;
+/// binding it to otherlibs/stdune/src/float.ml put 697 of dune's 886
+/// modules into a single cycle, and OCaml has no such thing — a cycle
+/// between compilation units does not compile, and dune refuses to
+/// build one.
+fn visible(cand: &[Box<str>], here: &[Box<str>]) -> bool {
+    let (Some((stem, dir)), Some((_, own))) = (cand.split_last(), here.split_last()) else {
+        return false;
+    };
+    // `<lib>/<lib>.ml` and `<lib>/src/<lib>.ml` are both how a library
+    // names its root module.
+    dir == own || dir.iter().rev().take(2).any(|d| d == stem)
+}
+
 fn ends_with(comps: &[Box<str>], segs: &[&str]) -> bool {
     comps.len() >= segs.len()
         && comps[comps.len() - segs.len()..]
@@ -629,6 +714,23 @@ fn module_components(f: &GraphFacts) -> Vec<Box<str>> {
         comps.pop();
     }
     comps
+}
+
+/// Each file's nearest enclosing crate root: the longest prefix of its
+/// module components that a `lib.rs` or `main.rs` answers to.
+fn nearest_crate_roots(
+    files: &[GraphFacts],
+    roots: &HashMap<Vec<Box<str>>, usize>,
+) -> Vec<Option<usize>> {
+    files
+        .iter()
+        .map(|f| {
+            let comps = module_components(f);
+            (0..=comps.len())
+                .rev()
+                .find_map(|n| roots.get(&comps[..n]).copied())
+        })
+        .collect()
 }
 
 /// A path specifier's components, with the segments that name nothing

@@ -341,12 +341,23 @@ impl Lang {
     /// the one that carries information. Their own includes still
     /// count: kakoune's buffer.cc is what gives buffer.hh its 13
     /// importers.
+    ///
+    /// An OCaml `.mli` is the same module as its `.ml`, not a second
+    /// one: a reference names `Path`, and `path.ml` is what answers.
+    /// The gold corpus holds 1147 such pairs among 2444 files, so
+    /// counting the interface separately put 1147 modules in the
+    /// orphan list by construction — no import could ever reach them.
+    /// The implementation is the module that is judged, and the
+    /// interface's own references still count.
     pub fn is_sink(self, path: &Path) -> bool {
-        matches!(self, Lang::C | Lang::Cpp | Lang::Cuda)
-            && path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| matches!(e, "c" | "cc" | "cpp" | "cxx" | "c++" | "cu"))
+        let ext = path.extension().and_then(|e| e.to_str());
+        match self {
+            Lang::C | Lang::Cpp | Lang::Cuda => {
+                matches!(ext, Some("c" | "cc" | "cpp" | "cxx" | "c++" | "cu"))
+            }
+            Lang::OCaml => ext == Some("mli"),
+            _ => false,
+        }
     }
 
     pub fn name(self) -> &'static str {

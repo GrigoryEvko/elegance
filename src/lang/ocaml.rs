@@ -30,7 +30,16 @@ const KINDS: &[(&str, Sem)] = &[
     ("try_expression", Sem::Try),
     ("application_expression", Sem::Call),
     ("comment", Sem::Comment),
-    ("open_module", Sem::Import),
+    // A module reference is a dependency however it is spelled, and
+    // `module_path` is the node every spelling shares: `open Stdune`,
+    // `include Array_intf.Definitions`, `module M = Path`, `Path.t`.
+    // The corpus holds 2317 `open`s against 78747 module references,
+    // and resolving only the opens leaves 2242 of its 2444 files with
+    // no dependent.
+    ("module_path", Sem::Import),
+    // A type or module-type path carries the extended form, which also
+    // admits functor application: `Foo.t`, `F(X).t`, `Foo.S`.
+    ("extended_module_path", Sem::Import),
     ("value_name", Sem::Ident),
     ("type_constructor", Sem::Ident),
     ("constructor_name", Sem::Ident),
@@ -127,20 +136,86 @@ fn name_node(node: Node) -> Option<Node> {
         .filter(|p| p.kind() == "value_name")
 }
 
-/// `open Core` — the module becomes visible, so it is an import edge.
+/// Naming a module is what makes it visible, so every module path is an
+/// import edge — `open Core`, `include Import`, `module M = Path` and
+/// the `Path` of `Path.to_string` alike.
+///
+/// A path nests: `A.B.C` is a path holding `A.B` holding `A`. Only the
+/// outermost is the reference; the inner ones are its own prefixes and
+/// would each be counted again.
+///
+/// A module name may be a package (`Ppxlib`), the standard library
+/// (`Printf`) or this project's own, and the source does not say which,
+/// so a miss is an ordinary dependency.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    let Some(name) = node
-        .named_children(&mut node.walk())
-        .find(|c| c.kind() == "module_path" || c.kind() == "module_name")
-    else {
+    let parent = node.parent();
+    let nested = parent.is_some_and(|p| matches!(p.kind(), "module_path" | "extended_module_path"));
+    // `with module Printf := Shadow_stdlib.Printf` names Printf to
+    // REBIND it; the dependency is the constraint on the right.
+    let binder = parent.is_some_and(|p| {
+        p.kind() == "constrain_module" && p.child_by_field_name("constraint") != Some(node)
+    });
+    let Ok(text) = node.utf8_text(src) else {
         return Vec::new();
     };
-    let text = name.utf8_text(src).unwrap_or("");
+    let head = text.split('.').next().unwrap_or_default();
+    if nested || binder || head.is_empty() || bound_here(node, head, src) {
+        return Vec::new();
+    }
     vec![super::ImportInfo {
         target: text.into(),
         names: Vec::new(),
         reach: super::Reach::Anywhere,
     }]
+}
+
+/// Does a module definition in scope already own this name?
+///
+/// base/src/string.ml opens with `module Bytes = Bytes0`, so every
+/// `Bytes.create` below it means Bytes0 — while base/src/bytes.ml opens
+/// with `module String = String0` and means String0. Reading both as
+/// references to the sibling file put bytes.ml and string.ml in a cycle,
+/// and OCaml has no such thing: a cycle between compilation units does
+/// not compile. 106 pairs of files answered to each other that way.
+///
+/// The alias itself is still an edge — `module Bytes = Bytes0` names
+/// Bytes0 — so nothing is lost by declining the uses of the name it
+/// binds.
+fn bound_here(node: Node, name: &str, src: &[u8]) -> bool {
+    let mut cur = node;
+    loop {
+        let mut prev = cur.prev_named_sibling();
+        while let Some(item) = prev {
+            if binds_module(item, name, src) {
+                return true;
+            }
+            prev = item.prev_named_sibling();
+        }
+        match cur.parent() {
+            Some(p) => cur = p,
+            None => return false,
+        }
+    }
+}
+
+/// `module M = ...`, `module M = struct .. end` and the parameter of a
+/// functor all bind M.
+fn binds_module(item: Node, name: &str, src: &[u8]) -> bool {
+    if item.kind() != "module_definition" {
+        return false;
+    }
+    fn named<'a>(n: Node<'a>) -> Vec<Node<'a>> {
+        n.named_children(&mut n.walk()).collect()
+    }
+    named(item)
+        .into_iter()
+        .filter(|b| b.kind() == "module_binding")
+        .flat_map(named)
+        .flat_map(|c| match c.kind() {
+            "module_parameter" => named(c),
+            _ => vec![c],
+        })
+        .any(|n| n.kind() == "module_name" && n.utf8_text(src) == Ok(name))
 }
 
 /// A let binding lists its parameters as direct children, so every
@@ -238,5 +313,55 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
             _ => Sem::None,
         },
         _ => sem,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    /// Every syntax that names a module is an edge, and each names it
+    /// once. Reading `open` alone found 2317 references in the gold
+    /// corpus where the module paths find 78747, and left 2242 of its
+    /// 2444 files with no dependent at all.
+    #[test]
+    fn every_module_reference_is_an_import_and_is_counted_once() {
+        const SRC: &str = r#"
+open! Import
+include Array_intf.Definitions
+module P = Stdune.Path
+let f (x : Path.Build.t) = Memo.O.(String.length (Path.to_string x))
+let g = Stdune__Env.get
+type t = Dune_lang.Decoder.t
+module type S = Foo.S
+let h = Some (List.map ~f:ignore)
+open struct
+  let z = 1
+end
+"#;
+        let pack = crate::lang::Lang::OCaml.pack();
+        let mut parser = pack.make_parser();
+        let f = crate::facts::extract(pack, &mut parser, Path::new("t.ml"), SRC);
+        let got: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
+        assert_eq!(
+            got,
+            [
+                "Import",
+                "Array_intf.Definitions",
+                "Stdune.Path",
+                "Path.Build",
+                "Memo.O",
+                "String",
+                "Path",
+                "Stdune__Env",
+                "Dune_lang.Decoder",
+                "Foo",
+                "List",
+            ],
+            "a nested path is its own prefix and must not be counted again"
+        );
+        // `open struct .. end` names no module, and `Some` is a
+        // constructor rather than a module qualifier.
+        assert!(!got.contains(&"Some"));
     }
 }
