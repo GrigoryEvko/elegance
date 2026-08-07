@@ -549,11 +549,50 @@ fn requires(call: Node, src: &[u8]) -> bool {
             || first_string(call).is_some_and(|s| dir_rooted_path(s, src).is_some()))
 }
 
+/// The four load forms, plus whatever this file has aliased to one.
+///
+/// `alias orig_require require` is a statement, and sequel writes it
+/// before loading all 102 of its extensions through the alias. Reading
+/// it is the same standard as reading a manifest; GUESSING it is not an
+/// option, since a suffix rule on `require` would take `requires`,
+/// `required` and `require_valid_table` — 300 calls across the gold
+/// corpus that load nothing.
 fn names_a_load(call: Node, src: &[u8]) -> bool {
-    matches!(
-        callee_text(call, src),
-        Some("require" | "require_relative" | "load" | "autoload")
-    )
+    let Some(name) = callee_text(call, src) else {
+        return false;
+    };
+    LOADS.contains(&name) || aliases_a_load(call, src, name)
+}
+
+const LOADS: &[&str] = &["require", "require_relative", "load", "autoload"];
+
+/// Did this file alias `name` onto a load? The substring guard is a
+/// performance one and not a correctness one: the alias statement is
+/// the authority, so a name it never mentions can only ever be absent.
+fn aliases_a_load(call: Node, src: &[u8], name: &str) -> bool {
+    if !name.contains("require") && !name.contains("load") {
+        return false;
+    }
+    let mut root = call;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    // The whole tree, because an alias is written wherever the method
+    // it renames is in scope: sequel's sits two levels in, inside
+    // `module Sequel` and its singleton class.
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        let text = |i| node.named_child(i).and_then(|c| c.utf8_text(src).ok());
+        if node.kind() == "alias"
+            && text(0) == Some(name)
+            && text(1).is_some_and(|t| LOADS.contains(&t))
+        {
+            return true;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+    }
+    false
 }
 
 /// Blocks given to the iteration methods. The list is deliberately
@@ -646,6 +685,28 @@ mod tests {
                 ("set".to_string(), Reach::Anywhere),
             ]
         );
+    }
+
+    #[test]
+    fn a_name_this_file_aliased_onto_require_is_one() {
+        // sequel writes `alias orig_require require` inside
+        // `module Sequel`, then loads all 102 of its extensions through
+        // the alias. Reading the statement is the only honest way in: a
+        // suffix rule on `require` would take `requires`, `required`
+        // and `require_valid_table`, 300 calls across the gold corpus
+        // that load nothing.
+        let got = imports_of(concat!(
+            "module Sequel\n",
+            "  class << self\n",
+            "    alias orig_require require\n",
+            "    def extension(*es)\n",
+            "      es.each{|e| orig_require(\"sequel/extensions/#{e}\")}\n",
+            "      require_valid_table(\"sequel/nope\")\n",
+            "    end\n",
+            "  end\n",
+            "end\n",
+        ));
+        assert_eq!(got, [("sequel/extensions/*".to_string(), Reach::Anywhere)]);
     }
 
     #[test]
