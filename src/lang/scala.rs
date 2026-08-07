@@ -121,9 +121,7 @@ pub fn pack() -> Pack {
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
-        test_path: |p| {
-            p.contains("/test/") || p.ends_with("Spec.scala") || p.ends_with("Suite.scala")
-        },
+        test_path,
         asserty,
         is_hook: |_, _| false,
         return_arity: |_, _| 0,
@@ -139,25 +137,92 @@ fn name_node(node: Node) -> Option<Node> {
         .or_else(|| test_label(node))
 }
 
+/// An import states a PATH and then what it takes from it, and each name
+/// it takes is a separate dependency: `import cats.data.{NonEmptyList,
+/// Chain}` names two files, not the package they share. Reading only the
+/// text before the brace left 1380 selector lists in the gold corpus
+/// pointing at a package that no module component vector can match.
+///
+/// A wildcard — `._`, Scala 3's `.*`, `.given` — names the path itself.
+/// Only `._` was trimmed, so 949 Scala 3 wildcards carried a literal
+/// `.*` into the resolver.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    let text = node.utf8_text(src).unwrap_or("");
-    let target = text.trim_start_matches("import").trim();
-    // `import foo.bar.{a, b}` — the dependency is the path before the
-    // selector list.
-    let target = target
-        .split('{')
-        .next()
-        .unwrap_or(target)
-        .trim_end_matches('.')
-        .trim();
-    if target.is_empty() {
+    let mut cursor = node.walk();
+    let path: Vec<&str> = node
+        .children_by_field_name("path", &mut cursor)
+        .filter_map(|n| n.utf8_text(src).ok())
+        .filter(|t| *t != ".")
+        .collect();
+    if path.is_empty() {
         return Vec::new();
     }
-    vec![super::ImportInfo {
-        target: target.trim_end_matches("._").into(),
-        names: Vec::new(),
-        reach: super::Reach::Anywhere,
-    }]
+    let prefix = path.join(".");
+    let mut targets = Vec::new();
+    let mut walk = node.walk();
+    for child in node.named_children(&mut walk) {
+        match child.kind() {
+            // `import a.b._` / `.*` / `.given` — the path is the target.
+            "namespace_wildcard" => targets.push(prefix.clone()),
+            "as_renamed_identifier" => selector(&prefix, child, src, &mut targets),
+            "namespace_selectors" => {
+                let mut inner = child.walk();
+                for sel in child.named_children(&mut inner) {
+                    selector(&prefix, sel, src, &mut targets);
+                }
+            }
+            _ => {}
+        }
+    }
+    // `import a.b.C` — no selector list, so the path already names it.
+    if targets.is_empty() {
+        targets.push(prefix);
+    }
+    targets
+        .iter()
+        .map(|t| super::ImportInfo {
+            target: super::java::type_path(t).into(),
+            names: Vec::new(),
+            reach: super::Reach::Anywhere,
+        })
+        .collect()
+}
+
+/// One entry of a selector list: a name, a rename whose left side is the
+/// name (`X => Y`, `X as Y`), or a wildcard standing for the path.
+fn selector(prefix: &str, sel: Node, src: &[u8], out: &mut Vec<String>) {
+    let name = match sel.kind() {
+        "namespace_wildcard" | "wildcard" => {
+            out.push(prefix.to_string());
+            return;
+        }
+        "arrow_renamed_identifier" | "as_renamed_identifier" => sel.child_by_field_name("name"),
+        _ => Some(sel),
+    };
+    let Some(text) = name.and_then(|n| n.utf8_text(src).ok()) else {
+        return;
+    };
+    // A selector may also be a type expression or an operator; only a
+    // plain name can name a file.
+    if !text.is_empty() && text != "given" && text.chars().all(|c| c.is_alphanumeric() || c == '_')
+    {
+        out.push(format!("{prefix}.{text}"));
+    }
+}
+
+/// sbt names the production source set `main` and cross-building splits
+/// it across `scala`, `scala-2`, `scala-3` and `scala-2.13+` roots, so
+/// `zio/test/shared/src/main/scala` is ZIO's published test FRAMEWORK
+/// while `zio/core-tests/shared/src/test/scala` is a test.
+///
+/// Reading the path for `/test/` instead dropped 188 production files —
+/// 175 of them because a `zio.test` source path carries the segment —
+/// and every edge into them with it.
+fn test_path(p: &str) -> bool {
+    match super::java::source_set(p, |c| c.starts_with("scala") || c == "java") {
+        Some(set) => set != "main",
+        // No source-set layout: the name is all there is.
+        None => p.contains("/test/") || p.ends_with("Spec.scala") || p.ends_with("Suite.scala"),
+    }
 }
 
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {

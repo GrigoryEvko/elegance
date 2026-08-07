@@ -134,9 +134,7 @@ pub fn pack() -> Pack {
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
-        test_path: |p| {
-            p.contains("/test/") || p.ends_with("Test.java") || p.ends_with("Tests.java")
-        },
+        test_path,
         asserty,
         is_hook: |_, _| false,
         // One return value, always. A method that wants to return three
@@ -153,6 +151,13 @@ fn name_node(node: Node) -> Option<Node> {
     node.child_by_field_name("name")
 }
 
+/// `import a.b.C` names a TYPE and its file is `a/b/C.java`, but a
+/// static import and a nested type name a MEMBER of that type, so the
+/// file is one segment shorter or more: `import static
+/// org.junit.jupiter.api.Assertions.assertEquals` is Assertions.java and
+/// `import com.github.benmanes.caffeine.cache.CacheSpec.CacheWeigher` is
+/// CacheSpec.java. 8361 static imports and 1240 nested types in the gold
+/// corpus named a file in the corpus and resolved to nothing.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let text = node.utf8_text(src).unwrap_or("");
     let target = text
@@ -160,15 +165,66 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
         .trim_start_matches(" static")
         .trim()
         .trim_end_matches(';')
-        .trim();
+        .trim()
+        .trim_end_matches(".*");
+    let target = type_path(target);
     if target.is_empty() {
         return Vec::new();
     }
     vec![super::ImportInfo {
-        target: target.trim_end_matches(".*").into(),
+        target: target.into(),
         names: Vec::new(),
         reach: super::Reach::Anywhere,
     }]
+}
+
+/// The prefix of a dotted name that ends at its first capitalized
+/// segment — the type whose file the name lives in. A package is lower
+/// case and a type is capitalized, and that convention is what decides
+/// where the file ends; cutting there moved no target that already
+/// resolved, across all 71978 Java and 12837 Scala imports of the gold
+/// corpus. A name with no capitalized segment is a package and is
+/// returned whole.
+pub(super) fn type_path(target: &str) -> &str {
+    let mut end = 0;
+    for seg in target.split('.') {
+        end += seg.len();
+        if seg.starts_with(char::is_uppercase) {
+            return &target[..end];
+        }
+        end += 1; // the separating dot
+    }
+    target
+}
+
+/// Maven, Gradle and sbt all name the production source set `main`, and
+/// the set is written into the path: `src/main/java` is the library,
+/// while `src/test/java`, `src/testFixtures/java`, `src/jmh/java`,
+/// `src/javaPoet/java` and `src/compatibilityTest/java` are not.
+///
+/// Reading the file NAME instead was wrong in both directions. junit5's
+/// `junit-jupiter-api/src/main/java/org/junit/jupiter/api/Test.java`
+/// declares the `@Test` annotation, and it plus 62 more production types
+/// were dropped from the graph; 299 files under eighteen non-main source
+/// sets were judged as production modules in their place.
+fn test_path(p: &str) -> bool {
+    match source_set(p, |c| c == "java") {
+        Some(set) => set != "main",
+        // No source-set layout: the name is all there is.
+        None => p.contains("/test/") || p.ends_with("Test.java") || p.ends_with("Tests.java"),
+    }
+}
+
+/// The source set a JVM path belongs to: the component after `src` in
+/// `.../src/<set>/<language root>/...`. Shared with the Scala pack,
+/// which is laid out by the same build tools.
+pub(super) fn source_set(p: &str, lang_root: fn(&str) -> bool) -> Option<&str> {
+    let comps: Vec<&str> = p.split('/').collect();
+    comps
+        .windows(3)
+        .rev()
+        .find(|w| w[0] == "src" && lang_root(w[2]))
+        .map(|w| w[1])
 }
 
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
