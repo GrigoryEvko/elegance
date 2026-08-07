@@ -243,7 +243,7 @@
 "wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 4.0 }
-"module doc" = { hi = 304.0 }
+"module doc" = { hi = 299.0 }
 "type doc" = { hi = 518.0 }
 "fn doc" = { hi = 134.0 }
 "field doc" = { hi = 56.0 }
@@ -252,8 +252,8 @@
 "public docs" = { rate = 0.35 }
 
 [pl]
-"cognitive" = { hi = 25.0 }
-"cyclomatic" = { hi = 15.0 }
+"cognitive" = { hi = 27.0 }
+"cyclomatic" = { hi = 16.0 }
 "depth" = { hi = 3.0 }
 "length" = { hi = 79.0 }
 "expr depth" = { hi = 13.0 }
@@ -261,17 +261,17 @@
 "live span" = { hi = 67.0 }
 "magic numbers" = { hi = 3.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.74 }
+"comment ratio" = { lo = 0.00, hi = 0.75 }
 "terse name" = { hi = 20.0 }
 "abbreviated" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 1.0 }
 "module doc" = { hi = 43.0 }
 # 17 runs is under the 200 a percentile needs: borrowed from pl's pooled doc p99
-"type doc" = { hi = 545.0 }
-"fn doc" = { hi = 59.0 }
+"type doc" = { hi = 580.0 }
+"fn doc" = { hi = 45.0 }
 "field doc" = { hi = 38.0 }
-"inline doc" = { hi = 636.0 }
+"inline doc" = { hi = 642.0 }
 "asserts" = { rate = 0.02 }
 "public docs" = { rate = 0.03 }
 
@@ -501,15 +501,15 @@
 "public docs" = { rate = 0.00 }
 
 [sh]
-"cognitive" = { hi = 42.0 }
-"cyclomatic" = { hi = 35.0 }
+"cognitive" = { hi = 45.0 }
+"cyclomatic" = { hi = 36.0 }
 "depth" = { hi = 4.0 }
-"length" = { hi = 109.0 }
+"length" = { hi = 103.0 }
 "expr depth" = { hi = 12.0 }
-"live span" = { hi = 81.0 }
-"magic numbers" = { hi = 5.0 }
+"live span" = { hi = 77.0 }
+"magic numbers" = { hi = 4.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.63 }
+"comment ratio" = { lo = 0.00, hi = 0.62 }
 "abbreviated" = { hi = 1.0 }
 "wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
@@ -518,12 +518,12 @@
 "commented code" = { hi = 1.0 }
 "module doc" = { hi = 197.0 }
 # 0 runs is under the 200 a percentile needs: borrowed from sh's pooled doc p99
-"type doc" = { hi = 116.0 }
-"fn doc" = { hi = 106.0 }
+"type doc" = { hi = 110.0 }
+"fn doc" = { hi = 105.0 }
 # 0 runs is under the 200 a percentile needs: borrowed from sh's pooled doc p99
-"field doc" = { hi = 116.0 }
-"inline doc" = { hi = 96.0 }
-"public docs" = { rate = 0.26 }
+"field doc" = { hi = 110.0 }
+"inline doc" = { hi = 93.0 }
+"public docs" = { rate = 0.23 }
 
 [cpp]
 "cognitive" = { hi = 30.0 }

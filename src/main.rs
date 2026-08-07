@@ -457,7 +457,26 @@ fn measurable<'a>(
 /// Is this file worth reading at all? True for every language's own
 /// extension and for the containers that hold one.
 fn analyzable(path: &std::path::Path) -> bool {
-    Lang::from_path(path).is_some() || ci::Container::of(path).is_some()
+    Lang::from_path(path).is_some()
+        || ci::Container::of(path).is_some()
+        || (path.extension().is_none() && has_shebang(path))
+}
+
+/// An extensionless file's first line is the only thing that says it is
+/// a script, so the walk has to read it. 115 of the shell gold corpus's
+/// 2824 files have no extension: the cost is one short read on 4% of
+/// what the walk already opens, and the alternative is that every
+/// installed script is invisible as importer AND as target.
+fn has_shebang(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 128];
+    let Ok(n) = file.read(&mut head) else {
+        return false;
+    };
+    crate::lang::shebang(&String::from_utf8_lossy(&head[..n])).is_some()
 }
 
 /// One lazily-created parser per language per rayon task.

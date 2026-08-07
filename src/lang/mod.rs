@@ -290,6 +290,24 @@ fn executable(_path: &Path) -> bool {
     false
 }
 
+/// The language a `#!` line names. `#!/usr/bin/env bash` and `#!/bin/sh`
+/// agree, because only the interpreter's own name is read.
+pub fn shebang(source: &str) -> Option<Lang> {
+    let line = source.strip_prefix("#!")?.lines().next()?;
+    let mut words = line.split_whitespace();
+    let mut interpreter = words.next()?.rsplit('/').next()?;
+    if interpreter == "env" {
+        interpreter = words.next()?;
+    }
+    match interpreter {
+        "sh" | "bash" | "dash" | "ksh" | "zsh" => Some(Lang::Shell),
+        "perl" => Some(Lang::Perl),
+        "python" | "python2" | "python3" => Some(Lang::Python),
+        "ruby" => Some(Lang::Ruby),
+        _ => None,
+    }
+}
+
 impl Lang {
     pub fn from_path(path: &Path) -> Option<Lang> {
         let ext = path.extension()?.to_str()?;
@@ -323,7 +341,16 @@ impl Lang {
     /// launch templates in `flash_fwd_launch_template.h` and cutlass
     /// keeps 76 headers that way.
     pub fn of_source(path: &Path, source: &str) -> Option<Lang> {
-        match Lang::from_path(path)? {
+        // An INSTALLED script has no extension and says what it is on
+        // its own first line. 29 files in the gold shell corpus are
+        // spelled that way and 13 in the Perl one, among them the eleven
+        // bats-core/libexec/bats-core/bats-* scripts that source that
+        // project's whole library, and Dancer2/script/dancer2, the only
+        // file naming Dancer2::CLI.
+        let Some(by_extension) = Lang::from_path(path) else {
+            return path.extension().is_none().then(|| shebang(source))?;
+        };
+        match by_extension {
             Lang::C | Lang::Cpp if looks_like_cuda(source) => Some(Lang::Cuda),
             Lang::C if path.extension()? == "h" && looks_like_cpp(source) => Some(Lang::Cpp),
             lang => Some(lang),
@@ -334,7 +361,13 @@ impl Lang {
     /// Used where files are PARTITIONED by language before scanning, so
     /// that a C++ header cannot land in the `[c]` calibration section.
     pub fn of(path: &Path) -> Option<Lang> {
-        match Lang::from_path(path)? {
+        let Some(by_extension) = Lang::from_path(path) else {
+            // The calibration partitioner needs the same fallback, or an
+            // installed script lands in no `[sh]`/`[pl]` section at all.
+            let source = std::fs::read_to_string(path).ok()?;
+            return shebang(&source);
+        };
+        match by_extension {
             // Every C-family extension is now readable: `.h` may be any
             // of the three, and `.cpp`/`.hpp` may be CUDA.
             lang @ (Lang::C | Lang::Cpp) => match std::fs::read_to_string(path) {
