@@ -108,7 +108,7 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
     let mut blasts = blast_radii(&sccs, &comp_succ, n);
     fold_over_modules(&files, &edge_list, &mut fan_in, &mut blasts);
     fold_over_packages(&files, &edge_list, &mut fan_in, &mut blasts);
-    let judged = judgeable(&files);
+    let judged = judgeable(&files, &fan_in);
     let (judged_modules, deletable_pct) = deletability(&blasts, &judged);
     let load = load_bearing(&file_labels, &blasts);
     let (orphan_count, orphans) = find_orphans(&files, &fan_in, &judged);
@@ -682,14 +682,24 @@ fn package_of(path: &Path) -> String {
 /// One flag per file: can this module be asked whether anything depends
 /// on it? A translation unit is a sink by construction, so its answer
 /// is settled before the code is read. See `Lang::is_sink`.
-fn judgeable(files: &[&GraphFacts]) -> Vec<bool> {
+fn judgeable(files: &[&GraphFacts], fan_in: &[u32]) -> Vec<bool> {
     files
         .iter()
-        .map(|f| {
-            let path = f.path.display().to_string();
-            !f.lang.is_sink(&f.path) && !crate::facts::one_shot_dir(&crate::facts::rooted(&path))
-        })
+        .zip(fan_in)
+        .map(|(f, &reached)| !(f.lang.is_sink(&f.path) || reached == 0 && runs_once(&f.path)))
         .collect()
+}
+
+/// A demo, a benchmark or a codegen script that NOTHING reaches. The
+/// zero-fan-in condition is the whole rule: the claim is that being
+/// unreferenced is not a finding for such a file, which says nothing
+/// about one that is referenced. Without it the exclusion eats live
+/// source — lua-language-server keeps its whole tree under `script/`
+/// and kong a library under `kong/tools/`, 349 modules between them,
+/// and dropping those from the population raised Lua's orphan rate
+/// instead of lowering it.
+fn runs_once(path: &Path) -> bool {
+    crate::facts::one_shot_dir(&crate::facts::rooted(&path.display().to_string()))
 }
 
 /// The judged population, and the share of it that nothing transitively
