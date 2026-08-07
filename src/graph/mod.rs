@@ -263,6 +263,13 @@ impl Index {
             Lang::Ruby if imp.reach == crate::lang::Reach::Project => {
                 self.ruby_relative(from, target)
             }
+            // Resolving a preloaded name by basename bound 37 edges into
+            // lua-language-server/meta/template/*.lua — LuaCATS
+            // declaration stubs for those very libraries — 25 of them
+            // from `require 'ffi'` in kong, and made
+            // meta/template/debug.lua the corpus's 4th most load-bearing
+            // module at 316 dependents.
+            Lang::Lua if crate::lang::preloaded(target) => Class::External,
             _ => return None,
         })
     }
@@ -575,12 +582,24 @@ impl Index {
         }
     }
 
+    /// A target is a path from the importing file — except in the build
+    /// DSL, where it is a path from the BUILD ROOT: the directory
+    /// holding the `build.zig` that owns this file. ghostty spells every
+    /// one of its executables that way from `src/build/Ghostty*.zig`,
+    /// three directories below its root, and 42 of the corpus's 113
+    /// `b.path` targets miss on the file-relative reading alone.
     fn zig(&self, from: &GraphFacts, target: &str) -> Class {
         if !target.ends_with(".zig") {
             return Class::External; // std, builtin, build packages
         }
-        let joined = normalize(from.path.parent().unwrap_or(Path::new("")), target);
-        match self.paths.get(&joined) {
+        let dir = from.path.parent().unwrap_or(Path::new(""));
+        if let Some(&i) = self.paths.get(&normalize(dir, target)) {
+            return Class::Internal(i);
+        }
+        let root = dir
+            .ancestors()
+            .find(|a| self.paths.contains_key(&a.join("build.zig")));
+        match root.and_then(|r| self.paths.get(&normalize(r, target))) {
             Some(&i) => Class::Internal(i),
             None => Class::Unresolved,
         }

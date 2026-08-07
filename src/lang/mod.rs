@@ -10,6 +10,8 @@ mod elixir;
 /// A module name written the way Elixir writes it as a path — the
 /// bridge the graph needs to match `Plug.Conn` against `plug/conn.ex`.
 pub(crate) use elixir::underscore;
+/// Lua's preloaded library names, which consult no file.
+pub(crate) use lua::preloaded;
 mod go;
 pub(crate) mod hooks;
 mod java;

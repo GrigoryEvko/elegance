@@ -149,6 +149,28 @@ fn name_node(node: Node) -> Option<Node> {
     })
 }
 
+/// Lua's standard library and LuaJIT's extensions are PRELOADED:
+/// `require "debug"` returns `package.loaded.debug` and consults no
+/// file, so no file can be its target.
+pub(crate) fn preloaded(target: &str) -> bool {
+    matches!(
+        target.split('.').next().unwrap_or(target),
+        "string"
+            | "table"
+            | "math"
+            | "io"
+            | "os"
+            | "debug"
+            | "coroutine"
+            | "utf8"
+            | "package"
+            | "bit"
+            | "bit32"
+            | "ffi"
+            | "jit"
+    )
+}
+
 /// Is this call the import form? Spelled against the WHOLE callee, not
 /// its trailing component, so a `config.require(...)` of somebody's own
 /// is not read as a module edge. `pcall(require, "x")` is the same
