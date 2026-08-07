@@ -1226,6 +1226,23 @@ mod tests {
     }
 
     #[test]
+    fn a_one_shot_name_is_a_directory_or_a_module_suffixed_with_one() {
+        // `zio-examples`, `rayon-demo` and `cuda-samples` are the same
+        // thing as `examples/` spelled the way a build tool names a
+        // module, and the list only ever matched a whole component.
+        let files = [
+            fixture(Lang::Rust, "src/lib.rs", &["crate::core"]),
+            fixture(Lang::Rust, "src/core.rs", &[]),
+            fixture(Lang::Rust, "rayon-demo/src/quicksort.rs", &[]),
+            // The file's own name is never tested, or this would go too.
+            fixture(Lang::Rust, "src/parse-demo.rs", &[]),
+        ];
+        let arch = arch(&files);
+        assert_eq!(arch.judged_modules, 3);
+        assert_eq!(arch.orphans, ["src/parse-demo.rs"]);
+    }
+
+    #[test]
     fn a_test_reaching_a_module_reaches_every_file_of_it() {
         // `fan_in` was folded over the module and `from_tests` was not,
         // so a test importing a Go PACKAGE credited only the file

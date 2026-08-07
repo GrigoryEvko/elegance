@@ -221,11 +221,34 @@ fn selector(prefix: &str, sel: Node, src: &[u8], out: &mut Vec<String>) {
 /// 175 of them because a `zio.test` source path carries the segment —
 /// and every edge into them with it.
 fn test_path(p: &str) -> bool {
+    if scalafix_fixture(p) {
+        return true;
+    }
     match super::java::source_set(p, |c| c.starts_with("scala") || c == "java") {
         Some(set) => set != "main",
         // No source-set layout: the name is all there is.
         None => p.contains("/test/") || p.ends_with("Spec.scala") || p.ends_with("Suite.scala"),
     }
+}
+
+/// scalafix-testkit compiles an `input` tree, applies a rewrite rule to
+/// it, and diffs the result against an `output` tree. Both sit under
+/// `src/main/scala`, so the source set calls them production.
+///
+/// The build file says otherwise outright. cats/scalafix/build.sbt
+/// writes `scalafixTestkitOutputSourceDirectories :=
+/// sourceDirectories.in(v1_0_0_output, Compile).value` and makes the
+/// `tests` project compile depending on the `input` one. All 75 such
+/// files in the gold corpus read as orphans, and nothing else lives
+/// under those directories.
+fn scalafix_fixture(p: &str) -> bool {
+    let comps: Vec<&str> = p.split('/').collect();
+    let Some(at) = comps.iter().rposition(|c| c.starts_with("scalafix")) else {
+        return false;
+    };
+    comps[at + 1..]
+        .iter()
+        .any(|c| matches!(*c, "input" | "output"))
 }
 
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
@@ -459,4 +482,24 @@ fn is_override(node: Node, src: &[u8]) -> bool {
         .filter(|c| c.kind() == "modifiers")
         .filter_map(|m| m.utf8_text(src).ok())
         .any(|m| m.contains("override"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_scalafix_rewrite_fixture_is_test_data_wherever_it_is_filed() {
+        // scalafix-testkit compiles an `input` tree, applies a rule to
+        // it and diffs the result against `output`. Both sit under
+        // `src/main/scala`, so the source set calls them production, and
+        // all 75 in the gold corpus read as orphans. cats/scalafix's own
+        // build.sbt says otherwise outright.
+        let fixture = "cats/scalafix/v1_0_0/input/src/main/scala/fix/RemoveCartesian.scala";
+        assert!(super::test_path(fixture));
+        assert!(super::test_path(&fixture.replace("/input/", "/output/")));
+        // The `scalafix` root is half the rule: an ordinary `input`
+        // directory elsewhere is somebody's production code.
+        assert!(!super::test_path(
+            "cats/core/src/main/scala/input/Parser.scala"
+        ));
+    }
 }

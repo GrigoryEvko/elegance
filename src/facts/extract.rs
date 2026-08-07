@@ -3412,37 +3412,49 @@ pub(crate) fn rooted(path: &str) -> String {
 /// live in one of these.
 pub(crate) fn one_shot_dir(norm: &str) -> bool {
     const ONE_SHOT: &[&str] = &[
-        "/build/",
-        "/scripts/",
-        "/script/",
-        "/benchmarks/",
-        "/benchmark/",
+        "build",
+        "scripts",
+        "script",
+        "benchmarks",
+        "benchmark",
         // netty spells its harness `microbench` and cats `bench`; the
         // singular of every other name here was already spelled out,
         // and `example` was the one left plural-only -- 177 orphans
         // across netty, dune and swift-nio sit under it.
-        "/microbench/",
-        "/bench/",
-        "/perf-measures/",
-        "/examples/",
-        "/example/",
-        "/samples/",
-        "/sample/",
+        "microbench",
+        "bench",
+        "perf-measures",
+        "examples",
+        "example",
+        "samples",
+        "sample",
         // ariakit keeps 678 standalone demos under `sandbox`, each
         // found by `readdir` at build time rather than imported.
-        "/sandbox/",
-        "/demo/",
-        "/demos/",
-        "/playground/",
-        "/codegen/",
-        "/tools/",
-        "/snippets/",
+        "sandbox",
+        "demo",
+        "demos",
+        "playground",
+        "codegen",
+        "tools",
+        "snippets",
     ];
     // Matched case-insensitively: C# and Swift capitalise a directory
     // name where every other ecosystem does not, and Polly keeps its 22
     // documentation snippets under `src/Snippets`.
+    //
+    // A whole DIRECTORY component, or one suffixed onto a module name:
+    // `zio-examples`, `rayon-demo` and `cuda-samples` are the same thing
+    // as `examples/` spelled the way a build tool names a module. The
+    // file's own name is never tested, or `parse-demo.rs` would qualify.
     let lower = norm.to_ascii_lowercase();
-    ONE_SHOT.iter().any(|d| lower.contains(d))
+    let Some((dirs, _)) = lower.rsplit_once('/') else {
+        return false;
+    };
+    dirs.split('/').any(|seg| {
+        ONE_SHOT
+            .iter()
+            .any(|d| seg == *d || seg.strip_suffix(d).is_some_and(|head| head.ends_with('-')))
+    })
 }
 
 fn starts_a_statement(raw: &str) -> bool {

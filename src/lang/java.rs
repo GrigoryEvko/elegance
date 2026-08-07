@@ -223,11 +223,34 @@ pub(super) fn type_path(target: &str) -> &str {
 /// were dropped from the graph; 299 files under eighteen non-main source
 /// sets were judged as production modules in their place.
 fn test_path(p: &str) -> bool {
+    if fixture_project(p) {
+        return true;
+    }
     match source_set(p, |c| c == "java") {
         Some(set) => set != "main",
         // No source-set layout: the name is all there is.
         None => p.contains("/test/") || p.ends_with("Test.java") || p.ends_with("Tests.java"),
     }
+}
+
+/// A whole little PROJECT kept as a fixture: junit5 compiles the trees
+/// under `platform-tooling-support-tests/projects/` to check that its
+/// own tooling can build them, and one of them is named
+/// `OtherwiseNotReferencedClass.java`. They carry no source-set layout,
+/// so the name check saw `projects` and called them production.
+///
+/// Both halves are load-bearing. A module ending in `-tests` alone
+/// covers 605 gold files against 9 orphans, so it would drop 596
+/// production modules to recover nine; inside a `projects` directory it
+/// is 25 files, and every one is a fixture.
+fn fixture_project(p: &str) -> bool {
+    let comps: Vec<&str> = p.split('/').collect();
+    let Some(at) = comps.iter().position(|c| *c == "projects") else {
+        return false;
+    };
+    comps[..at]
+        .iter()
+        .any(|c| c.ends_with("-tests") || c.ends_with("-test"))
 }
 
 /// The source set a JVM path belongs to: the component after `src` in
@@ -485,4 +508,27 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
 /// the generic check only reaches members of an interface body.
 fn is_override(node: Node, src: &[u8]) -> bool {
     modifiers_text(node, src).is_some_and(|m| m.contains("@Override"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_whole_project_kept_as_a_fixture_is_test_data() {
+        // junit5 compiles the trees under
+        // `platform-tooling-support-tests/projects/` to check its own
+        // tooling can build them; one is named
+        // `OtherwiseNotReferencedClass.java`. They carry no source-set
+        // layout, so the name check saw `projects` and said production.
+        let p = "junit5/platform-tooling-support-tests/projects/jar-describe-module/src/Foo.java";
+        assert!(super::test_path(p));
+        // Both halves are load-bearing: a `-tests` module alone covers
+        // 605 gold files against 9 orphans, so the `projects` directory
+        // is what keeps 596 production modules in.
+        assert!(!super::test_path(
+            "junit5/platform-tooling-support-tests/src/main/java/A.java"
+        ));
+        assert!(!super::test_path(
+            "netty/common/projects/src/main/java/B.java"
+        ));
+    }
 }
