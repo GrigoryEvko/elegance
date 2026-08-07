@@ -175,7 +175,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     if !names_a_load(node, src) {
         return Vec::new();
     }
-    let Some(target) = string_content(string, src) else {
+    let Some(target) = load_target(string, src) else {
         return Vec::new();
     };
     vec![super::ImportInfo {
@@ -288,12 +288,30 @@ fn first_string<'t>(call: Node<'t>) -> Option<Node<'t>> {
         .find(|c| c.kind() == "string")
 }
 
-fn string_content<'a>(string: Node, src: &'a [u8]) -> Option<&'a str> {
+/// The path a load's string names, as far as it can be read.
+///
+/// `require "roda/plugins/#{name}"` assembles its name at run time. The
+/// name cannot be read from the source — but the DIRECTORY can, and the
+/// trailing separator is what says so, exactly as a Lua `..` prefix
+/// does. Six such prefixes hold 417 of gold Ruby's 490 orphans.
+///
+/// Two shapes leave nothing to read, and taking the first literal run
+/// regardless is what made them wrong. An interpolation with no literal
+/// before it puts the very ROOT of the path at run time — sinatra's
+/// `require "#{engine}"` and sequel's `"#{"#{subdir}/" if subdir}#{f}"`
+/// — and reading past it reported a dependency literally called
+/// `/schema`. And a literal AFTER the interpolation names a file the
+/// prefix directory does not hold: rubocop's
+/// `require "rubocop/#{feature}/version"` means `rubocop/*/version`,
+/// not the 44 modules of `lib/rubocop` itself.
+fn load_target<'a>(string: Node, src: &'a [u8]) -> Option<&'a str> {
     let mut cursor = string.walk();
-    let content = string
-        .named_children(&mut cursor)
-        .find(|c| c.kind() == "string_content")?;
-    content.utf8_text(src).ok()
+    let mut parts = string.named_children(&mut cursor);
+    let head = parts.next().filter(|p| p.kind() == "string_content")?;
+    parts
+        .all(|p| p.kind() == "interpolation")
+        .then(|| head.utf8_text(src).ok())
+        .flatten()
 }
 
 /// `raise` is the ordinary error path and is not a panic; `exit!` and
@@ -624,5 +642,31 @@ mod tests {
     fn a_second_interpolation_leaves_no_path_to_read() {
         // `"#{__dir__}/#{cop_path}"` names a file chosen at run time.
         assert!(imports_of("register_cop :X, \"#{__dir__}/#{dept}/x\"\n").is_empty());
+    }
+
+    #[test]
+    fn a_require_assembled_at_run_time_still_names_its_directory() {
+        // roda's `plugin` method, rodauth's feature loader and four of
+        // sequel's -- six lines holding 417 of gold Ruby's 490 orphans.
+        // The trailing separator is the whole signal, and the two
+        // shapes that carry none were being read anyway: `"#{engine}"`
+        // puts the ROOT of the path at run time, and rubocop's
+        // `"rubocop/#{feature}/version"` names `rubocop/*/version`
+        // rather than anything `lib/rubocop` itself holds.
+        let got = imports_of(concat!(
+            "require \"roda/plugins/#{name}\"\n",
+            "require_relative \"connection_pool/#{pc}\"\n",
+            "require \"#{adapter}/schema\"\n",
+            "require \"rubocop/#{feature}/version\"\n",
+            "require \"sequel/adapters/mock\"\n",
+        ));
+        assert_eq!(
+            got,
+            [
+                ("roda/plugins/".to_string(), Reach::Anywhere),
+                ("connection_pool/".to_string(), Reach::Project),
+                ("sequel/adapters/mock".to_string(), Reach::Anywhere),
+            ]
+        );
     }
 }
