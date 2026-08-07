@@ -896,15 +896,30 @@ impl Index {
     /// A web path with the extension left off, as every specifier in
     /// these languages leaves it: the file itself, then each extension,
     /// then the directory's index.
+    ///
+    /// The extension is APPENDED, not substituted. `with_extension`
+    /// replaces whatever follows the last dot, so
+    /// `./authentication.contribution` asked for `authentication.ts` --
+    /// a file nobody has -- and vscode's 86 contribution modules read as
+    /// depended on by nothing while being imported by name. At least 500
+    /// specifiers across the corpus carry a dotted stem: `.gen` 353,
+    /// `.test` 54, `.contribution` 14, and `.constants`, `.util`,
+    /// `.types` behind them.
+    ///
+    /// The `.js`-to-`.ts` rewrite nodenext requires is a different
+    /// question and genuinely does substitute; it lives in `web`.
     fn web_file(&self, base: &Path) -> Class {
         const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
         if let Some(&i) = self.paths.get(base) {
             return Class::Internal(i);
         }
         for ext in EXTS {
+            let mut named = base.as_os_str().to_os_string();
+            named.push(".");
+            named.push(ext);
             if let Some(&i) = self
                 .paths
-                .get(&base.with_extension(ext))
+                .get(Path::new(&named))
                 .or_else(|| self.paths.get(&base.join("index").with_extension(ext)))
             {
                 return Class::Internal(i);

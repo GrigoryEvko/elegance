@@ -853,7 +853,13 @@ fn glob_loaded(path: &Path) -> bool {
     let mut segments = name.split('.');
     segments.next();
     segments.next_back();
-    segments.any(|s| matches!(s, "stories" | "figma"))
+    // `config` joins them for the same reason: zod's package.json lists
+    // vitest, tsdown and rolldown in devDependencies AND names each in
+    // `scripts`, and every one of those tools reads its own config by
+    // name. Zero-fan-in gated rather than a sink, because 55 of the
+    // corpus's 132 config files DO have importers — trpc's per-package
+    // `vitest.config.ts` files import a shared base.
+    segments.any(|s| matches!(s, "stories" | "figma" | "config"))
 }
 
 /// The judged population, and the share of it that nothing transitively
