@@ -589,12 +589,39 @@ impl Index {
         // The include directory is unknowable, so match the whole
         // specifier against file paths instead of just its last segment.
         let segs = segments(path);
-        let least = if angled { 2 } else { 1 };
-        match self.path_suffix(&segs).filter(|_| segs.len() >= least) {
+        let hit = match (angled, segs.len()) {
+            (_, 0) => None,
+            (true, 1) => self.include_root_suffix(&segs),
+            _ => self.path_suffix(&segs),
+        };
+        match hit {
             Some(i) => Class::Internal(i),
             None if angled => Class::External,
             None => Class::Unresolved,
         }
+    }
+
+    /// `path_suffix`, narrowed to a file sitting DIRECTLY in a directory
+    /// named `include` — C's convention for "this is on the -I path",
+    /// and the only evidence in the tree that a bare `<name.h>` could
+    /// mean a file of this project. 84 musl sources write
+    /// `#include <stdio.h>` and musl/include/stdio.h is right there.
+    ///
+    /// Across c, cpp and cuda the anchor adds 732 edges over 52 targets
+    /// and every one is right: musl's 48 public headers and the umbrella
+    /// headers of ctre, flux and immer. Dropping the anchor and admitting
+    /// any one-component match makes 131 of them wrong -- transformer-
+    /// engine's `<cuda_runtime.h>`, `<math.h>` and `<cudnn.h>` bind to
+    /// its own util/ headers, llm.c's `<unistd.h>` to a Windows shim.
+    fn include_root_suffix(&self, segs: &[&str]) -> Option<usize> {
+        let mut hits = self
+            .basenames
+            .get(*segs.last()?)?
+            .iter()
+            .filter(|(c, _)| ends_with(c, segs));
+        let (comps, i) = hits.next()?;
+        (hits.next().is_none() && comps.len() >= 2 && &*comps[comps.len() - 2] == "include")
+            .then_some(*i)
     }
 
     /// `alias Plug.Conn` names a module, and a module's file is its

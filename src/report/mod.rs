@@ -618,13 +618,20 @@ impl Agg {
 
     /// A file too garbled to measure still exists as an import target, so
     /// it keeps its place in the graph — only its own facts are dropped.
+    ///
+    /// Its IMPORTS are not among them. A parse breaks in the body, never
+    /// in the header block that precedes it: 5280 of the 5365 `#include`
+    /// lines inside low-confidence C-family files extract correctly and
+    /// none extracts spuriously. Dropping them cost 165 orphans — curl
+    /// 16 of 16, ctre 14 of 14, fmt 9 of 9, cutlass 89 of 171 — and 8 of
+    /// fmt's 9 were headers its own format.h includes.
     fn count_unmeasurable(&mut self, facts: &FileFacts) {
         self.graph.fill(|g| {
             g.push(crate::graph::GraphFacts {
                 path: facts.path.clone(),
                 lang: facts.lang,
                 is_test: facts.is_test_file,
-                imports: Vec::new(),
+                imports: facts.imports.clone(),
                 exports: Vec::new(),
                 mass: 0,
                 surface_cost: 0,
