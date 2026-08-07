@@ -526,8 +526,8 @@
 "public docs" = { rate = 0.23 }
 
 [cpp]
-"cognitive" = { hi = 30.0 }
-"cyclomatic" = { hi = 21.0 }
+"cognitive" = { hi = 32.0 }
+"cyclomatic" = { hi = 22.0 }
 "depth" = { hi = 4.0 }
 "length" = { hi = 115.0 }
 "params" = { hi = 5.0 }
@@ -536,7 +536,7 @@
 "live span" = { hi = 90.0 }
 "magic numbers" = { hi = 10.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.64 }
+"comment ratio" = { lo = 0.00, hi = 0.62 }
 "casts" = { hi = 4.0 }
 "confusable" = { hi = 2.0 }
 "terse name" = { hi = 16.0 }
@@ -544,11 +544,11 @@
 "wildcard match" = { hi = 1.0 }
 "loop depth" = { hi = 2.0 }
 "magic strings" = { hi = 1.0 }
-"module doc" = { hi = 427.0 }
+"module doc" = { hi = 397.0 }
 "type doc" = { hi = 235.0 }
 "fn doc" = { hi = 147.0 }
 "field doc" = { hi = 136.0 }
-"inline doc" = { hi = 170.0 }
+"inline doc" = { hi = 160.0 }
 "asserts" = { rate = 0.16 }
 "public docs" = { rate = 0.07 }
 

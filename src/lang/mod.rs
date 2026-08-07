@@ -262,7 +262,11 @@ const DESCS: [Desc; LANGS.len()] = [
         lang: Lang::Cpp,
         name: "cpp",
         corpus: "cpp",
-        exts: &["cpp", "cc", "cxx", "hpp", "hh", "hxx"],
+        // `.ipp` and `.inl` hold template definitions a header
+        // includes at its foot. Not scanning them left all 100 of
+        // immer's unresolved includes naming an `.ipp` that is right
+        // there on disk, and 53 of cutlass's naming an `.inl`.
+        exts: &["cpp", "cc", "cxx", "hpp", "hh", "hxx", "ipp", "inl"],
         make: || cpp::pack(cpp::Dialect::Cpp),
     },
     // CUDA is C++ plus a launch operator, and the pack says so; the
