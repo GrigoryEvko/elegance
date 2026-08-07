@@ -194,6 +194,16 @@ fn requires(call: Node, src: &[u8]) -> bool {
 /// is the first string argument in every spelling — plus the
 /// concatenation that builds a module name wherever it is written.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    if node.kind() == "table_constructor" {
+        return listed_names(node, src)
+            .into_iter()
+            .map(|name| super::ImportInfo {
+                target: name.into(),
+                names: Vec::new(),
+                reach: super::Reach::Mention,
+            })
+            .collect();
+    }
     let built = node.kind() == "binary_expression";
     let target = match built {
         true => concatenated(node, src),
@@ -280,6 +290,29 @@ fn first_string(call: Node, src: &[u8]) -> Option<String> {
         .named_children(&mut cursor)
         .find(|c| c.kind() == "string")?;
     Some(quoted(arg, src).to_string())
+}
+
+/// The bare names a table LISTS, where it lists at least two.
+///
+/// `kong/db/migrations/core/init.lua` returns
+/// `{"000_base", "003_100_to_110", ...}` and a migration runner
+/// requires each beside it; every one of kong's 24 core migrations and
+/// the 39 its plugins ship read as depended on by nothing. A registry
+/// is a LIST, and asking for two is what separates one from a lone
+/// string that happens to share a sibling's name.
+fn listed_names(table: Node, src: &[u8]) -> Vec<String> {
+    let mut cursor = table.walk();
+    let names: Vec<String> = table
+        .named_children(&mut cursor)
+        .filter(|f| f.kind() == "field")
+        .filter_map(|f| f.named_child(0).filter(|v| v.kind() == "string"))
+        .map(|v| quoted(v, src).to_string())
+        .filter(|t| !t.is_empty() && !t.contains(['/', '.', ' ']))
+        .collect();
+    match names.len() >= 2 {
+        true => names,
+        false => Vec::new(),
+    }
 }
 
 /// The module name a concatenation builds, with `*` where the source
@@ -421,6 +454,13 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
             Some("..") if concatenated(node, src).is_some() => Sem::Import,
             _ => Sem::None,
         },
+        // A table LISTING names is how Lua writes a registry, and the
+        // names are not otherwise said anywhere. Promoting the table
+        // rather than its strings leaves every literal to the checks
+        // that read literals.
+        Sem::None if node.kind() == "table_constructor" && !listed_names(node, src).is_empty() => {
+            Sem::Import
+        }
         // Lua's import is a CALL, and the core asks about imports at
         // `Sem::Import` nodes — so until this arm existed the pack's
         // `imports` hook was written, tested and never once asked, and

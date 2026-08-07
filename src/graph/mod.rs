@@ -971,6 +971,12 @@ impl Index {
     /// whose declaration the language lets you split across files.
     fn named_modules(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Vec<usize> {
         match from.lang {
+            // A name a Lua table LISTS is a registry entry, and the one
+            // place a bare name written as data can mean anything is
+            // beside the file listing it.
+            Lang::Lua if imp.reach == crate::lang::Reach::Mention && !imp.target.contains('*') => {
+                self.beside(from, &imp.target).into_iter().collect()
+            }
             Lang::Lua | Lang::Ruby => self.glob_modules(from, imp),
             Lang::C | Lang::Cpp | Lang::Cuda => self.nearest_includes(from, &imp.target),
             _ if imp.reach == crate::lang::Reach::Mention => self
@@ -980,6 +986,16 @@ impl Index {
                 .unwrap_or_default(),
             _ => Vec::new(),
         }
+    }
+
+    /// The module of this name sitting beside `from`, if one does.
+    fn beside(&self, from: &GraphFacts, name: &str) -> Option<usize> {
+        let dir = from.path.parent().unwrap_or(Path::new(""));
+        let file = dir.join(name);
+        self.paths
+            .get(&file.with_extension("lua"))
+            .or_else(|| self.paths.get(&file.join("init.lua")))
+            .copied()
     }
 
     /// Every module a specifier with a run-time component names.
@@ -1828,6 +1844,40 @@ mod tests {
         // keeps counting modules from outside rather than every type
         // name the compiler found somewhere else.
         assert_eq!((res.internal, res.external, res.unresolved), (0, 1, 0));
+    }
+
+    #[test]
+    fn a_table_that_lists_names_is_a_registry_of_what_sits_beside_it() {
+        // `kong/db/migrations/core/init.lua` returns
+        // `{"000_base", "003_100_to_110", ...}` and a migration runner
+        // requires each beside it. 91 of Lua's 223 remaining orphans
+        // were named that way and no other.
+        use crate::facts::ImportFact;
+        use crate::lang::Reach;
+        let imp = |target: &str| ImportFact {
+            target: target.into(),
+            names: Vec::new(),
+            reach: Reach::Mention,
+        };
+        let mut index = file(Lang::Lua, "kong/db/migrations/core/init.lua", &[]);
+        index.imports = vec![imp("000_base"), imp("003_100_to_110"), imp("nope")];
+        let files = [
+            index,
+            file(Lang::Lua, "kong/db/migrations/core/000_base.lua", &[]),
+            file(Lang::Lua, "kong/db/migrations/core/003_100_to_110.lua", &[]),
+            // Same name, a different directory: a registry lists what is
+            // beside it, and reaching further would let any word in a
+            // table claim a module somewhere else in the tree.
+            file(Lang::Lua, "kong/plugins/acl/migrations/000_base.lua", &[]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[0][0], Some(idx("core/000_base.lua")));
+        assert_eq!(targets[0][1], Some(idx("core/003_100_to_110.lua")));
+        assert!(!targets[0].contains(&Some(idx("acl/migrations/000_base.lua"))));
+        // A registry states no dependency: it writes names, and whether
+        // each is a module is settled by whether one is there.
+        assert_eq!((res.internal, res.external, res.unresolved), (0, 0, 0));
     }
 
     #[test]
