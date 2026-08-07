@@ -43,6 +43,24 @@ pub struct Resolution {
 }
 
 impl Resolution {
+    /// Record one classified import, and hand back the module it names.
+    fn count(&mut self, class: Class) -> Option<usize> {
+        match class {
+            Class::Internal(j) => {
+                self.internal += 1;
+                Some(j)
+            }
+            Class::External => {
+                self.external += 1;
+                None
+            }
+            Class::Unresolved => {
+                self.unresolved += 1;
+                None
+            }
+        }
+    }
+
     /// Share of internal-looking imports that resolved.
     pub fn rate(&self) -> f64 {
         let looking = self.internal + self.unresolved;
@@ -61,40 +79,27 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
     let mut r = Resolution::default();
     let mut targets = Vec::with_capacity(files.len());
     for (i, f) in files.iter().enumerate() {
-        let mut row: Vec<Option<usize>> = f
-            .imports
-            .iter()
-            .map(|imp| match index.classify(i, f, imp) {
-                Class::Internal(j) => {
-                    r.internal += 1;
-                    Some(j)
-                }
-                Class::External => {
-                    r.external += 1;
-                    None
-                }
-                Class::Unresolved => {
-                    r.unresolved += 1;
-                    None
-                }
-            })
-            .collect();
-        // A Lua require assembled at run time still states the DIRECTORY
-        // it looks in, and every file under that directory is a
-        // candidate the source cannot narrow further. These ride PAST
-        // the per-import row -- every reader zips against `imports` and
-        // stops there -- so they add edges without disturbing the
-        // alignment or the resolution tally.
-        let extra: Vec<Option<usize>> = f
-            .imports
-            .iter()
-            .zip(&row)
-            .flat_map(|(imp, tgt)| {
-                let dirs = index.under_directory(f, imp);
-                dirs.into_iter().chain(index.submodules(*tgt, imp, f.lang))
-            })
-            .map(Some)
-            .collect();
+        let mut row: Vec<Option<usize>> = Vec::with_capacity(f.imports.len());
+        // A require assembled at run time still states the DIRECTORY it
+        // looks in, and every file under that directory is a candidate
+        // the source cannot narrow further. The first stands in the
+        // import's own row and the rest ride PAST it -- every reader
+        // zips against `imports` and stops there -- so they add edges
+        // without disturbing the alignment.
+        let mut extra: Vec<Option<usize>> = Vec::new();
+        for imp in &f.imports {
+            let mut dirs = index.under_directory(f, imp).into_iter();
+            // A prefix that names modules of this project is not a
+            // third-party dependency, whatever the rest of its name
+            // turns out to be at run time.
+            let class = dirs
+                .next()
+                .map_or_else(|| index.classify(i, f, imp), Class::Internal);
+            let target = r.count(class);
+            extra.extend(dirs.map(Some));
+            extra.extend(index.submodules(target, imp, f.lang).into_iter().map(Some));
+            row.push(target);
+        }
         row.extend(extra);
         targets.push(row);
     }
@@ -1589,32 +1594,44 @@ mod tests {
         };
         let mut plugins = file(Lang::Ruby, "roda/lib/roda/plugins.rb", &[]);
         plugins.imports = vec![imp("roda/plugins/", Reach::Anywhere)];
+        let mut rodauth = file(Lang::Ruby, "rodauth/lib/rodauth.rb", &[]);
+        rodauth.imports = vec![imp("rodauth/features/", Reach::Anywhere)];
         let mut jdbc = file(Lang::Ruby, "sequel/lib/sequel/adapters/jdbc.rb", &[]);
         jdbc.imports = vec![imp("jdbc/", Reach::Anywhere)];
         let mut pool = file(Lang::Ruby, "sequel/lib/sequel/connection_pool.rb", &[]);
         pool.imports = vec![imp("connection_pool/", Reach::Project)];
         let files = [
             plugins,
+            rodauth,
             jdbc,
             pool,
             file(Lang::Ruby, "roda/lib/roda/plugins/render.rb", &[]),
-            file(Lang::Ruby, "roda/lib/roda/plugins/caching/store.rb", &[]),
+            file(Lang::Ruby, "roda/lib/roda/plugins/assets/css.rb", &[]),
+            file(Lang::Ruby, "rodauth/lib/rodauth/features/login.rb", &[]),
             file(Lang::Ruby, "sequel/lib/sequel/adapters/jdbc/mysql.rb", &[]),
             file(
                 Lang::Ruby,
-                "sequel/lib/sequel/connection_pool/threaded.rb",
+                "sequel/lib/sequel/connection_pool/thread.rb",
                 &[],
             ),
         ];
-        let (_, targets) = super::resolve_imports(&files);
+        let (res, targets) = super::resolve_imports(&files);
         let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
         // Directly under the prefix, and only directly: a plugin that
         // brings a directory of its own keeps its own entry point.
-        assert_eq!(targets[0][1..], [Some(idx("plugins/render.rb"))]);
-        assert!(targets[1][1..].is_empty(), "jdbc/ names a gem, not lib/");
+        assert_eq!(targets[0], [Some(idx("plugins/render.rb"))]);
+        assert_eq!(targets[1], [Some(idx("features/login.rb"))]);
+        assert!(
+            !targets[2].contains(&Some(idx("jdbc/mysql.rb"))),
+            "jdbc/ names a gem, and sequel's own adapters are not under a lib/"
+        );
         // `require_relative` is not on the load path at all; it names a
         // directory beside the requiring file.
-        assert_eq!(targets[2][1..], [Some(idx("connection_pool/threaded.rb"))]);
+        assert_eq!(targets[3], [Some(idx("connection_pool/thread.rb"))]);
+        // And a prefix that names modules of this project is not a
+        // third-party dependency. `jdbc/` falls back to the ordinary
+        // matcher, which finds the requiring file itself.
+        assert_eq!((res.internal, res.external, res.unresolved), (4, 0, 0));
     }
 
     #[test]
