@@ -181,7 +181,10 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
         .iter()
         .map(|t| super::ImportInfo {
             target: super::java::type_path(t).into(),
-            names: Vec::new(),
+            // A selector list is already expanded one target per name,
+            // so the leaf of each names what that import binds. See
+            // `java::leaf`.
+            names: super::java::leaf(t).map(Into::into).into_iter().collect(),
             reach: super::Reach::Anywhere,
         })
         .collect()

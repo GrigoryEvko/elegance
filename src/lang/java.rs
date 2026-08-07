@@ -151,6 +151,15 @@ fn name_node(node: Node) -> Option<Node> {
     node.child_by_field_name("name")
 }
 
+/// The last dotted segment: the type an import names, which is the name
+/// it binds. A wildcard import binds nothing in particular.
+pub(super) fn leaf(target: &str) -> Option<&str> {
+    target
+        .rsplit('.')
+        .next()
+        .filter(|s| !s.is_empty() && *s != "*")
+}
+
 /// `import a.b.C` names a TYPE and its file is `a/b/C.java`, but a
 /// static import and a nested type name a MEMBER of that type, so the
 /// file is one segment shorter or more: `import static
@@ -173,7 +182,13 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     }
     vec![super::ImportInfo {
         target: target.into(),
-        names: Vec::new(),
+        // The leaf of a JVM import is BOTH the name the file binds and
+        // the name the target exports -- Java has no import aliasing --
+        // so the one field answers for the envy detector and for the
+        // surface question alike. Without it `fat_surfaces` reported
+        // exports_imported 0 for every Java and Scala module in gold,
+        // vacuously.
+        names: leaf(target).map(Into::into).into_iter().collect(),
         reach: super::Reach::Anywhere,
     }]
 }

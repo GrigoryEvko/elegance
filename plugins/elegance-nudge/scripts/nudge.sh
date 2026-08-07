@@ -70,6 +70,18 @@ runs() {
 
 # The comparison itself, as guard clauses: every reason to stay quiet is
 # one line, and the interesting case falls out of the bottom.
+# The two comments nearest the median that are themselves ordinary: at
+# least four words, and no more than three times the median, so the
+# example shown is one the file's own convention already supports. Long
+# ones are cut so a quoted sibling stays one line.
+siblings_near_median() {
+    local pat=$1 file=$2 med=$3
+    runs "$pat" < "$file" | awk -F'\t' -v m="$med" '
+        $1 >= 4 && $1 <= m * 3 { d = $1 - m; if (d < 0) d = -d; print d "\t" $2 }' \
+        | sort -n | head -2 | cut -f2 \
+        | awk '{ s = $0; if (length(s) > 68) s = substr(s, 1, 65) "..."; printf "%s\"%s\"", (NR>1 ? " / " : ""), s }'
+}
+
 verdict_on_length() {
     local pat=$1 file=$2 new=$3 wrote have count med sib
     [ -n "$pat" ] && [ -n "$new" ] || return 0
@@ -87,10 +99,7 @@ verdict_on_length() {
     # measured; the 20-word floor keeps short files from firing on a
     # one-line comment that happens to be double a tiny median.
     [ "$wrote" -ge 20 ] && [ "$wrote" -gt $((med * 2)) ] || return 0
-    sib=$(runs "$pat" < "$file" | awk -F'\t' -v m="$med" '
-        $1 >= 4 && $1 <= m * 3 { d = $1 - m; if (d < 0) d = -d; print d "\t" $2 }' \
-        | sort -n | head -2 | cut -f2 \
-        | awk '{ s = $0; if (length(s) > 68) s = substr(s, 1, 65) "..."; printf "%s\"%s\"", (NR>1 ? " / " : ""), s }')
+    sib=$(siblings_near_median "$pat" "$file" "$med")
     [ -n "$sib" ] || return 0
     printf 'new comment %sw, file median %sw · %s' "$wrote" "$med" "$sib"
 }
