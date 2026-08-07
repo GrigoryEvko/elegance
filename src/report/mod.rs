@@ -2300,6 +2300,19 @@ fn render_orphans(arch: &crate::graph::metrics::Architecture, out: &mut String) 
             arch.modules - arch.judged_modules,
         );
     }
+    if !arch.by_language.is_empty() {
+        let rows: Vec<String> = arch
+            .by_language
+            .iter()
+            .map(|(lang, orphans, judged)| {
+                format!(
+                    "{lang} {:.0}% ({orphans}/{judged})",
+                    100.0 * f64::from(*orphans) / f64::from((*judged).max(1))
+                )
+            })
+            .collect();
+        let _ = writeln!(out, "  orphans by language: {}", rows.join("  "));
+    }
     if arch.orphan_count == 0 {
         return;
     }

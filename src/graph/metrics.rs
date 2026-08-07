@@ -47,6 +47,12 @@ pub struct Architecture {
     /// total count and a capped sample.
     pub orphan_count: u32,
     pub orphans: Vec<String>,
+    /// Orphans and judged modules per language, worst rate first, for
+    /// trees holding more than one. A pooled figure over a polyglot
+    /// directory says nothing about any language in it: gold `zig/`
+    /// carries 190 Swift and 92 C files against 1138 Zig, and reads 23%
+    /// pooled where Zig alone reads 7%.
+    pub by_language: Vec<(&'static str, u32, u32)>,
     pub interfaces: Interfaces,
 }
 
@@ -132,6 +138,7 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
         load_bearing: load,
         orphan_count,
         orphans,
+        by_language: orphans_by_language(&files, &fan_in, &judged),
         interfaces,
     })
 }
@@ -757,6 +764,36 @@ fn find_orphans(files: &[&GraphFacts], fan_in: &[u32], judged: &[bool]) -> (u32,
     let count = orphans.len() as u32;
     orphans.truncate(ORPHAN_SHOW);
     (count, orphans)
+}
+
+/// Orphans and judged modules per language, worst rate first. Only
+/// reported for a tree holding more than one language, because for a
+/// single one it repeats the headline.
+fn orphans_by_language(
+    files: &[&GraphFacts],
+    fan_in: &[u32],
+    judged: &[bool],
+) -> Vec<(&'static str, u32, u32)> {
+    let mut tally: HashMap<&'static str, (u32, u32)> = HashMap::new();
+    for ((f, &reached), &judge) in files.iter().zip(fan_in).zip(judged) {
+        if !judge {
+            continue;
+        }
+        let row = tally.entry(f.lang.name()).or_default();
+        row.0 += u32::from(reached == 0 && !entryish(&f.path));
+        row.1 += 1;
+    }
+    if tally.len() < 2 {
+        return Vec::new();
+    }
+    let mut rows: Vec<(&'static str, u32, u32)> =
+        tally.into_iter().map(|(l, (o, n))| (l, o, n)).collect();
+    rows.sort_by(|a, b| {
+        (b.1 as u64 * a.2 as u64)
+            .cmp(&(a.1 as u64 * b.2 as u64))
+            .then_with(|| a.0.cmp(b.0))
+    });
+    rows
 }
 
 const UNSET: u32 = u32::MAX;

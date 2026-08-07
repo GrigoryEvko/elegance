@@ -133,6 +133,9 @@ struct ArchitectureOut {
     orphan_count: u32,
     /// Capped sample; orphan_count is the truth.
     orphans: Vec<String>,
+    /// Orphans and judged modules per language, worst rate first. Empty
+    /// for a single-language tree, where it would repeat the headline.
+    orphans_by_language: Vec<LangOrphans>,
     /// Median mass-per-surface-unit over exporting modules.
     interface_median_depth: u32,
     shallow_modules: Vec<ShallowModule>,
@@ -283,6 +286,15 @@ fn architecture_out(a: crate::graph::metrics::Architecture) -> ArchitectureOut {
             .collect(),
         orphan_count: a.orphan_count,
         orphans: a.orphans,
+        orphans_by_language: a
+            .by_language
+            .into_iter()
+            .map(|(lang, orphans, judged)| LangOrphans {
+                lang,
+                orphans,
+                judged,
+            })
+            .collect(),
         interface_median_depth: iface.median_depth,
         shallow_modules: iface
             .shallow
@@ -340,6 +352,13 @@ fn clone_section(agg: &mut Agg) -> (Clones, super::Duplication) {
 /// Per-metric distribution rows, in registry order, skipping metrics
 /// this run never measured.
 /// Near-duplicate pairs, with the overlap stated as a percentage.
+#[derive(Serialize)]
+struct LangOrphans {
+    lang: &'static str,
+    orphans: u32,
+    judged: u32,
+}
+
 fn near_out(agg: &mut Agg) -> NearOut {
     let near = crate::near::pairs(agg.prints.read(), usize::MAX);
     NearOut {
