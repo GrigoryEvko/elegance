@@ -734,7 +734,18 @@ impl Extractor<'_> {
             Sem::NumLit if self.is_magic(node) => {
                 self.facts.units[ctx.unit].magic_numbers += 1;
             }
-            Sem::Import => self.record_imports(node),
+            // A name in expression position can BE the import: Elixir's
+            // `Plug.Conn.send_resp` names the module and depends on it
+            // in one node, which the pack promotes from Ident. The
+            // vocabulary must still see the name, or a module referenced
+            // only that way reads as a dead export — gold Elixir counts
+            // 427 dead exports with this line and 744 without.
+            Sem::Import => {
+                self.record_imports(node);
+                if self.pack.table_sem(node) == Sem::Ident {
+                    self.record_ident(node, ctx.unit);
+                }
+            }
             Sem::TypeDef => {
                 self.record_type_export(node);
                 self.record_interfaces(node);

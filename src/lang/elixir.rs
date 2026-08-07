@@ -171,26 +171,109 @@ fn starts_a_word(chars: &[char], i: usize) -> bool {
         || (prev.is_uppercase() && chars.get(i + 1).is_some_and(|n| n.is_lowercase()))
 }
 
-/// `import`, `alias`, `require` and `use` all pull a module in.
+/// `import`, `alias`, `require` and `use` pull a module in, and so does
+/// writing its name: the `alias` NODE promoted by `refine` arrives here
+/// too.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    // A module named in expression position — `Plug.Conn.send_resp(...)`
+    // — is the reference itself, with no statement around it.
+    if node.kind() == "alias" {
+        return node.utf8_text(src).map(module).into_iter().collect();
+    }
     if !matches!(
         target_text(node, src),
         Some("import" | "alias" | "require" | "use")
     ) {
         return Vec::new();
     }
-    let Some(target) = args_of(node)
-        .and_then(|a| a.named_child(0))
-        .filter(|c| c.kind() == "alias")
-        .and_then(|c| c.utf8_text(src).ok())
-    else {
+    let Some(first) = args_of(node).and_then(|a| a.named_child(0)) else {
         return Vec::new();
     };
-    vec![super::ImportInfo {
+    match first.kind() {
+        "alias" => first.utf8_text(src).map(module).into_iter().collect(),
+        // `alias Foo.{Bar, Baz}` binds two modules, written as a dot
+        // onto a tuple. Reading the argument as one alias found none of
+        // it: gold holds 225 such statements naming 597 modules, so a
+        // filter on the alias kind dropped every one to nothing.
+        "dot" => braces(first, src),
+        _ => Vec::new(),
+    }
+}
+
+fn module(target: &str) -> super::ImportInfo {
+    super::ImportInfo {
         target: target.into(),
         names: Vec::new(),
         reach: super::Reach::Anywhere,
-    }]
+    }
+}
+
+/// The members of `alias Foo.{Bar, Baz}`, each spelled out in full.
+fn braces(dot: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    let Some(base) = dot
+        .named_child(0)
+        .filter(|b| b.kind() == "alias")
+        .and_then(|b| b.utf8_text(src).ok())
+    else {
+        return Vec::new();
+    };
+    let Some(tuple) = dot.named_child(1).filter(|t| t.kind() == "tuple") else {
+        return Vec::new();
+    };
+    let mut cursor = tuple.walk();
+    tuple
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() == "alias")
+        .filter_map(|c| c.utf8_text(src).ok())
+        .map(|leaf| module(&format!("{base}.{leaf}")))
+        .collect()
+}
+
+/// Whether this `alias` node is a module reference rather than a name
+/// some statement around it already declares.
+///
+/// Elixir needs no import to depend on a module: `Plug.Conn.send_resp`
+/// spelled out in full is an edge, and gold expresses most of its
+/// dependency that way — 9308 dotted `alias` nodes stand in expression
+/// position across the five repos against 2458 alias/import/require/use
+/// statements, and 6686 of them name a module the corpus defines.
+///
+/// A single segment is excluded. It is how the language spells its OWN
+/// modules — `Mix`, `Config`, `Repo`, `Inspect` — and a one-component
+/// suffix match lands on whatever file bears that name: of 165 distinct
+/// single-segment names that resolved, 9 pointed at a file declaring no
+/// such module, and those 9 carried 537 of the occurrences. Requiring a
+/// dot leaves 620 distinct names of which 619 land on a file that
+/// declares them.
+fn names_a_module(node: Node, src: &[u8]) -> bool {
+    node.utf8_text(src).is_ok_and(|t| t.contains('.')) && !declared_here(node, src)
+}
+
+fn parent_of<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
+    node.parent().filter(|p| p.kind() == kind)
+}
+
+/// The name an import statement or a `defmodule` writes down, which
+/// `imports` already reads from the statement: `alias A.B`, `use Plug`,
+/// the base and the members of `alias Foo.{Bar, Baz}`, and the module's
+/// own name in `defmodule Foo.Bar do`.
+fn declared_here(node: Node, src: &[u8]) -> bool {
+    let head = parent_of(node, "tuple").unwrap_or(node);
+    let head = parent_of(head, "dot").unwrap_or(head);
+    let Some(args) = parent_of(head, "arguments") else {
+        return false;
+    };
+    if args.named_child(0).map(|c| c.id()) != Some(head.id()) {
+        return false;
+    }
+    args.parent().is_some_and(|call| {
+        matches!(
+            target_text(call, src),
+            // `defimpl Draft, for: Blueprint` is absent on purpose: it
+            // names the protocol and the struct, both dependencies.
+            Some("import" | "alias" | "require" | "use" | "defmodule" | "defprotocol")
+        )
+    })
 }
 
 /// Parameters are the patterns in the head, and a pattern is not always
@@ -456,12 +539,72 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
             Some("and" | "or" | "&&" | "||") => Sem::BoolOp,
             _ => Sem::None,
         },
+        // A module name written out is the dependency; there is no
+        // import statement to read instead.
+        Sem::Ident if node.kind() == "alias" && names_a_module(node, src) => Sem::Import,
         _ => sem,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::lang::Lang;
+
+    fn targets(src: &str) -> Vec<String> {
+        let pack = Lang::Elixir.pack();
+        let mut parser = pack.make_parser();
+        let f = crate::facts::extract(pack, &mut parser, std::path::Path::new("a.ex"), src);
+        f.imports.iter().map(|i| i.target.to_string()).collect()
+    }
+
+    #[test]
+    fn a_braces_alias_binds_every_module_it_lists() {
+        // gold holds 225 of these naming 597 modules; reading the
+        // argument as one alias node found none of them, because the
+        // grammar writes the form as a dot onto a tuple.
+        assert_eq!(
+            targets("defmodule X do\n  alias Oban.{Config, Job, Notifier}\nend\n"),
+            ["Oban.Config", "Oban.Job", "Oban.Notifier"]
+        );
+    }
+
+    #[test]
+    fn a_module_written_out_is_a_dependency_with_no_statement() {
+        // Every form the corpus uses: a qualified call, a struct, an
+        // argument, a raise. The module's own name and the target of an
+        // alias are excluded — the statement path already reads those.
+        let src = "defmodule App.Worker do\n\
+                   \x20 alias App.Repo\n\
+                   \x20 def run(c) do\n\
+                   \x20   Plug.Conn.send_resp(c, 200, \"\")\n\
+                   \x20   %Absinthe.Blueprint.Input.Field{}\n\
+                   \x20   Repo.insert(Ecto.Changeset.change(c))\n\
+                   \x20 end\n\
+                   end\n";
+        let mut got = targets(src);
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                "Absinthe.Blueprint.Input.Field",
+                "App.Repo",
+                "Ecto.Changeset",
+                "Plug.Conn",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_single_segment_name_is_not_read_as_a_dependency() {
+        // `Mix`, `Config`, `Repo` are the language's own, and a
+        // one-component suffix match lands on whatever file bears the
+        // name: gold resolved 165 such names of which 9 pointed at a
+        // file declaring no such module, carrying 537 occurrences.
+        assert!(
+            targets("defmodule X do\n  def f, do: Enum.map(Mix.env(), & &1)\nend\n").is_empty()
+        );
+    }
+
     #[test]
     fn a_module_segment_underscores_the_way_elixir_does() {
         // Checked against `Macro.underscore/1`. The acronym cases are
