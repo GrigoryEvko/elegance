@@ -61,7 +61,7 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
     let mut r = Resolution::default();
     let mut targets = Vec::with_capacity(files.len());
     for (i, f) in files.iter().enumerate() {
-        let row = f
+        let mut row: Vec<Option<usize>> = f
             .imports
             .iter()
             .map(|imp| match index.classify(i, f, imp) {
@@ -79,6 +79,19 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
                 }
             })
             .collect();
+        // A Lua require assembled at run time still states the DIRECTORY
+        // it looks in, and every file under that directory is a
+        // candidate the source cannot narrow further. These ride PAST
+        // the per-import row -- every reader zips against `imports` and
+        // stops there -- so they add edges without disturbing the
+        // alignment or the resolution tally.
+        let extra: Vec<Option<usize>> = f
+            .imports
+            .iter()
+            .flat_map(|imp| index.under_directory(f.lang, &imp.target))
+            .map(Some)
+            .collect();
+        row.extend(extra);
         targets.push(row);
     }
     (r, targets)
@@ -781,6 +794,47 @@ impl Index {
             .filter(|(c, _)| ends_with(c, segs))
             .min_by_key(|(c, _)| c.len())
             .map(|(_, i)| *i)
+    }
+
+    /// Every module directly under the directory a prefix names.
+    ///
+    /// `kong/db/schema/plugin_loader.lua:16` writes
+    /// `require("kong.plugins." .. plugin .. ".schema")`, and the name
+    /// it builds cannot be read from the source -- but the directory
+    /// can. 362 of gold Lua's 550 orphans sit under one of 40 such
+    /// prefixes, and of every completion that resolved at all, 175 of
+    /// 175 landed DIRECTLY under its prefix directory and none
+    /// elsewhere. Only real files are ever named, so unlike completing
+    /// the literal this manufactures no external dependency.
+    fn under_directory(&self, lang: Lang, target: &str) -> Vec<usize> {
+        if lang != Lang::Lua || !target.ends_with(['.', '/']) {
+            return Vec::new();
+        }
+        let segs: Vec<&str> = target
+            .split(component_separators(lang))
+            .filter(|s| !s.is_empty())
+            .collect();
+        let Some(last) = segs.last() else {
+            return Vec::new();
+        };
+        let Some(dirs) = self.dirs.get(*last) else {
+            return Vec::new();
+        };
+        let roots: Vec<&Vec<Box<str>>> = dirs
+            .iter()
+            .filter(|(c, _)| ends_with(c, &segs))
+            .map(|(c, _)| c)
+            .collect();
+        self.file_comps
+            .iter()
+            .enumerate()
+            .filter(|(_, comps)| {
+                roots
+                    .iter()
+                    .any(|r| comps.len() == r.len() + 1 && comps.starts_with(r))
+            })
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// The one file whose path ends with these segments. `None` when

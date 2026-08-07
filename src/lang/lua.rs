@@ -253,10 +253,25 @@ fn callee_qualified<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
 fn first_string<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
     let args = call.child_by_field_name("arguments")?;
     let mut cursor = args.walk();
-    let s = args
+    let arg = args
         .named_children(&mut cursor)
-        .find(|c| c.kind() == "string")?;
-    Some(s.utf8_text(src).ok()?.trim_matches(['"', '\'']))
+        .find(|c| matches!(c.kind(), "string" | "binary_expression"))?;
+    match arg.kind() {
+        "string" => Some(quoted(arg, src)),
+        // `require("kong.plugins." .. name .. ".schema")` — the left
+        // operand is everything the source states about the target, and
+        // it names a DIRECTORY. The trailing separator marks it as one;
+        // a concatenation starting anywhere else states no path at all.
+        _ => {
+            let text = quoted(arg.child_by_field_name("left")?, src);
+            text.ends_with(['.', '/']).then_some(text)
+        }
+    }
+}
+
+/// A string literal's text, without its quotes.
+fn quoted<'a>(node: Node, src: &'a [u8]) -> &'a str {
+    node.utf8_text(src).unwrap_or("").trim_matches(['"', '\''])
 }
 
 /// Text compiled at run time, and the environment swapped underneath a
