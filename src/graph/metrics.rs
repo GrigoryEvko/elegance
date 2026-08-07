@@ -81,7 +81,7 @@ const ORPHAN_SHOW: usize = 8;
 
 /// Entry-point stems that legitimately have no importers.
 const ENTRY_STEMS: &[&str] = &[
-    "main", "lib", "index", "__init__", "__main__", "app", "cli", "build",
+    "main", "lib", "index", "__init__", "__main__", "app", "cli", "build", "Package",
 ];
 
 pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> {
@@ -593,6 +593,18 @@ fn fold_over_modules(
             depended.insert((target.lang as usize, dir));
         }
     }
+    // A module that HOLDS an entry file is itself the entry point. Go
+    // spreads one `package main` over as many files as it likes and a
+    // Swift executable target does the same, and none of them import
+    // each other: chi's `_examples/todos-resource/` is main.go plus
+    // todos.go and users.go, swift-nio's `Sources/NIOPerformanceTester/`
+    // is main.swift plus 23 more. 27 files in gold read as depended on
+    // by nothing because only the file literally named `main` was exempt.
+    let entries: HashSet<&Path> = files
+        .iter()
+        .filter(|f| folded(f) && entryish(&f.path))
+        .filter_map(|f| f.path.parent())
+        .collect();
     for (i, f) in files.iter().enumerate() {
         if !folded(f) {
             continue;
@@ -601,7 +613,7 @@ fn fold_over_modules(
         let module = match f.lang {
             Lang::Go => f.path.parent().is_some_and(holds),
             _ => f.path.ancestors().skip(1).any(holds),
-        };
+        } || f.path.parent().is_some_and(|d| entries.contains(d));
         fan_in[i] = u32::from(module);
         blasts[i] = u32::from(module);
     }
@@ -679,6 +691,13 @@ fn package_of(path: &Path) -> String {
     comps[below..].join("/")
 }
 
+/// A file whose stem declares it an entry point or an API surface.
+fn entryish(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| ENTRY_STEMS.contains(&s))
+}
+
 /// One flag per file: can this module be asked whether anything depends
 /// on it? A translation unit is a sink by construction, so its answer
 /// is settled before the code is read. See `Lang::is_sink`.
@@ -721,17 +740,11 @@ fn deletability(blasts: &[u32], judged: &[bool]) -> (u32, f64) {
 /// capped, sorted sample. `judged` excludes the files whose fan-in the
 /// language fixes at zero.
 fn find_orphans(files: &[&GraphFacts], fan_in: &[u32], judged: &[bool]) -> (u32, Vec<String>) {
-    let entryish = |f: &GraphFacts| {
-        f.path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .is_some_and(|s| ENTRY_STEMS.contains(&s))
-    };
     let mut orphans: Vec<String> = files
         .iter()
         .zip(fan_in)
         .zip(judged)
-        .filter(|((f, fi), j)| **j && **fi == 0 && !entryish(f))
+        .filter(|((f, fi), j)| **j && **fi == 0 && !entryish(&f.path))
         .map(|((f, _), _)| f.path.display().to_string())
         .collect();
     orphans.sort_unstable();

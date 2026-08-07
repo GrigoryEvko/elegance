@@ -508,9 +508,28 @@ impl Index {
         if !target.split('/').next().unwrap_or("").contains('.') {
             return Class::External;
         }
-        // The tail of the module path maps onto package directories;
-        // unmatched paths are dependencies.
         let segs: Vec<&str> = target.split('/').collect();
+        if let Class::Internal(i) = self.go_dir(&segs) {
+            return Class::Internal(i);
+        }
+        // A module at major version 2 or above carries `/vN` in its
+        // path, and that element names no directory on disk. 35 of chi's
+        // 52 self-imports are the bare `github.com/go-chi/chi/v5`, whose
+        // last segment is the version: all 35 read as an outside
+        // dependency and chi's five root files as depended on by nothing.
+        // Stripping is a SECOND attempt, never the first, because
+        // `_examples/versions/presenter/v2` is a real directory that the
+        // path as written already finds.
+        let bare: Vec<&str> = segs.iter().copied().filter(|s| !major_version(s)).collect();
+        if bare.len() < segs.len() {
+            return self.go_dir(&bare);
+        }
+        Class::External
+    }
+
+    /// The tail of a Go module path maps onto package directories;
+    /// unmatched paths are dependencies.
+    fn go_dir(&self, segs: &[&str]) -> Class {
         for take in (1..=segs.len().min(4)).rev() {
             let tail = &segs[segs.len() - take..];
             let Some(cands) = self.dirs.get(tail[take - 1]) else {
@@ -796,6 +815,15 @@ fn visible(cand: &[Box<str>], here: &[Box<str>]) -> bool {
     // `<lib>/<lib>.ml` and `<lib>/src/<lib>.ml` are both how a library
     // names its root module.
     dir == own || dir.iter().rev().take(2).any(|d| d == stem)
+}
+
+/// Go writes a major version into the module path from v2 on, so `v1`
+/// and `v0` are never spelled and a `v1` element is an ordinary
+/// directory — chi has three of them under `_examples/versions/`.
+fn major_version(seg: &str) -> bool {
+    seg.strip_prefix('v')
+        .and_then(|n| n.parse::<u32>().ok())
+        .is_some_and(|n| n >= 2)
 }
 
 fn ends_with(comps: &[Box<str>], segs: &[&str]) -> bool {
