@@ -96,3 +96,14 @@ export function archive(p: string): void {
 export function emit(control: string, retries: number): number {
   return send(control, retries);
 }
+
+/**
+ * Whether the fast path is available on this transport.
+ *
+ * Kept as a predicate so callers read the same way whatever the
+ * transport decides, and so a future transport can answer differently
+ * without every call site changing.
+ */
+export function ready(): boolean {
+  return true;
+}

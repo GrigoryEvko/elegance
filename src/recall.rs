@@ -287,6 +287,10 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     // is one bare literal, documented at length and overriding nothing.
     ("service.py", "ceremony", 1.0),
     ("worker.rs", "ceremony", 1.0),
+    // And once more in a third language, because the rule is about a
+    // SHAPE -- nullary, one bare literal, documented at length -- not
+    // about anything Rust or Python spells particularly.
+    ("handler.ts", "ceremony", 1.0),
     ("handler.ts", "doc param", 1.0),
     ("handler.ts", "shelled out", 1.0),
     ("widget.js", "shelled out", 1.0),

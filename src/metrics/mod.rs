@@ -2333,6 +2333,43 @@ mod tests {
         );
     }
 
+    /// The second restraint family: a declaration whose LITERAL is the
+    /// point, and a file whose stubs are its own scaffolding.
+    #[test]
+    fn ceremony_spares_a_constant_and_a_tests_scaffolding() {
+        use crate::lang::Lang;
+        const DOC: &str = "/// Whether the fast path is available.\n///\n/// Three lines.\n";
+
+        // dune's shape, and a real gold hit: a constant whose comment
+        // explains WHEN TO CHANGE IT. The value is a literal because a
+        // version is a literal, and sixteen lines of it are sixteen
+        // lines of policy rather than ceremony over a stub.
+        assert_eq!(
+            ceremony_in(
+                Lang::Rust,
+                "a.rs",
+                &format!(
+                    "{}pub const VERSION: &str = \"v1\";\n",
+                    "/// Bump on any wire-format change.\n".repeat(16)
+                ),
+            ),
+            0,
+            "a constant is its value, however long the reason",
+        );
+
+        // A test file's stubs are the test's own scaffolding, and every
+        // metric here reads a test body by different rules.
+        assert_eq!(
+            ceremony_in(
+                Lang::Rust,
+                "crate/tests/a.rs",
+                &format!("{DOC}pub fn ready() -> bool {{ true }}\n")
+            ),
+            0,
+            "a documented stub in a test file is scaffolding",
+        );
+    }
+
     #[test]
     fn ceremony_needs_the_documentation_and_spares_the_override() {
         use crate::lang::Lang;
