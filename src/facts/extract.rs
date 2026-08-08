@@ -3460,6 +3460,15 @@ pub(crate) fn one_shot_dir(norm: &str) -> bool {
     // `zio-examples`, `rayon-demo` and `cuda-samples` are the same thing
     // as `examples/` spelled the way a build tool names a module. The
     // file's own name is never tested, or `parse-demo.rs` would qualify.
+    //
+    // `_` joins `-` as the separator, because a leading underscore is the
+    // Go toolchain's own way of saying "not part of the build" and toml
+    // keeps `_example/` and chi `_examples/` exactly so. Audited every
+    // directory component in all 22 gold corpora that the underscore
+    // spelling newly admits and the hyphen one does not: there are
+    // exactly six — `_example`, `_examples`, `build_tools`, `dune_bench`,
+    // `memo_bench` and `44_multi_gemm_ir_and_codegen` — and all six are
+    // demos, benchmarks or build tooling.
     let lower = norm.to_ascii_lowercase();
     let Some((dirs, _)) = lower.rsplit_once('/') else {
         return false;
@@ -3472,10 +3481,18 @@ pub(crate) fn one_shot_dir(norm: &str) -> bool {
     // Data`, `Preview Content`, `Concurrency Primitives`, `System
     // Calls`, `Command Palette`, `deep purple` and the rest -- and the
     // watchOS family is the only match. 4 orphans.
+    // An UNDERSCORE joins them: the Go toolchain's own way of saying a
+    // directory is not part of the build is a leading `_`, and gold
+    // writes `_example`, `_examples`, `build_tools`, `dune_bench` and
+    // `memo_bench`. All six such names are demos, benchmarks or build
+    // tooling. 6 orphans.
     dirs.split(['/', ' ']).any(|seg| {
-        ONE_SHOT
-            .iter()
-            .any(|d| seg == *d || seg.strip_suffix(d).is_some_and(|head| head.ends_with('-')))
+        ONE_SHOT.iter().any(|d| {
+            seg == *d
+                || seg
+                    .strip_suffix(d)
+                    .is_some_and(|head| head.ends_with(['-', '_']))
+        })
     })
 }
 
@@ -4133,6 +4150,25 @@ fn mix(h: u64, x: u64) -> u64 {
 mod tests {
     use super::*;
     use crate::lang::Lang;
+
+    #[test]
+    fn an_underscore_joins_a_hyphen_as_the_one_shot_separator() {
+        // The Go toolchain's own way of saying "not part of the build".
+        assert!(one_shot_dir("/toml/_example/example.go"));
+        assert!(one_shot_dir("/chi/_examples/todos/main.go"));
+        // Build tooling and benchmark harnesses spelled the same way.
+        assert!(one_shot_dir(
+            "/transformer-engine/build_tools/wheel_utils/build_wheels.sh"
+        ));
+        assert!(one_shot_dir("/dune/bench/dune_bench/main.ml"));
+        // The hyphen form still answers, and the file's own name never does.
+        assert!(one_shot_dir("/zio/zio-examples/src/Main.scala"));
+        assert!(!one_shot_dir("/src/parse_demo.rs"));
+        // A word merely ENDING in a one-shot name is not one: the
+        // separator is what says the name was suffixed onto a module.
+        assert!(!one_shot_dir("/netty/common/src/rebuild/Thing.java"));
+        assert!(one_shot_dir("/kong/tools/module.lua"));
+    }
 
     #[test]
     fn a_debt_marker_leads_its_note_rather_than_appearing_in_one() {
