@@ -2,12 +2,12 @@
 //!
 //! Every other mode judges code that already exists. This one is read
 //! BEFORE writing: an agent or a new contributor who knows the budgets
-//! in force and where this codebase actually sits inside them does not
-//! produce the violations in the first place. Prevention costs one
-//! prompt; rejection costs a round trip.
+//! in force, and where this codebase sits inside them, does not produce
+//! the violations in the first place. Prevention costs one prompt.
+//! Rejection costs a round trip.
 //!
-//! It must fit in a prompt, so it states positions and budgets and
-//! nothing else — no offender lists, no architecture, no prose.
+//! It must fit in a prompt, so it states positions and budgets only:
+//! no offender lists, no architecture, no prose.
 
 use std::error::Error;
 use std::fmt::Write;
@@ -46,10 +46,10 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
         crate::report::Wants::NONE,
     );
     // Percentiles must be per language or the table lies: a repository's
-    // Python p90 says nothing about how to write its Rust. One scan per
-    // language present — this mode runs once, not per commit.
-    // One dialect decision per file — `of` reads C-family files to
-    // decide, so deciding inside a per-language filter re-read them
+    // Python p90 says nothing about how to write its Rust. That costs one
+    // scan per language present, and this mode runs once, not per commit.
+    // One dialect decision per file, because `of` reads C-family files to
+    // decide; deciding inside a per-language filter would re-read them
     // once per language present.
     let mut by_lang: Vec<Vec<PathBuf>> = vec![Vec::new(); LANGS.len()];
     for path in &files {

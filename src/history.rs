@@ -1,5 +1,5 @@
 //! Quality is a derivative. The baseline answers "did this change make
-//! things worse", but nothing answered "are we getting better" — and
+//! things worse"; "are we getting better" needs a series instead, and
 //! Lehman's second law says that without deliberate work the answer is
 //! no. This records one row per run and renders the deltas between them.
 //!
@@ -182,7 +182,7 @@ fn metric_deltas(first: &Row, last: &Row) -> Vec<(String, i64)> {
     out
 }
 
-/// The largest movement first, in either direction — an improvement of
+/// The largest movement first, in either direction: an improvement of
 /// twenty matters as much as a regression of twenty.
 fn biggest_move_first(a: &(String, i64), b: &(String, i64)) -> std::cmp::Ordering {
     let magnitude = b.1.abs().cmp(&a.1.abs());

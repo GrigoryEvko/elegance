@@ -7,8 +7,8 @@ mod c;
 mod cpp;
 mod csharp;
 mod elixir;
-/// A module name written the way Elixir writes it as a path — the
-/// bridge the graph needs to match `Plug.Conn` against `plug/conn.ex`.
+/// A module name written the way Elixir writes it as a path, the bridge
+/// the graph needs to match `Plug.Conn` against `plug/conn.ex`.
 pub(crate) use elixir::underscore;
 /// Lua's preloaded library names, which consult no file.
 pub(crate) use lua::preloaded;
@@ -92,19 +92,18 @@ pub const LANGS: [Lang; 22] = [
 
 /// Everything that varies per language, in one place.
 ///
-/// `from_path`, `name`, `corpus_dir` and `pack` were four parallel
-/// `match self` arms, and a language added to three of them and
-/// forgotten in the fourth still compiles. That drift happened twice:
-/// `corpus_dir` silently emptied the `[rs]` and `[ml]` calibration
-/// sections, and later did the same to `[sol]`. One table cannot drift
-/// against itself.
+/// As four parallel `match self` arms — `from_path`, `name`,
+/// `corpus_dir`, `pack` — a language added to three of them and
+/// forgotten in the fourth still compiles. That drift emptied the `[rs]`
+/// and `[ml]` calibration sections through `corpus_dir`, and later
+/// `[sol]`. One table cannot drift against itself.
 struct Desc {
     lang: Lang,
     /// What the report and calibration.toml call it.
     name: &'static str,
     /// What gold.toml calls it, and the corpus directory a repository
-    /// fetched for it lands in. Mostly `name` and deliberately not
-    /// always — the manifest is read by people and spells several out.
+    /// fetched for it lands in. Mostly `name`, and deliberately not
+    /// always: the manifest is read by people and spells several out.
     corpus: &'static str,
     exts: &'static [&'static str],
     make: fn() -> Pack,
@@ -132,11 +131,10 @@ const DESCS: [Desc; LANGS.len()] = [
         name: "ts",
         corpus: "ts",
         // `.mts` and `.cts` are TypeScript's two module systems spelled
-        // in the extension, and leaving them out was a coverage hole,
-        // not a decision: 113 files in gold went unread — vscode's 71
-        // `esbuild*.mts` extension drivers, hono's 27 benchmarks,
-        // primer-react 7, zod 3, excalidraw 3, radix 2 — their imports
-        // uncounted and their content unmeasured.
+        // in the extension. Leaving them out costs 113 files in gold,
+        // their imports uncounted and their content unmeasured:
+        // vscode's 71 `esbuild*.mts` extension drivers, hono's 27
+        // benchmarks, primer-react 7, zod 3, excalidraw 3, radix 2.
         exts: &["ts", "mts", "cts"],
         make: || typescript::pack(typescript::Dialect::Ts),
     },
@@ -269,7 +267,7 @@ const DESCS: [Desc; LANGS.len()] = [
         name: "cpp",
         corpus: "cpp",
         // `.ipp` and `.inl` hold template definitions a header
-        // includes at its foot. Not scanning them left all 100 of
+        // includes at its foot. Not scanning them leaves all 100 of
         // immer's unresolved includes naming an `.ipp` that is right
         // there on disk, and 53 of cutlass's naming an `.inl`.
         exts: &["cpp", "cc", "cxx", "hpp", "hh", "hxx", "ipp", "inl"],
@@ -315,7 +313,7 @@ pub fn shebang(source: &str) -> Option<Lang> {
         "python" | "python2" | "python3" => Some(Lang::Python),
         "ruby" => Some(Lang::Ruby),
         // `luarocks/src/bin/luarocks` is `#!/usr/bin/env lua`, and it is
-        // the only file naming any of the 22 command modules it maps —
+        // the only file naming any of the 22 command modules it maps:
         // `commands = { init = "luarocks.cmd.init", ... }`, which
         // `cmd.lua:570` loads with `pcall(require, module)`. Eight
         // extensionless Lua files in gold say what they are this way.
@@ -332,25 +330,25 @@ impl Lang {
 
     /// The language a file is MEASURED as. `.h` is the one extension in
     /// this tool that underdetermines its language, and reading it as C
-    /// unconditionally was measurably wrong: of leveldb's 56 headers 47
-    /// failed to parse as C and 17 as C++, re2's 20 against 1, fmt's 23
+    /// unconditionally is measurably wrong: of leveldb's 56 headers 47
+    /// fail to parse as C and 17 as C++, re2's 20 against 1, fmt's 23
     /// against 11. Headers are where C++ keeps its classes, so a third
-    /// of every C++ repository was being dropped as unreadable.
+    /// of every C++ repository drops out as unreadable.
     ///
     /// The grammar alone does not settle it, because the C++ grammar is
     /// never worse on C headers either (musl 14% against 15%, redis 3%
-    /// against 2%, curl 9% against 7%) — so routing every `.h` to C++
-    /// would parse fine and then file musl's 655 headers under `cpp`,
-    /// which is the corpus trap gold.toml warns about. The LABEL has to
-    /// be decided too, and only the text can decide it.
+    /// against 2%, curl 9% against 7%). Routing every `.h` to C++ would
+    /// parse fine and then file musl's 655 headers under `cpp`, which is
+    /// the corpus trap gold.toml warns about. The LABEL has to be
+    /// decided too, and only the text can decide it.
     ///
-    /// The rule is four line-anchored spellings that are not C. It was
-    /// validated before it was written: 0 of 1,027 headers from lua,
-    /// musl, redis and curl match, and 98 of 104 from fmt, leveldb and
-    /// re2 do. The six that do not are `c.h` (leveldb's C API),
-    /// `export.h`, `port.h` and `thread_annotations.h` — headers that
-    /// hold no C++ at all, so reading them as C is the right answer
-    /// rather than a missed one.
+    /// The rule is four line-anchored spellings that are not C: 0 of
+    /// 1,027 headers from lua, musl, redis and curl match, and 98 of 104
+    /// from fmt, leveldb and re2 do. The six that do not are `c.h`
+    /// (leveldb's C API), `export.h`, `port.h` and
+    /// `thread_annotations.h`, headers that hold no C++ at all, so
+    /// reading them as C is the right answer rather than a missed one.
+    ///
     /// CUDA is decided the same way and for the same reason: a launch is
     /// not valid C++, so a `.h` full of `__global__` is handed to the C++
     /// grammar and dies on the first `<<<`. flash-attention keeps its
@@ -373,7 +371,7 @@ impl Lang {
         }
     }
 
-    /// `of_source` for a caller holding only a path — it reads the file.
+    /// `of_source` for a caller holding only a path: it reads the file.
     /// Used where files are PARTITIONED by language before scanning, so
     /// that a C++ header cannot land in the `[c]` calibration section.
     pub fn of(path: &Path) -> Option<Lang> {
@@ -384,8 +382,8 @@ impl Lang {
             return shebang(&source);
         };
         match by_extension {
-            // Every C-family extension is now readable: `.h` may be any
-            // of the three, and `.cpp`/`.hpp` may be CUDA.
+            // Every C-family extension is readable: `.h` may be any of
+            // the three, and `.cpp`/`.hpp` may be CUDA.
             lang @ (Lang::C | Lang::Cpp) => match std::fs::read_to_string(path) {
                 Ok(source) => Lang::of_source(path, &source),
                 Err(_) => Some(lang),
@@ -396,12 +394,11 @@ impl Lang {
 
     /// Is this file a SINK in the dependency graph by construction?
     ///
-    /// Nothing `#include`s a `.c`. A translation unit's fan-in is zero
-    /// in every C-family repository ever written — kakoune 57 of 58,
-    /// curl 377 of 377, musl 1566 of 1608 — so "nothing depends on
-    /// this" states a fact about the language rather than about the
-    /// code. Which translation unit needs which is settled by the
-    /// LINK graph, and no `#include` expresses it.
+    /// Nothing `#include`s a `.c`. Translation units have zero fan-in —
+    /// kakoune 57 of 58, curl 377 of 377, musl 1566 of 1608 — so
+    /// "nothing depends on this" states a fact about the language rather
+    /// than about the code. Which translation unit needs which is
+    /// settled by the LINK graph, and no `#include` expresses it.
     ///
     /// So they are left out of the population the dependency metrics
     /// judge, and the reported rate becomes the header rate, which is
@@ -412,8 +409,8 @@ impl Lang {
     /// An OCaml `.mli` is the same module as its `.ml`, not a second
     /// one: a reference names `Path`, and `path.ml` is what answers.
     /// The gold corpus holds 1147 such pairs among 2444 files, so
-    /// counting the interface separately put 1147 modules in the
-    /// orphan list by construction — no import could ever reach them.
+    /// counting the interface separately puts 1147 modules in the
+    /// orphan list by construction, where no import can ever reach them.
     /// The implementation is the module that is judged, and the
     /// interface's own references still count.
     pub fn is_sink(self, path: &Path) -> bool {
@@ -426,7 +423,7 @@ impl Lang {
             // `package-info.java` carries a package's annotations and
             // its Javadoc, and `module-info.java` the module's
             // declaration. Neither declares a TYPE, so no import can
-            // name one — `import io.netty.buffer.package-info` is not
+            // name one: `import io.netty.buffer.package-info` is not
             // even legal syntax. 89 sit in the orphan list across the
             // gold corpus by construction.
             Lang::Java => matches!(
@@ -490,9 +487,9 @@ impl Lang {
 
     /// The name gold.toml uses for this language, which is also the
     /// corpus directory a repository fetched for it lands in. Mostly
-    /// `name()` and deliberately not always — the manifest is read by
+    /// `name()`, and deliberately not always: the manifest is read by
     /// people and spells three of them out. Matching on `name()`
-    /// instead silently emptied the `[rs]` and `[ml]` sections, since
+    /// instead silently empties the `[rs]` and `[ml]` sections, since
     /// no directory is called `rs` or `ml`.
     pub fn corpus_dir(self) -> &'static str {
         DESCS[self as usize].corpus
@@ -511,7 +508,7 @@ impl Lang {
     /// `Pack::sems`, `def_sites` and `reassigns` are indexed by
     /// `node.kind_id()` and each grammar numbers its own kinds. Handing
     /// an interface's nodes to the implementation's tables addresses the
-    /// wrong rows — silently, since every id is in range.
+    /// wrong rows, and every id is in range, so nothing complains.
     pub fn pack_for(self, path: &Path) -> &'static Pack {
         static INTERFACE: OnceLock<Pack> = OnceLock::new();
         match self == Lang::OCaml && path.extension().is_some_and(|e| e == "mli") {
@@ -525,24 +522,20 @@ impl Lang {
 /// never pass silently. Unless explicitly silenced."
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CatchSin {
-    /// Handler body is only pass/ellipsis/empty — the error vanishes.
+    /// Handler body is only pass/ellipsis/empty, so the error vanishes.
     Swallowed,
-    /// Catches Exception/BaseException or binds nothing — too broad.
+    /// Catches Exception/BaseException or binds nothing: too broad.
     Broad,
 }
 
-/// One import edge as written in source: where it points and which
-/// local names it binds (bound names are modules in disguise — they
-/// must not read as envied objects or unnamed magic).
 /// How far a specifier can possibly reach.
 ///
 /// The distinction decides what a MISS means, and three resolvers here
 /// already act on it: a Python relative import, a quoted C include and a
 /// shell `source` all report `Unresolved` when they find nothing, while
 /// an absolute Python import and an angled include report `External`.
-/// The generic arm could not express it, so ten languages could only
-/// ever answer Internal or External — and a corpus that resolved nothing
-/// reported itself 100% resolved.
+/// Without the distinction, a corpus that resolves nothing reports
+/// itself 100% resolved.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Reach {
     /// A package name. A miss is an ordinary third-party dependency.
@@ -556,12 +549,12 @@ pub enum Reach {
     /// use, where the language has no syntax that names the file it
     /// comes from. It contributes an edge when it resolves and is never
     /// tallied, so `imports_external` keeps meaning what it means in
-    /// the other twenty-one languages — a module from outside, not a
+    /// the other twenty-one languages: a module from outside, not a
     /// type name the compiler found somewhere else.
     Mention,
     /// A MEMBER name, with no type written anywhere: `x.Foo()`. It
     /// resolves to the file declaring `Foo` and only when exactly ONE
-    /// does — the same refusal `path_suffix` makes, and for the same
+    /// does, the same refusal `path_suffix` makes and for the same
     /// reason. Which `ToString` a call means is decided by the
     /// receiver's type, which is not in the text; 2220 of the C#
     /// corpus's 14542 name uses have two or more declarers, and
@@ -570,6 +563,9 @@ pub enum Reach {
     Member,
 }
 
+/// One import edge as written in source: where it points and which
+/// local names it binds (bound names are modules in disguise: they must
+/// not read as envied objects or unnamed magic).
 #[derive(Default)]
 pub struct ImportInfo {
     /// Normalized target: `a.b`, `..pkg.x`, `./util`, `crate::x::y`,
@@ -583,8 +579,8 @@ pub struct ImportInfo {
 
 /// The at-most-one local an import binds, as the list the fact carries.
 /// A `use x as y`, an `import a.b` and a `from p import q` each bind one
-/// name per clause, and every pack spelled the same three-step chain to
-/// say so.
+/// name per clause, and every pack would otherwise spell the same
+/// three-step chain to say so.
 pub(super) fn binds(name: Option<Node>, src: &[u8]) -> Vec<Box<str>> {
     name.and_then(|n| n.utf8_text(src).ok())
         .map(Into::into)
@@ -603,15 +599,15 @@ pub type DocSpan = fn(Node, &[u8]) -> Option<(u32, u32)>;
 pub struct ParamInfo {
     /// Binding name (pattern text for destructuring params).
     pub name: Box<str>,
-    /// Boolean-typed or boolean-defaulted — a flag parameter candidate.
+    /// Boolean-typed or boolean-defaulted: a flag parameter candidate.
     pub boolish: bool,
-    /// Receiver (`self`/`cls`) — excluded from parameter counts on methods.
+    /// Receiver (`self`/`cls`), excluded from parameter counts on methods.
     pub selfish: bool,
     /// Receiver taken mutably (`&mut self`).
     pub mut_receiver: bool,
-    /// Mutable default value (Python `def f(x=[])`) — shared across calls.
+    /// Mutable default value (Python `def f(x=[])`), shared across calls.
     pub mutable_default: bool,
-    /// `**kwargs`-style splat — an interface that reveals nothing.
+    /// `**kwargs`-style splat: an interface that reveals nothing.
     pub kw_splat: bool,
     /// Optional at the call site (default value, `?`, splat): adding
     /// one to a signature breaks no caller.
@@ -650,8 +646,8 @@ pub struct ParamInfo {
 /// Every hook below is PRIVATE and asked through the method of the same
 /// name in [`hooks`], which records that the question was put and
 /// whether the pack answered. That is the only route: a hook the core
-/// never consults reads zero exactly as a hook that correctly finds
-/// nothing does, and nine detectors died in that gap at once.
+/// never consults reads zero, and so does a hook that correctly finds
+/// nothing. Nine detectors died in that gap at once.
 pub struct Pack {
     pub lang: Lang,
     pub ts: Language,
@@ -659,7 +655,7 @@ pub struct Pack {
     /// tree-sitter upgrade must never silently zero a metric (the Zig
     /// @import lesson). Runtime stays lenient; tests stay merciless.
     ///
-    /// A LIST of tables, because dialects of one grammar genuinely differ:
+    /// A LIST of tables, because dialects of one grammar differ:
     /// `<X>expr` is a cast in .ts and ambiguous with JSX in .tsx, so the
     /// TSX grammar has no `type_assertion` node to map.
     kind_names: &'static [&'static [(&'static str, Sem)]],
@@ -671,7 +667,7 @@ pub struct Pack {
     /// bound pattern). Fuels live-span tracking.
     def_sites: Box<[(u16, &'static str)]>,
     /// Plain-reassignment sites: (kind, field holding the target).
-    /// Reassignment only, never fresh bindings — a Rust `let` shadow or
+    /// Reassignment only, never fresh bindings: a Rust `let` shadow or
     /// a Go `:=` is a NEW binding, and judging those without scopes
     /// would flag sibling blocks. Fuels the repurposing check.
     reassigns: Box<[(u16, &'static str)]>,
@@ -680,20 +676,20 @@ pub struct Pack {
     /// Separator for scope-qualified unit names (`.` or `::`).
     pub scope_sep: &'static str,
     /// Field holding a definition's declared return type (`return_type`,
-    /// Go `result`, Zig `type`) — the name-contract metric's evidence.
+    /// Go `result`, Zig `type`): the name-contract metric's evidence.
     pub return_type_field: &'static str,
     /// Field holding a boolean operator's operator token (for sequence dedup).
     pub bool_op_field: &'static str,
     /// Fields that may hold a call's TARGET, in the order to try them.
     ///
-    /// The core reads a callee to answer four questions — is this a
+    /// The core reads a callee to answer four questions: is this a
     /// sleep, does it reach a shell, does it spawn something whose
-    /// handle is dropped, does it park an async unit — and it read them
-    /// through a hardcoded `function`/`macro` pair. Ruby fields a call's
-    /// target as `method`, Java and Lua as `name`, Elixir as `target`,
-    /// so all four questions answered "no" in those languages whatever
-    /// the code said. An EMPTY list means the grammar fields nothing and
-    /// the target is the first named child (Swift).
+    /// handle is dropped, does it park an async unit. A hardcoded
+    /// `function`/`macro` pair answers "no" to all four wherever the
+    /// grammar fields a call's target otherwise, whatever the code says:
+    /// Ruby fields it as `method`, Java and Lua as `name`, Elixir as
+    /// `target`. An EMPTY list means the grammar fields nothing and the
+    /// target is the first named child (Swift).
     pub call_target_fields: &'static [&'static str],
     /// Does this language have type syntax at all? JavaScript does not,
     /// so "untyped" there is a fact about the language, not the code.
@@ -706,11 +702,11 @@ pub struct Pack {
     name_node: for<'t> fn(Node<'t>) -> Option<Node<'t>>,
     /// A name no single node spells. gtest writes a test's identity as
     /// two macro arguments — `TEST(args_test, basic)` — and prints it
-    /// back as `args_test.basic`; judging `basic` alone judges half a
-    /// name and read 61% of the C++ gold corpus as lazily named, worse
+    /// back as `args_test.basic`. Judging `basic` alone judges half a
+    /// name and reads 61% of the C++ gold corpus as lazily named, worse
     /// than a corpus of notorious code. Returns an owned String because
-    /// the name is COMPOSED, which is exactly why `name_node` cannot
-    /// answer. Consulted before everything else.
+    /// the name is COMPOSED, which is why `name_node` cannot answer.
+    /// Consulted before everything else.
     composed_name: fn(Node, &[u8]) -> Option<String>,
     /// Import edges of one Import node (a `use` tree or `from` list may
     /// carry several).
@@ -726,10 +722,10 @@ pub struct Pack {
     /// `//!` and `/**` are handled centrally.
     pub doc_markers: &'static [&'static str],
     /// Is this definition part of the public surface? Conservative: when
-    /// unsure, say no — coverage findings must be precise.
+    /// unsure, say no, since coverage findings must be precise.
     is_public: fn(Node, &[u8]) -> bool,
     /// Byte range of the contract documentation attached to this
-    /// definition — a docstring, a `///` run, a JSDoc block. Interface
+    /// definition: a docstring, a `///` run, a JSDoc block. Interface
     /// docs, not implementation notes.
     ///
     /// The pack LOCATES and stops there: how many lines that is, how
@@ -750,17 +746,16 @@ pub struct Pack {
     /// Perl's `package Foo;` is a statement, and the subs it governs sit
     /// beside it rather than inside it, so an ancestor walk finds
     /// nothing. Two `base` subs under different packages in one file
-    /// then share a qualified name — and the ratchet's identity is
-    /// (metric, path, qualified unit), so they share a baseline entry
-    /// too.
+    /// then share a qualified name. The ratchet's identity is (metric,
+    /// path, qualified unit), so they share a baseline entry too.
     pub file_level_scope: bool,
     /// Is this declaration an OVERRIDE POINT — a trait or interface
     /// member carrying a default for implementors, or a method marked as
     /// overriding one?
     ///
     /// Such a body is documented at length ON PURPOSE, so implementors
-    /// know when to replace it. Excluding them removed all 79 of
-    /// `ceremony`'s false positives on the gold corpus and cost 6 of
+    /// know when to replace it. Excluding them removes all 79 of
+    /// `ceremony`'s false positives on the gold corpus and costs 6 of
     /// 3,187 real hits. The extractor also applies a generic check —
     /// a member of a declaration that `interfaces` recognises — so this
     /// hook covers only what that misses: an explicit marker on a method
@@ -768,9 +763,8 @@ pub struct Pack {
     is_override: fn(Node, &[u8]) -> bool,
     /// Constructs where the text stops predicting the run (Dijkstra's gap):
     /// eval/exec, computed attribute access, metaclasses, transmute.
-    /// Consulted for EVERY node — it once saw only calls and typedefs,
-    /// and Solidity's `assembly` block and Perl's `eval "..."` were
-    /// invisible for exactly as long as that lasted.
+    /// Consulted for EVERY node: seeing only calls and typedefs leaves
+    /// Solidity's `assembly` block and Perl's `eval "..."` invisible.
     spooky: fn(Node, Sem, &[u8]) -> bool,
     /// If this node is a logical NOT, its operand.
     negation_operand: for<'t> fn(Node<'t>, &[u8]) -> Option<Node<'t>>,
@@ -778,8 +772,8 @@ pub struct Pack {
     catch_sin: fn(Node, &[u8]) -> Option<CatchSin>,
     /// An error-check whose handler is EMPTY (`if err != nil { }`).
     /// Languages where errors are values have no Catch node to judge,
-    /// and without this their whole error-discipline family reads
-    /// zero. Consulted on If and Try nodes; counts into `swallowed`.
+    /// and without this their error-discipline family reads zero.
+    /// Consulted on If and Try nodes; counts into `swallowed`.
     swallows_error: fn(Node, &[u8]) -> bool,
     /// Does this handler bind the error, raise a NEW one, and never
     /// mention the original? A separate hook rather than another
@@ -820,7 +814,7 @@ pub struct Pack {
     /// a Go result list's width, a Rust or TS tuple return type's
     /// width, the widest tuple a Python `return` ships. Languages
     /// where a compound result is already a single value (a JS array,
-    /// an OCaml tuple, a Zig struct) answer 0 — there is nothing to
+    /// an OCaml tuple, a Zig struct) answer 0: there is nothing to
     /// destructure that a name would not fix.
     return_arity: fn(Node, &[u8]) -> u16,
     /// Does this node switch a test off UNCONDITIONALLY — `#[ignore]`,
@@ -845,14 +839,14 @@ pub struct Pack {
 /// Node kinds a grammar spells ONLY for a member of a type.
 ///
 /// Whether a declaration is a method is normally read from the tree:
-/// walk the ancestors and look for a TypeDef. That walk is exactly as
-/// good as the parse, and a grammar that gives up inside a class body
-/// hands everything after it to the enclosing scope. tree-sitter-c-sharp
+/// walk the ancestors and look for a TypeDef. That walk is only as good
+/// as the parse, and a grammar that gives up inside a class body hands
+/// everything after it to the enclosing scope. tree-sitter-c-sharp
 /// cannot parse a `#if`-guarded `else if` between an `if` and its
 /// `else`, which is how Newtonsoft.Json's JsonTextReader.cs is written;
 /// the class ends at the first one and the 30 members below it read as
 /// free functions, one of which — `HasLineInfo`, a documented
-/// `return true` implementing IJsonLineInfo — was the whole of
+/// `return true` implementing IJsonLineInfo — accounted for
 /// `ceremony`'s remaining gold false positives. The same grammar parses
 /// a `method_declaration` sitting directly in a namespace WITHOUT an
 /// error node, so nothing downstream can tell the two apart.
@@ -888,8 +882,8 @@ const MEMBER_KINDS: &[(Lang, &[&str])] = &[
 ///
 /// C++11 writes `auto f() -> bool`, putting the real type AFTER the
 /// parameter list, so the `type` field reads `auto` and every predicate
-/// written that way looked to `lying name` like one returning something
-/// that is not a boolean — fmt's `FMT_CONSTEXPR auto has_foreground()
+/// written that way looks to `lying name` like one returning something
+/// that is not a boolean, fmt's `FMT_CONSTEXPR auto has_foreground()
 /// const noexcept -> bool` among them. C has no trailing return type
 /// (it is a C++11 construct) and every other language in the table
 /// fields the whole thing, so two rows is the whole list.
@@ -900,7 +894,7 @@ const TRAILING_RETURN: &[(Lang, &str)] = &[
 
 impl Pack {
     /// The type node of a trailing return, when this grammar spells one
-    /// and this declaration wrote it — see [`TRAILING_RETURN`]. Follows
+    /// and this declaration wrote it (see [`TRAILING_RETURN`]). Follows
     /// the `declarator` chain, because a pointer or reference return
     /// wraps the function declarator that carries the arrow.
     pub fn trailing_return<'t>(&self, node: Node<'t>) -> Option<Node<'t>> {
@@ -932,7 +926,7 @@ impl Pack {
         self.attr
     }
 
-    /// Kinds this grammar uses only inside a type — see [`MEMBER_KINDS`].
+    /// Kinds this grammar uses only inside a type. See [`MEMBER_KINDS`].
     fn member_kinds(&self) -> &'static [&'static str] {
         MEMBER_KINDS
             .iter()
@@ -1015,7 +1009,7 @@ impl Pack {
     }
 
     /// Every declared grammar name that does NOT resolve in the compiled
-    /// grammar — kinds and fields alike. Healthy packs return empty.
+    /// grammar, kinds and fields alike. Healthy packs return empty.
     pub fn unresolved(&self) -> Vec<String> {
         let mut bad = Vec::new();
         let kind = |bad: &mut Vec<String>, name: &str| {
@@ -1086,9 +1080,9 @@ fn def_table(ts: &Language, sites: &[(&'static str, &'static str)]) -> Box<[(u16
 }
 
 /// Build the dense kind table from (kind name, Sem) pairs. Unknown names
-/// are skipped so a grammar bump degrades instead of crashing — but they
-/// are never harmless (an unmapped kind silently zeroes a metric), so
-/// debug builds complain and [`Pack::unresolved`] fails CI.
+/// are skipped so a grammar bump degrades instead of crashing. They are
+/// never harmless: an unmapped kind silently zeroes a metric, so debug
+/// builds complain and [`Pack::unresolved`] fails CI.
 fn sem_table(ts: &Language, kinds: &[&[(&str, Sem)]]) -> Box<[Sem]> {
     let mut sems = vec![Sem::None; ts.node_kind_count()];
     for &(name, sem) in kinds.iter().copied().flatten() {
@@ -1130,9 +1124,9 @@ fn declared_async(node: Node, src: &[u8]) -> bool {
 ///
 /// An OPERANDLESS raiser — C#'s `throw;`, Python's and Ruby's bare
 /// `raise` — carries the caught error onward untouched, and it is the
-/// one form that preserves the stack exactly. It mentions the binding
-/// nowhere because it mentions NOTHING, so the text test read it as a
-/// fresh error and the rule ran backwards: Microsoft's own guidance is
+/// one form that preserves the stack. It mentions the binding nowhere
+/// because it mentions NOTHING, so a text test alone reads it as a
+/// fresh error and runs the rule backwards: Microsoft's own guidance is
 /// that `throw;` is right and `throw ex;` is the bug. 34 of C#'s 36
 /// gold findings and 11 of Python's 20 were this.
 fn rethrows_without_cause(body: Node, raiser: &str, bound: &str, src: &[u8]) -> bool {
@@ -1181,14 +1175,14 @@ fn mentions(text: &str, name: &str) -> bool {
 ///
 /// `$this` and `this` are the same receiver; `$self` and `self` are the
 /// same object. Only ONE character comes off, so PHP's variable-variable
-/// `$$name` still reads as `$name` and Ruby's `@@count` as `@count` —
-/// both of which are genuinely different names from `name`.
+/// `$$name` still reads as `$name` and Ruby's `@@count` as `@count`.
+/// Both are different names from `name`.
 ///
 /// A name that is NOTHING BUT a sigil keeps it. `$` is a legal
-/// identifier in TypeScript and in Solidity, and stripping it left the
-/// empty string, which matched the empty receiver name a free function
-/// carries — so vscode's `$('.chart')` and OpenZeppelin's
-/// `$._initializing` briefly read as accesses to their own object.
+/// identifier in TypeScript and in Solidity, and stripping it leaves the
+/// empty string, which matches the empty receiver name a free function
+/// carries: vscode's `$('.chart')` and OpenZeppelin's `$._initializing`
+/// would then read as accesses to their own object.
 pub(crate) fn unsigiled(name: &str) -> &str {
     match name.strip_prefix(['$', '@', '%', '&']) {
         Some(rest) if !rest.is_empty() => rest,
@@ -1204,8 +1198,8 @@ pub(crate) fn unsigiled(name: &str) -> &str {
 /// so a lone literal argument is the thing being asserted. A FLUENT
 /// assertion hangs off the value it is about: in
 /// `resultA.Name.ShouldBe("name1")` the subject is the receiver and the
-/// literal is the expected answer. The qualifier is what tells them
-/// apart, and a bare callee has no qualifier to doubt.
+/// literal is the expected answer. The qualifier tells them apart, and
+/// a bare callee has no qualifier to doubt.
 pub(crate) fn assertion_names_its_own_subject(callee: &str) -> bool {
     let parts: Vec<&str> = callee
         .split(|c: char| !identifierish(c) && c != '$' && c != '@')
@@ -1220,17 +1214,15 @@ pub(crate) fn assertion_names_its_own_subject(callee: &str) -> bool {
 
 /// Does a caught type reach EVERY failure the runtime can raise?
 ///
-/// Three packs asked this with a SUBSTRING — `text.contains("Exception ")`
-/// in Java and C#, `pattern.contains("Exception")` in Scala — and
-/// `IOException e` contains it. 2,089 of Java's 3,417 gold findings were
-/// a specific type caught deliberately: IOException 520,
-/// AssertionFailedError 316, MismatchedInputException 212. A root type
-/// is now matched EXACTLY, as the last dotted segment of a token, so
-/// `java.lang.Exception` still counts and `ArgumentException` does not.
+/// A SUBSTRING cannot answer it: `IOException e` contains "Exception",
+/// and 2,089 of Java's 3,417 gold findings were a specific type caught
+/// deliberately: IOException 520, AssertionFailedError 316,
+/// MismatchedInputException 212. A root type is matched EXACTLY, as the
+/// last dotted segment of a token, so `java.lang.Exception` still counts
+/// and `ArgumentException` does not.
 ///
 /// `RuntimeException` is in the set because it reaches every unchecked
-/// failure, and because the old substring rule already billed it —
-/// leaving it out would have been a second, silent change.
+/// failure.
 fn catches_every_failure(decl: &str) -> bool {
     decl.split(|c: char| !identifierish(c) && c != '.')
         .any(|token| {
@@ -1244,11 +1236,11 @@ fn catches_every_failure(decl: &str) -> bool {
 /// Does a declared return type promise a BOOLEAN — the thing an `is_`,
 /// `has_`, `can_` or `should_` name says the answer will be?
 ///
-/// The test was `returns.contains("bool")`, case-sensitively, and it was
-/// wrong about four languages at once. Scala writes `Boolean`, Swift
-/// writes `Bool`, Java's boxed form is `Boolean`: 660 of `lying name`'s
-/// 6,323 gold findings were a predicate returning exactly what its name
-/// promised, spelled with a capital. TypeScript's 1,212 were the
+/// A case-sensitive `returns.contains("bool")` is wrong about four
+/// languages at once. Scala writes `Boolean`, Swift writes `Bool`, and
+/// Java's boxed form is `Boolean`: 660 of `lying name`'s 6,323 gold
+/// findings were a predicate returning exactly what its name promised,
+/// spelled with a capital. TypeScript's 1,212 were the
 /// STRONGEST available form — `value is FormData` is a boolean at
 /// runtime and carries the narrowing besides — reported as the metric's
 /// violation. And C89 has no `bool`: `int` IS the boolean there, and
@@ -1272,7 +1264,7 @@ pub(crate) fn promises_a_boolean(lang: Lang, returns: &str) -> bool {
         // language in the table spells in a return type.
         Lang::TypeScript | Lang::Tsx => tokens().any(|t| t == "is"),
         // Truthiness. Every other C-family language has `bool`, so the
-        // excuse stops at the one language that does not — and it is
+        // excuse stops at the one language that does not, and it covers
         // `int` alone: gold's three pointer-returning predicates are not
         // enough to widen a rule on.
         Lang::C => returns.trim() == "int",
@@ -1295,7 +1287,7 @@ fn assertish(name: &str) -> bool {
             .is_some_and(|tail| tail.eq_ignore_ascii_case(PAT))
 }
 
-/// `expect` or `expectSomething` — a test helper. The capital matters:
+/// `expect` or `expectSomething`: a test helper. The capital matters:
 /// without it `expected_value()` in production code reads as an
 /// assertion.
 fn expectish(name: &str) -> bool {
@@ -1308,20 +1300,19 @@ fn expectish(name: &str) -> bool {
 
 /// The execution-space qualifiers, which are CUDA and are nothing else.
 /// Judged at token boundaries rather than as substrings, so a name like
-/// `my__device__id` cannot vote — and never on a comment line, because
-/// "never call `__device__` functions from this translation unit" is a
-/// sentence a HOST file writes about the boundary it sits on. The first
-/// version skipped that guard and a comment mention flipped a plain
-/// C++ file into the `[cu]` budget section; the C++ rule below was
-/// line-anchored against exactly this and the asymmetry was the bug.
-/// A qualifier inside a string literal still votes (a jitify-style
-/// host file embedding kernel SOURCE reads as CUDA), which is accepted:
-/// the grammar is a superset, so only the budget section moves.
+/// `my__device__id` cannot vote, and never on a comment line: "never
+/// call `__device__` functions from this translation unit" is a sentence
+/// a HOST file writes about the boundary it sits on, and without the
+/// guard it flips a plain C++ file into the `[cu]` budget section. The
+/// C++ rule below is line-anchored for the same reason. A qualifier
+/// inside a string literal still votes (a jitify-style host file
+/// embedding kernel SOURCE reads as CUDA), which is accepted: the
+/// grammar is a superset, so only the budget section moves.
 ///
-/// Validated the same way the C++ rule was: 0 of 4,588 headers across
+/// Validated the same way the C++ rule is: 0 of 4,588 headers across
 /// the C and C++ gold corpora match, and 15 of flash-attention's and
-/// 76 of cutlass's do — figures unchanged by the comment guard,
-/// because a real qualifier is a declaration, not a remark.
+/// 76 of cutlass's do. The comment guard leaves those figures unchanged,
+/// because a real qualifier is a declaration rather than a remark.
 fn looks_like_cuda(source: &str) -> bool {
     const MARKERS: [&str; 5] = [
         "__global__",
@@ -1351,8 +1342,8 @@ fn identifierish(c: char) -> bool {
 
 /// Four spellings that are not C, judged at the START of a line so a
 /// mention inside a comment or a string cannot vote. `::` and
-/// `operator` were considered and dropped: both turn up in C comments,
-/// and these four already separate the corpora perfectly.
+/// `operator` are deliberately absent: both turn up in C comments, and
+/// these four already separate the corpora perfectly.
 fn looks_like_cpp(source: &str) -> bool {
     source.lines().any(|line| {
         let head = line.trim_start();
@@ -1370,9 +1361,9 @@ fn looks_like_cpp(source: &str) -> bool {
 
 /// Does this declared type text name one of the language's escape
 /// hatches? Split into identifier tokens so a hatch counts wherever it
-/// appears — `dict[str, Any]` and `Record<string, any>` hide behind a
-/// generic but assert exactly as little as the bare hatch does. Token
-/// equality, not substring: `AnyOf` and `voidptr_t` are ordinary names.
+/// appears: `dict[str, Any]` and `Record<string, any>` hide behind a
+/// generic but assert as little as the bare hatch does. Token equality,
+/// not substring: `AnyOf` and `voidptr_t` are ordinary names.
 fn is_loose(text: &str, hatches: &[&str]) -> bool {
     text.split(|c: char| !c.is_alphanumeric() && c != '_')
         .any(|token| hatches.contains(&token))
@@ -1382,23 +1373,19 @@ fn is_loose(text: &str, hatches: &[&str]) -> bool {
 ///
 /// Every C-family grammar that has destructuring at all spells it with
 /// the same two node kinds, and the TypeScript grammar is the
-/// JavaScript one with annotations — so the list is shared rather than
+/// JavaScript one with annotations, so the list is shared rather than
 /// repeated in each pack. Grammars whose pattern vocabulary is their
 /// own (Rust, OCaml, Ruby, Elixir) answer in their own pack.
 fn destructures(kind: &str) -> bool {
     matches!(kind, "object_pattern" | "array_pattern")
 }
 
-/// Shared helper: does `node`'s field hold a boolean-ish type name?
-/// A build- or tool-configuration file: `vite.config.ts`,
-/// `jest.config.js`, `rollup.config.mjs`. Named after what it
-/// configures, and run once by the tool it configures.
 /// Is this declaration an anonymous function EXPRESSION rather than a
 /// named declaration?
 ///
-/// A one-expression lambda is a forwarder by definition — that is what a
-/// lambda IS — and it exists to adapt a callback's shape: `decode:
-/// (str) => BigInt(str)`, `lookupLanguageModel: id => models.get(id)`.
+/// A one-expression lambda is a forwarder by definition, and it exists
+/// to adapt a callback's shape: `decode: (str) => BigInt(str)`,
+/// `lookupLanguageModel: id => models.get(id)`.
 /// Fowler's Middle Man is about a NAME that promises a layer and
 /// delivers a hop, and a lambda has no name of its own to be shallow
 /// about; the one it reports comes from the property it was bound to.
@@ -1459,6 +1446,9 @@ pub(crate) fn web_extension(path: &str) -> bool {
         .is_some_and(|(_, ext)| WEB.contains(&ext))
 }
 
+/// A build- or tool-configuration file: `vite.config.ts`,
+/// `jest.config.js`, `rollup.config.mjs`. Named after what it
+/// configures, and run once by the tool it configures.
 pub(crate) fn config_file(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
@@ -1491,20 +1481,20 @@ pub(crate) fn c_header(target: &str) -> bool {
 /// Case-insensitive, because `IntegrationTests` is 42 of the shell files
 /// this reaches and no other ecosystem here capitalises.
 ///
-/// THE ONE EXCLUSION, and it is audited rather than guessed. I read
-/// every directory in all 22 gold corpora whose name holds "test" —
-/// 1307 distinct names, 29 of them holding a `.sh` or a `.php` the exact
-/// match did not already cover — and exactly one is not a suite:
+/// THE ONE EXCLUSION, audited rather than guessed. Of every directory
+/// in all 22 gold corpora whose name holds "test" — 1307 distinct names,
+/// 29 of them holding a `.sh` or a `.php` the exact match did not
+/// already cover — exactly one is not a suite:
 /// `ts/vscode/extensions/vscode-test-resolver`, a SHIPPED extension
-/// whose package.json declares `"main": "./out/extension"`. What tells
-/// it apart is that `test` sits BETWEEN two hyphenated words: the head
-/// names a product and `test` merely qualifies it, where a name that
-/// OPENS or CLOSES with the word says what the directory holds. Twelve
-/// directories in gold have that sandwich shape and the only other one
-/// carrying a shell file, swift-nio's
+/// whose package.json declares `"main": "./out/extension"`. There
+/// `test` sits BETWEEN two hyphenated words: the head names a product
+/// and `test` merely qualifies it, where a name that OPENS or CLOSES
+/// with the word says what the directory holds. Twelve directories in
+/// gold have that sandwich shape, and the only other one carrying a
+/// shell file, swift-nio's
 /// `IntegrationTests/allocation-counter-tests-framework`, is claimed by
-/// its parent anyway — so the exclusion costs nothing and removes the
-/// corpus's only false positive.
+/// its parent anyway. The exclusion therefore costs nothing and removes
+/// the corpus's only false positive.
 pub(crate) fn test_dir(path: &str) -> bool {
     let Some((dirs, _)) = path.rsplit_once('/') else {
         return false;
@@ -1525,18 +1515,18 @@ pub(crate) fn field_text_is<'a>(node: Node, field: &str, src: &'a [u8]) -> Optio
     node.child_by_field_name(field)?.utf8_text(src).ok()
 }
 
-/// Byte span of the comment run directly above a definition — the shape
+/// Byte span of the comment run directly above a definition, the shape
 /// documentation takes in all but a handful of languages.
 ///
 /// The run is CONTIGUOUS: a comment cut off from the definition by a
 /// blank line is a note about the neighbourhood, not this definition's
 /// contract. `kinds` are the node kinds that can carry one, and
-/// `prefixes` the spellings this ecosystem reads as documentation —
-/// empty where any comment above a definition documents it.
+/// `prefixes` the spellings this ecosystem reads as documentation, empty
+/// where any comment above a definition documents it.
 ///
-/// Fourteen packs share this. What differs between them is which nodes
-/// to look at, which is exactly what a pack is for; walking the run and
-/// measuring it are the same everywhere and are not.
+/// Fourteen packs share this. They differ in which nodes to look at,
+/// which is what a pack is for; walking the run and measuring it are the
+/// same everywhere and are not.
 fn doc_run(node: Node, kinds: &[&str], prefixes: &[&str], src: &[u8]) -> Option<(u32, u32)> {
     let mut span: Option<(u32, u32)> = None;
     let mut prev = node.prev_named_sibling();
@@ -1568,11 +1558,10 @@ fn node_span(node: Node) -> Option<(u32, u32)> {
 
 /// The last row this node puts text on.
 ///
-/// A grammar may end a line comment AFTER its newline —
-/// tree-sitter-rust does, so a `///` node ends at column 0 of the row
-/// below. Taken literally, every Rust doc comment sits one row further
-/// down than it looks, and a run would never touch the item it
-/// documents.
+/// A grammar may end a line comment AFTER its newline: tree-sitter-rust
+/// does, so a `///` node ends at column 0 of the row below. Taken
+/// literally, every Rust doc comment sits one row further down than it
+/// looks, and a run would never touch the item it documents.
 pub(crate) fn last_row(node: Node) -> usize {
     let row = node.end_position().row;
     if node.end_position().column == 0 && row > node.start_position().row {
@@ -1586,8 +1575,8 @@ pub(crate) fn last_row(node: Node) -> usize {
 mod conformance {
     //! The "languages are very alike" claim, made executable: the same
     //! function written in each supported language must produce identical
-    //! metrics. This suite is what keeps the Sem ontology honest as packs
-    //! are added.
+    //! metrics. This suite keeps the Sem ontology honest as packs are
+    //! added.
 
     use super::Lang;
 
@@ -1727,7 +1716,7 @@ long classify(const long *items, long limit) {
 ";
 
     /// C++ writes the loop as a range-for, which is its own grammar
-    /// kind — so this column also proves `for_range_loop` costs what
+    /// kind, so this column also proves `for_range_loop` costs what
     /// every other language's loop costs.
     const CPP: &str = "
 long classify(const std::vector<long>& items, long limit) {
@@ -1747,7 +1736,7 @@ long classify(const std::vector<long>& items, long limit) {
 
     /// OCaml's imperative loop. Idiomatic OCaml would iterate with
     /// `List.iter` and a lambda, which the ontology correctly reads as a
-    /// CALL rather than a loop — so the conformance case uses the form
+    /// CALL rather than a loop, so the conformance case uses the form
     /// that means the same thing the other eight languages mean.
     const ML: &str = "
 let classify items limit =
@@ -1798,10 +1787,10 @@ let classify items limit =
 
     #[test]
     fn goto_costs_the_same_wherever_it_exists() {
-        // Go mapped `goto` to Sem::Jump, which scores nothing — the same
-        // construct cost 1 in C and 0 in Go. Sem::Goto exists for exactly
-        // this: break/continue are free within their loop, but a goto
-        // sends the reader hunting for a label.
+        // Mapping `goto` to Sem::Jump scores nothing, so the same
+        // construct costs 1 in C and 0 in Go. Sem::Goto exists for this:
+        // break/continue are free within their loop, but a goto sends
+        // the reader hunting for a label.
         let c =
             "int f(int x) {\n    if (x < 0) goto fail;\n    return x;\nfail:\n    return -1;\n}\n";
         let go = "package main\n\nfunc f(x int) int {\n\tif x < 0 {\n\t\tgoto fail\n\t}\n\treturn x\nfail:\n\treturn -1\n}\n";
@@ -1812,9 +1801,9 @@ let classify items limit =
     #[test]
     fn receiver_declared_methods_are_methods_in_every_language() {
         // Go declares the receiver in its own field, so the method has no
-        // enclosing type node. Feature Envy asks `is_method` first, which
-        // made it structurally dead for Go: identical code scored 4 in
-        // Python and 0 in Go.
+        // enclosing type node. Feature Envy asks `is_method` first, so
+        // without the receiver it is structurally dead for Go: identical
+        // code scores 4 in Python and 0 in Go.
         let envious = |lang: Lang, src: &str| {
             let f = facts(lang, src);
             let u = &f.units[1];
@@ -1831,7 +1820,7 @@ let classify items limit =
         assert_eq!(py, (true, 4, "Billing.total".into()));
         assert_eq!(go, (true, 4, "Billing.Total".into()));
 
-        // The receiver is the method's OWN object, not an envied one —
+        // The receiver is the method's OWN object, not an envied one:
         // otherwise enabling this would fire on every Go method.
         let own = envious(
             Lang::Go,
@@ -1842,9 +1831,9 @@ let classify items limit =
 
     #[test]
     fn escape_hatches_are_found_through_their_generics() {
-        // A hatch hidden in a generic asserts exactly as little as the
-        // bare hatch: `dict[str, Any]` and `Record<string, any>` are the
-        // form real code actually takes.
+        // A hatch hidden in a generic asserts as little as the bare
+        // hatch: `dict[str, Any]` and `Record<string, any>` are the form
+        // real code takes.
         let loose = |lang: Lang, src: &str| {
             let f = facts(lang, src);
             f.units[1..]
@@ -1967,8 +1956,7 @@ let classify items limit =
     }
 
     /// (lang, path, source, how many assertion CALLS the file holds).
-    /// Every ASSERTING line below read zero before this table existed,
-    /// and each file also carries a call the rule must NOT believe:
+    /// Each file also carries a call the rule must NOT believe:
     /// Go's `fmt.Errorf` and `err.Error()` wear the same verbs as
     /// `t.Errorf`, TypeScript's `ok` is an ordinary function name unless
     /// the file took it from Node's assert module, and Lua's `assert`
@@ -2017,11 +2005,11 @@ let classify items limit =
 
     #[test]
     fn a_test_is_declared_only_by_evidence_its_context_supports() {
-        // One name used to do two jobs: a production `test_connection`
-        // health check was judged as a lazy assertless test AND pardoned
-        // from every production metric. Name conventions declare only
-        // inside test files; attributes and structure declare anywhere;
-        // cfg(test) membership exempts without declaring.
+        // A production `test_connection` health check is neither a lazy
+        // assertless test to judge nor test code to pardon. Name
+        // conventions declare only inside test files; attributes and
+        // structure declare anywhere; cfg(test) membership exempts
+        // without declaring.
         type Case = (Lang, &'static str, &'static str, (bool, bool), &'static str);
         let cases: &[Case] = &[
             (
@@ -2089,9 +2077,9 @@ let classify items limit =
     }
 
     /// The count-shaped detector metrics whose liveness is decided by
-    /// pack hooks and tables — the exact surface where three confirmed
-    /// bugs (secrets dead in Rust/Zig/C, Go's error family, four
-    /// languages' wildcard arms) died in silence.
+    /// pack hooks and tables. Three confirmed bugs died in silence on
+    /// that surface: secrets dead in Rust/Zig/C, Go's error family, four
+    /// languages' wildcard arms.
     const DETECTORS: &[&str] = &[
         "secrets",
         "swallowed",
@@ -2126,7 +2114,7 @@ let classify items limit =
     /// Pairs that can NEVER fire, each with its reason. Deliberate
     /// deadness is a design decision stated here; ACCIDENTAL deadness
     /// is how detectors die in silence. Fixing a pack must shrink this
-    /// list — the parity test refuses a pair that is both seeded alive
+    /// list: the parity test refuses a pair that is both seeded alive
     /// and declared dead.
     pub(super) const DECLARED_DEAD: &[(Lang, &str, &str)] = &[
         (
@@ -2479,8 +2467,8 @@ let classify items limit =
         ),
         // bats and shunit2 assert with the `[` builtin, which is
         // indistinguishable from ordinary control flow, so every
-        // test-named shell function reads as assertionless — the
-        // corpus said so at 100%. Shell declares no tests at all.
+        // test-named shell function reads as assertionless, and the
+        // corpus says so at 100%. Shell declares no tests at all.
         (
             Lang::Shell,
             "vacuous asserts",
@@ -2947,8 +2935,8 @@ let classify items limit =
     /// detectors that may be dying quietly.
     ///
     /// It may only ever SHRINK. Adding a language to it to make a build
-    /// pass would be the exact evasion the matrix exists to prevent, so
-    /// the test below pins its length.
+    /// pass would be the evasion the matrix exists to prevent, so the
+    /// test below pins its length.
     const PENDING_PARITY: &[Lang] = &[];
 
     #[test]
@@ -3111,11 +3099,11 @@ let classify items limit =
     ///
     /// `text.contains("Exception ")` is true of `IOException e`, and
     /// 2,089 of Java's 3,417 gold `broad catch` findings were a type the
-    /// author chose deliberately — IOException 520, AssertionFailedError
+    /// author chose deliberately: IOException 520, AssertionFailedError
     /// 316, MismatchedInputException 212. The root name is matched
-    /// exactly now, as the last dotted segment of a token, so a
-    /// qualified `java.lang.Throwable` still counts and a specific type
-    /// that merely ENDS in a root name does not.
+    /// exactly, as the last dotted segment of a token, so a qualified
+    /// `java.lang.Throwable` still counts and a specific type that
+    /// merely ENDS in a root name does not.
     const CATCH_WIDTH: &[(Lang, &str, &str, u16)] = &[
         (
             Lang::Java,
@@ -3174,11 +3162,11 @@ let classify items limit =
     ];
 
     /// An empty handler silences the failure whatever it caught, so
-    /// `swallowed` must not follow `broad catch` down. Scala asked
-    /// breadth FIRST and only judged emptiness on an arm that reached
-    /// everything — so narrowing breadth took two real gold findings
-    /// (zio's `case _: SecurityException =>` and `case _:
-    /// InterruptedException => ()`) with it until the order was fixed.
+    /// `swallowed` must not follow `broad catch` down. Asking breadth
+    /// FIRST and judging emptiness only on an arm that reached
+    /// everything costs two real gold findings in Scala: zio's
+    /// `case _: SecurityException =>` and
+    /// `case _: InterruptedException => ()`.
     const SILENT_HANDLER: &[(Lang, &str, &str)] = &[
         (
             Lang::Scala,
@@ -3235,12 +3223,13 @@ let classify items limit =
     /// Whether a handler drops the cause. Each source declares one unit
     /// `f`; the flag is whether `lost context` should fire.
     ///
-    /// The OPERANDLESS rows are what this table was built for. A bare
+    /// The OPERANDLESS rows are the ones this table exists for. A bare
     /// `throw;` / `raise` hands the caught error onward with its stack
-    /// intact — it is the remedy, not the defect — and it mentions the
-    /// binding nowhere only because it mentions nothing at all. The
-    /// text test read that as a fresh error, so the rule ran exactly
-    /// backwards on 34 of C#'s 36 gold findings and 11 of Python's 20.
+    /// intact, so it is the remedy rather than the defect, and it
+    /// mentions the binding nowhere only because it mentions nothing at
+    /// all. A text test alone reads that as a fresh error and runs the
+    /// rule backwards on 34 of C#'s 36 gold findings and 11 of
+    /// Python's 20.
     const RERAISE: &[(Lang, &str, &str, u16)] = &[
         (
             Lang::CSharp,
@@ -3304,14 +3293,14 @@ let classify items limit =
 
     /// What a single literal argument to an assertion means. Each
     /// source declares one unit `f`, and the flag is whether it counts
-    /// as vacuous — an assertion green whatever the code did.
+    /// as vacuous: an assertion green whatever the code did.
     ///
-    /// The three FALSE rows are the metric's three measured false
-    /// positives: a fluent assertion whose subject is the receiver and
-    /// whose literal is the expected answer (2,116 of 3,116 gold
-    /// findings, and the whole reason C# read 24% of its test units), a
-    /// project helper whose literal is DATA, and a curried assertion
-    /// whose first application is only its subject.
+    /// The FALSE rows are the metric's three measured false positives:
+    /// a fluent assertion whose subject is the receiver and whose
+    /// literal is the expected answer (2,116 of 3,116 gold findings,
+    /// and the reason C# read 24% of its test units), a project helper
+    /// whose literal is DATA, and a curried assertion whose first
+    /// application is only its subject.
     const LITERAL_ASSERT: &[(Lang, &str, &str, bool)] = &[
         (
             Lang::CSharp,
@@ -3370,8 +3359,9 @@ let classify items limit =
     /// Echidna reads a contract whose `assert` IS the property under
     /// test: that assert failing is the finding the fuzzer exists to
     /// produce. All five gold Solidity `unwraps` findings sat in one
-    /// crytic/echidna directory and every one was an invariant, so the
-    /// cell's whole reading was a path the test predicate did not know.
+    /// crytic/echidna directory and every one was an invariant, so every
+    /// reading in that cell came from a path the test predicate did not
+    /// know.
     #[test]
     fn a_fuzz_harness_is_test_code_wherever_it_is_filed() {
         let harness = "contract E {\n function check_invariant() public {\n assert(a < b);\n assert(c < d);\n assert(e < f);\n }\n}\n";
@@ -3401,12 +3391,11 @@ let classify items limit =
 
     #[test]
     fn a_member_kind_is_a_method_wherever_the_parse_left_it() {
-        // The ancestor walk is only as good as the parse. All three
-        // grammars below accept a member declaration sitting directly
-        // in a namespace, a package or a file — without an error node,
-        // so nothing downstream can see that the type went missing —
-        // and that is precisely what a class body the parser gave up
-        // inside leaves behind.
+        // The ancestor walk is only as good as the parse. The grammars
+        // below accept a member declaration sitting directly in a
+        // namespace, a package or a file, and without an error node, so
+        // nothing downstream can see that the type went missing. That is
+        // what a class body the parser gave up inside leaves behind.
         let orphans: &[(Lang, &str, &str)] = &[
             (
                 Lang::CSharp,
@@ -3465,7 +3454,7 @@ let classify items limit =
     #[test]
     fn a_re_export_is_an_import() {
         // A barrel file states its dependencies with `export ... from`
-        // and nothing else. Reading only `import` left immer's
+        // and nothing else. Reading only `import` leaves immer's
         // internal.ts with eleven re-exports and no edges at all, so
         // the eight modules it fronts read as orphans and the whole
         // repository as 91% deletable.
@@ -3499,11 +3488,11 @@ let classify items limit =
 
     #[test]
     fn a_swift_import_names_a_module_and_nothing_else() {
-        // The target was the declaration's raw text with `import`
-        // trimmed off the front, so an attribute or a declaration kind
-        // rode along into it: `@testable import NIOPosix` 306 times
-        // and `import struct Foundation.Data` 217 across gold Swift,
-        // neither of which can ever name anything.
+        // Trimming `import` off the declaration's raw text lets an
+        // attribute or a declaration kind ride along into the target:
+        // `@testable import NIOPosix` 306 times and `import struct
+        // Foundation.Data` 217 across gold Swift, neither of which can
+        // ever name anything.
         let f = facts_at(
             Lang::Swift,
             "Sources/App/main.swift",
@@ -3522,8 +3511,7 @@ let classify items limit =
     fn an_autoload_is_a_deferred_require() {
         // `autoload :Base, 'rack/protection/base'` loads the file when
         // the constant is first touched, and rack-protection states 18
-        // of its dependencies exactly that way. The pack's own doc
-        // comment claimed the form; `requires` never matched it.
+        // of its dependencies that way.
         let f = facts_at(
             Lang::Ruby,
             "protection.rb",
@@ -3540,9 +3528,9 @@ let classify items limit =
     #[test]
     fn a_guarded_require_is_still_a_require() {
         // A module that tolerates a missing dependency writes
-        // `pcall(require, "x")`. The callee is pcall, so the pack read
-        // an ordinary call and 132 of these across gold Lua emitted no
-        // edge — while `pcall` around anything else stays a call.
+        // `pcall(require, "x")`. The callee is pcall, so reading it as
+        // an ordinary call emits no edge for 132 of these across gold
+        // Lua, while `pcall` around anything else stays a call.
         let f = facts_at(
             Lang::Lua,
             "m.lua",
@@ -3558,8 +3546,8 @@ let classify items limit =
 
     #[test]
     fn a_dot_h_is_read_as_the_dialect_it_is_written_in() {
-        // Reading every `.h` as C dropped a third of every C++ repository
-        // as unparseable — headers are where C++ keeps its classes.
+        // Reading every `.h` as C drops a third of every C++ repository
+        // as unparseable: headers are where C++ keeps its classes.
         // Reading every `.h` as C++ parses fine and then files musl's 655
         // headers under `cpp`, which calibrates one language on another.
         // So the text decides, on four line-anchored spellings.
@@ -3603,8 +3591,7 @@ let classify items limit =
         }
         // CUDA goes through the same reader, and a comment mention must
         // not vote: "never call __device__ code from here" is a sentence
-        // a HOST file writes about the boundary it sits on. The first
-        // version of the sniff read it as a kernel.
+        // a HOST file writes about the boundary it sits on.
         assert_eq!(
             Lang::of_source(
                 std::path::Path::new("disp.cpp"),
@@ -3627,7 +3614,8 @@ let classify items limit =
     fn every_pack_name_resolves_in_its_grammar() {
         // The Zig @import lesson: an unmapped kind name silently zeroes a
         // metric, calibration then pins that zero, and the zero-guard
-        // skips it — invisible decay. A grammar bump must fail HERE.
+        // skips it, which is decay nothing can see. A grammar bump must
+        // fail HERE.
         let mut broken = Vec::new();
         for lang in super::LANGS {
             for name in lang.pack().unresolved() {
@@ -3697,9 +3685,9 @@ fn beta(items: Vec<i64>) -> i64 {
 
     #[test]
     fn typescripts_two_module_systems_are_read_and_their_declarations_are_sinks() {
-        // 113 gold files were never opened at all: their imports went
-        // uncounted and their content unmeasured, so the corpus's true
-        // TypeScript baseline was never the one being reported.
+        // Without these extensions 113 gold files are never opened at
+        // all: their imports go uncounted and their content unmeasured,
+        // so the corpus's TypeScript baseline is not the one reported.
         for ext in ["ts", "mts", "cts", "tsx"] {
             let path = format!("build/esbuild.{ext}");
             assert_eq!(
@@ -3712,7 +3700,7 @@ fn beta(items: Vec<i64>) -> i64 {
             );
         }
         // A declaration file states a shape and declares no value, so
-        // no specifier can ever bind it — `import './x.d.mts'` is not
+        // no specifier can ever bind it: `import './x.d.mts'` is not
         // how a `.d.mts` is reached, and gold's one instance
         // (vscode/build/codex/generate-protocol.d.mts) has no fan-in
         // because check-protocol-sync.ts imports the implementation

@@ -9,7 +9,7 @@
 //! This mode looks anyway, and reports only what MATTERS about code you
 //! cannot change: credentials compiled into it, constructs where the
 //! text stops predicting the run, type-checker suppressions, how much
-//! of it there is — and logic it shares with your own tree, which is
+//! of it there is, and logic it shares with your own tree, which is
 //! either a vendored copy of your code or your code copied out of it.
 //!
 //! Every unit-shape metric is deliberately absent. A dependency's
@@ -46,7 +46,7 @@ const SITES: usize = 12;
 
 /// Shared mass below which two trees written by different people
 /// coinciding is likelier than one copying the other. Higher than the
-/// within-tree clone bar for exactly that reason.
+/// within-tree clone bar for that reason.
 const MIN_STRADDLE_MASS: u32 = 48;
 
 /// What a dependency package contributes. Volume is the honest part of
@@ -58,7 +58,7 @@ struct Pkg {
     secrets: u32,
     spooky: u32,
     suppressions: u32,
-    /// Files too garbled (or too deep — minified bundles) to measure.
+    /// Files too garbled or too deep (minified bundles) to measure.
     unmeasurable: u32,
 }
 
@@ -190,7 +190,7 @@ fn scan(files: &[PathBuf]) -> Scanned {
 
 /// Logic present in BOTH trees: a vendored copy of your code, or your
 /// code copied out of a dependency. Either way it is a maintenance
-/// obligation nobody declared — the dependency will not carry your
+/// obligation nobody declared: the dependency will not carry your
 /// fixes, and your tree will not carry its.
 struct Straddle {
     mass: u32,
@@ -262,8 +262,8 @@ fn collect_straddles(f: &FileFacts, prints: &HashMap<u64, Print>, into: &mut Vec
 }
 
 /// Every analyzable file inside a dependency directory. The walk
-/// deliberately ignores .gitignore — a dependency tree is ignored by
-/// definition, which is exactly why nothing ever looks at it.
+/// deliberately ignores .gitignore: a dependency tree is ignored by
+/// definition, which is why nothing ever looks at it.
 fn dep_files(root: &Path) -> Vec<PathBuf> {
     let mut walker = ignore::WalkBuilder::new(root);
     walker
@@ -290,8 +290,8 @@ fn dep_files(root: &Path) -> Vec<PathBuf> {
 /// directory on the path wins, so `node_modules/a/node_modules/b`
 /// belongs to b. An npm scope carries two components (`@scope/pkg`),
 /// and Go's vendor tree is domain-qualified, so a dotted first
-/// component takes three (`github.com/org/repo`) — the same evidence
-/// the Go import resolver reads.
+/// component takes three (`github.com/org/repo`). The Go import
+/// resolver reads the same evidence.
 fn package_of(path: &Path) -> Option<String> {
     let parts: Vec<&str> = path
         .components()
@@ -443,8 +443,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("node_modules/left-pad")).unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
-        // node_modules is ignored by convention — which is exactly why
-        // nothing ever looks inside it.
+        // node_modules is ignored by convention, which is why nothing
+        // ever looks inside it.
         std::fs::write(dir.join(".gitignore"), "node_modules\n").unwrap();
         std::fs::write(
             dir.join("node_modules/left-pad/index.js"),

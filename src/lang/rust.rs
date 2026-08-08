@@ -45,9 +45,9 @@ const DEF_SITES: &[(&str, &str)] = &[
     ("let_declaration", "pattern"),
     ("for_expression", "pattern"),
 ];
-/// `x = ...` on a `mut` binding. A shadowing `let x` is a NEW binding —
+/// `x = ...` on a `mut` binding. A shadowing `let x` is a NEW binding,
 /// the idiomatic remedy, and scope-blind judging would flag sibling
-/// blocks — and `compound_assignment_expr` is a collecting update.
+/// blocks. `compound_assignment_expr` is a collecting update.
 const REASSIGNS: &[(&str, &str)] = &[("assignment_expression", "left")];
 const ATTR: (&str, &str) = ("field_expression", "value");
 
@@ -107,13 +107,13 @@ pub fn pack() -> Pack {
         is_test_code,
         // `/test/` as well as `/tests/`. Cargo reserves the plural, so a
         // Rust file under the singular is one a project of some OTHER
-        // language keeps as test material -- and all four in gold are:
-        // three `vscode-colorize-tests/test/colorize-fixtures/*.rs`
+        // language keeps as test material. All four in gold are: three
+        // `vscode-colorize-tests/test/colorize-fixtures/*.rs`
         // syntax-highlighting samples and one copilot parser fixture.
         // `find -name '*.rs' -path '*/test/*'` over all 22 corpora
-        // returns those four and nothing else, so the rule provably
-        // cannot reach a shipping crate here. The C, Ruby and Lua packs
-        // already spell both; this closes the inconsistency. 4 orphans.
+        // returns those four and nothing else, so the rule cannot reach
+        // a shipping crate here. The C, Ruby and Lua packs already
+        // spell both. 4 orphans.
         test_path: |p| p.contains("/tests/") || p.contains("/test/") || p.ends_with("_test.rs"),
         asserty: |node, src| {
             node.child_by_field_name("macro")
@@ -137,14 +137,14 @@ pub fn pack() -> Pack {
             "attribute_item",
             "enum_variant",
         ],
-        // `let password = "..."` — the secrets anchor. (Magic-number
+        // `let password = "..."`: the secrets anchor. (Magic-number
         // SCREAMING exemption reads left/name fields, which
         // let_declaration lacks, so that check is untouched.)
         assign_kinds: &["let_declaration"],
     }
 }
 
-/// A trait's width is its method count — signatures and defaulted
+/// A trait's width is its method count: signatures and defaulted
 /// bodies alike, since an implementer answers to both. Associated
 /// types and consts are not methods and do not count.
 fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
@@ -171,9 +171,9 @@ fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
 }
 
 /// A declared tuple return widens the result: `-> (A, B, C)` is 3, and
-/// so is `-> Result<(A, B, C), E>` — the fallible wrapper is not one of
-/// the values a caller destructures. One level only: past that the
-/// nesting is a type to resolve, not a shape to read.
+/// so is `-> Result<(A, B, C), E>`, since the fallible wrapper is not
+/// one of the values a caller destructures. One level only: past that
+/// the nesting is a type to resolve, not a shape to read.
 fn return_arity(node: Node, src: &[u8]) -> u16 {
     match node.child_by_field_name("return_type") {
         Some(t) => type_arity(t, src),
@@ -212,9 +212,9 @@ fn type_arity(t: Node, src: &[u8]) -> u16 {
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let mut out = Vec::new();
     // `mod x;` IS the dependency here. It pulls x.rs into the module
-    // tree, and `x::run()` afterwards needs no `use` at all — so a
-    // graph built from `use` alone called 45 of this repository's 60
-    // files orphans, including every mode `main` dispatches to.
+    // tree, and `x::run()` afterwards needs no `use` at all. A graph
+    // built from `use` alone calls 45 of this repository's 60 files
+    // orphans, including every mode `main` dispatches to.
     //
     // Only the DECLARATION form: an inline `mod tests { .. }` is this
     // file's own text rather than an edge to another file, and a
@@ -234,7 +234,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
         // `#[path = "disabled.rs"] mod imp;` names a FILE instead, and
         // the module's own name says nothing about which. ripgrep's
         // crates/core/index declares enabled.rs and disabled.rs that
-        // way and neither had an importer.
+        // way, and without the attribute neither has an importer.
         //
         // A raw identifier is the module `match`, not `r#match`:
         // regex-cli's cmd/find declares `mod r#match;` and its
@@ -259,7 +259,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 }
 
 /// Imports inside a `#[cfg(test)]` module are test scaffolding living in
-/// a production file — they must not become architecture edges.
+/// a production file. They must not become architecture edges.
 fn in_cfg_test_mod(node: Node, src: &[u8]) -> bool {
     let mut anc = node.parent();
     while let Some(a) = anc {
@@ -316,8 +316,8 @@ fn preceding_attr_path<'a>(item: Node, src: &'a [u8]) -> Option<&'a str> {
 
 /// `#[ignore]`, bare or with a reason. The attribute must LEAD with
 /// it: `#[cfg_attr(not(panic = "unwind"), ignore)]` is a conditional
-/// ignore, which is stated judgment — the test runs wherever the
-/// predicate is false — and rayon alone carries dozens of them.
+/// ignore, which is stated judgment, since the test runs wherever the
+/// predicate is false. rayon alone carries dozens of them.
 fn has_bare_ignore(item: Node, src: &[u8]) -> bool {
     let mut prev = item.prev_named_sibling();
     while let Some(p) = prev {
@@ -394,9 +394,9 @@ fn use_edges(node: Node, prefix: &str, src: &[u8], out: &mut Vec<super::ImportIn
     }
 }
 
-/// `.unwrap()` / `.expect()` and the panicking macros — panics where
-/// errors belonged (Rust API guidelines). `unreachable!` stays exempt:
-/// it documents an invariant, not an error path.
+/// `.unwrap()` / `.expect()` and the panicking macros: panics where
+/// errors belong (Rust API guidelines). `unreachable!` stays exempt.
+/// It documents an invariant, not an error path.
 fn panicky(call: Node, src: &[u8]) -> bool {
     if call.kind() == "macro_invocation" {
         return call
@@ -412,7 +412,7 @@ fn panicky(call: Node, src: &[u8]) -> bool {
 }
 
 /// An attribute that MAKES this function a test: `#[test]`,
-/// `#[tokio::test]`, `#[rstest]`. `#[cfg(test)]` is excluded — it
+/// `#[tokio::test]`, `#[rstest]`. `#[cfg(test)]` is excluded, since it
 /// compiles code for tests without making the code a test.
 fn declares_test(node: Node, src: &[u8]) -> bool {
     let mut prev = node.prev_named_sibling();
@@ -434,14 +434,14 @@ fn declares_test(node: Node, src: &[u8]) -> bool {
 
 /// Test code by construction, judged by no test-quality metric: a
 /// fixture builder inside a `#[cfg(test)] mod` carries no attribute of
-/// its own, and judging it as a lazy assertless test was 44 findings
-/// of pure noise on this very repository.
+/// its own, and judging it as a lazy assertless test yields 44 noise
+/// findings on this repository.
 fn is_test_code(node: Node, src: &[u8]) -> bool {
     preceding_attr_contains(node, src, "test") || in_cfg_test_mod(node, src)
 }
 
-/// `transmute` reinterprets memory behind the type system's back — the
-/// one call where the text reliably stops predicting the run.
+/// `transmute` reinterprets memory behind the type system's back. It is
+/// the one call where the source text stops predicting the run.
 fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
     sem == Sem::Call
         && node
@@ -490,7 +490,7 @@ fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// Rust has no `elif` kind: `else if` parses as `else_clause(if_expression)`.
-/// Normalize to the chain shape Python gives us natively — the wrapper clause
+/// Normalize to the chain shape Python gives us natively: the wrapper clause
 /// turns transparent and the inner `if` becomes a flat `ElseIf`.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
@@ -519,7 +519,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
             type_name: field_text_is(node, "type", src).unwrap_or("").into(),
             // `fn f((a, b): (u8, u8))`. `mut x` wears its modifier as a
             // SIBLING and `&x` binds one name behind a sigil, so
-            // neither is a shape — only these four bind by one.
+            // neither is a shape; only these four bind by one.
             destructured: node.child_by_field_name("pattern").is_some_and(|p| {
                 matches!(
                     p.kind(),
@@ -589,8 +589,9 @@ mod tests {
         ));
         assert!(is_test("/regex/tests/suite.rs"));
         assert!(is_test("/src/parser_test.rs"));
-        // A crate's own source is not test material because a directory
-        // three levels up was named `latest`.
+        // A crate's own source is not test material: neither path holds
+        // a `test` or `tests` segment, and `testutil` only contains the
+        // word.
         assert!(!is_test("/rayon/src/iter/mod.rs"));
         assert!(!is_test("/ripgrep/crates/testutil/src/lib.rs"));
     }

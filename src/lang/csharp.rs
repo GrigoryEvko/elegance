@@ -1,10 +1,10 @@
 //! C#: Java's declarations plus the escape hatches Java refused.
 //!
-//! Two things separate it from the pack it otherwise resembles. `async`
-//! and `await` are syntax rather than library, so `blocking async` and
-//! `dropped tasks` are live here and dead in Java — a `.Result` on a Task
-//! is the deadlock this codebase names. And a preprocessor survives, so
-//! `#if` is real control flow the reader must follow, exactly as in C.
+//! `async` and `await` are syntax rather than library, so `blocking
+//! async` and `dropped tasks` are live here and dead in Java: a
+//! `.Result` on a Task is the deadlock this codebase names. A
+//! preprocessor survives too, so `#if` is real control flow the reader
+//! must follow, as in C.
 
 use tree_sitter::Node;
 
@@ -76,8 +76,8 @@ const KINDS: &[(&str, Sem)] = &[
 ];
 
 const DEF_SITES: &[(&str, &str)] = &[
-    // A local's declarator is its birth. Without it the live map held
-    // no definition row for any local, so the repurposing check had
+    // A local's declarator is its birth. Without it the live map holds
+    // no definition row for any local, so the repurposing check has
     // nothing to compare a rewrite against.
     ("variable_declarator", "name"),
     ("method_declaration", "name"),
@@ -181,10 +181,10 @@ const TEST_WORDS: &[&str] = &[
 /// A C# test lives in a project of its own, and the project DIRECTORY
 /// carries the word: `src/UnitTests`, `Src/Newtonsoft.Json.Tests`,
 /// `test/Polly.Specs`, `benchmarks/Dapper.Tests.Performance`. Matching
-/// `/test` and a `Tests.cs` suffix caught 595 of the gold corpus's 1668
-/// test-tree files, so the C# module population read 2032 where the
-/// production code is 965 — over half of it test code, and nearly all
-/// of that orphaned, since nothing imports a test.
+/// `/test` and a `Tests.cs` suffix catches 595 of the gold corpus's 1668
+/// test-tree files, so the C# module population reads 2032 where the
+/// production code is 965: over half of it test code, and nearly all of
+/// that orphaned, since nothing imports a test.
 fn test_path(path: &str) -> bool {
     path.split('/').any(|segment| {
         segment
@@ -256,14 +256,14 @@ const TYPE_LISTS: &[&str] = &[
 /// directives resolved 23 internal edges, and 2025 of 2032 modules read
 /// as orphans with 99.8% of the corpus deletable.
 ///
-/// The type is what names another file, and a C# file carries the name
-/// of the type it declares: 907 of the gold corpus's 962 production
-/// files do. So a type reference resolves by file stem, the way a Rust
+/// The type names another file, and a C# file carries the name of the
+/// type it declares: 907 of the gold corpus's 962 production files do.
+/// So a type reference resolves by file stem, the way a Rust
 /// `use crate::Symbol` resolves by defining module.
 ///
 /// It is a `Mention`, not an import. The file states no dependency on
-/// anything — the compiler finds `Policy` across the whole assembly and
-/// nothing in the source says where it came from — so the reference
+/// anything: the compiler finds `Policy` across the whole assembly and
+/// nothing in the source says where it came from. The reference
 /// supplies an EDGE and never a tally entry. Counting these as imports
 /// would put `imports_external` at 23815 against 7009 using directives,
 /// where every other language reports modules from outside rather than
@@ -272,8 +272,8 @@ const TYPE_LISTS: &[&str] = &[
 /// A reference is a type when the grammar puts it in a type position:
 /// the `type` field of any of the 37 kinds that have one, the `returns`
 /// field of a signature, an entry of a type list, or an attribute name.
-/// Outside a type position the qualifier of a member access counts too
-/// — `ReflectionHelper.GetMap(x)` reaches another file's static member
+/// Outside a type position the qualifier of a member access counts too:
+/// `ReflectionHelper.GetMap(x)` reaches another file's static member
 /// without naming a type anywhere else.
 fn type_references(root: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let mut uses = Uses::default();
@@ -314,8 +314,8 @@ struct Uses {
 impl Uses {
     /// One type reference, if the name can be a type at all. A lowercase
     /// name is a local or a member; `T`, `TKey`, `TResult` are the
-    /// generic parameters the .NET naming guidelines spell exactly that
-    /// way, and a declared type never does.
+    /// generic parameters the .NET naming guidelines spell that way,
+    /// and a declared type never does.
     fn take(&mut self, node: Node, src: &[u8], reach: super::Reach) {
         let Ok(text) = node.utf8_text(src) else {
             return;
@@ -355,9 +355,10 @@ fn names_a_type<'t>(node: Node<'t>, in_type: bool) -> Option<Node<'t>> {
 ///
 /// `CollectionPropertyRule<T, TElement>.Create(...)` is a static call on
 /// a generic type, and the grammar spells the qualifier `generic_name`
-/// rather than `identifier` — so the only two references FluentValidation
-/// makes to `CollectionPropertyRule.cs` and `IncludeRule.cs`, both on
-/// AbstractValidator.cs, named nothing.
+/// rather than `identifier`. Requiring a bare `identifier` there names
+/// nothing for the only two references FluentValidation makes to
+/// `CollectionPropertyRule.cs` and `IncludeRule.cs`, both on
+/// AbstractValidator.cs.
 fn qualifying_type<'t>(access: Node<'t>) -> Option<Node<'t>> {
     bare_name(access.child_by_field_name("expression")?)
 }
@@ -399,22 +400,22 @@ fn attribute_type(node: Node, src: &[u8]) -> Option<Box<str>> {
 /// is spelled nowhere, so the member is the only name the call writes.
 ///
 /// A receiver that is a bare capitalized IDENTIFIER is a type, and the
-/// qualifier arm has already taken it — `Constants.OptionsValidation`
+/// qualifier arm has already taken it: `Constants.OptionsValidation`
 /// states a dependency on Constants and not on a namesake of the field.
 /// Anything else is a value, INCLUDING a fluent chain that started at a
 /// type: `Policy.Handle<T>().FallbackAsync(...)` is a call on the
 /// builder the first call returned, and reading the whole chain's text
-/// for a leading capital lost every extension method Polly's tests
+/// for a leading capital loses every extension method Polly's tests
 /// reach that way.
 ///
 /// The member is unwrapped the way `qualifying_type` unwraps a generic
-/// qualifier — a GENERIC extension call named nothing otherwise. Dapper
+/// qualifier; otherwise a GENERIC extension call names nothing. Dapper
 /// writes `....CastResult<DbDataReader, IDataReader>()` at
 /// SqlMapper.Async.cs:1098, :1124 and :1146 against `Dapper/
 /// Extensions.cs`, and Polly's specs write
 /// `nonGenericPolicy.AsPolicy<ResultClass>()` against
-/// `ISyncPolicyExtensions.cs` — a file this hunt had reported as
-/// genuinely dead on the strength of the unfixed reading.
+/// `ISyncPolicyExtensions.cs`, a file that reads as dead without the
+/// unwrapping.
 fn called_member<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let access = call.child_by_field_name("function")?;
     if access.kind() != "member_access_expression" {
@@ -440,7 +441,7 @@ fn sealed(kind: &str, in_type: bool) -> bool {
 
 /// The children this node puts in a type position: a declaration's
 /// `type`, a signature's `returns`, an attribute's name, and the right
-/// of `as`/`is` — which the grammar fields as `right` rather than
+/// of `as`/`is`, which the grammar fields as `right` rather than
 /// `type`, so `x as Policy` would otherwise name nothing. Every child
 /// of a type list is one.
 fn type_positions(node: Node) -> Vec<usize> {
@@ -466,9 +467,9 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     // `params string[] names` gets NO parameter node of its own: the
     // grammar inlines the type and the name into the parameter list as
     // siblings of the other parameters, with the keyword itself
-    // anonymous. So a bare identifier THERE is a variadic parameter,
-    // and without this it was missing from every C# signature that has
-    // one — a doc naming it read as naming something undeclared.
+    // anonymous. So a bare identifier THERE is a variadic parameter.
+    // Without this it is missing from every C# signature that has one,
+    // and a doc naming it reads as naming something undeclared.
     if node.kind() == "identifier" && node.parent().is_some_and(|p| p.kind() == "parameter_list") {
         return Some(ParamInfo {
             name: node.utf8_text(src).unwrap_or("").into(),
@@ -483,9 +484,10 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     }
     // `this PolicyBuilder policyBuilder` is the RECEIVER of an
     // extension method, not an argument: `builder.CircuitBreaker(n, t)`
-    // passes two. Counting it made every extension method read one
-    // parameter wider than it is, and it is what says the method is
-    // reached through a value rather than through its declaring class.
+    // passes two. Counting it makes every extension method read one
+    // parameter wider than it is, and the receiver is what says the
+    // method is reached through a value rather than through its
+    // declaring class.
     let receiver = node
         .utf8_text(src)
         .unwrap_or("")
@@ -547,9 +549,9 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 /// `catch (Exception)` reaches everything the runtime raises, and a
-/// bare `catch` writes the same net with less down. The type is matched
-/// exactly, as a root name: `catch (ArgumentException)` contained the
-/// substring the first version tested for and read as broad.
+/// bare `catch` writes the same net with less written down. The type is
+/// matched exactly, as a root name: a substring test would read
+/// `catch (ArgumentException)` as broad.
 fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "catch_clause" {
         return None;
@@ -595,8 +597,9 @@ fn panicky(call: Node, src: &[u8]) -> bool {
 /// preserves it and is the correct form.
 ///
 /// Asked of the CATCH, not of the throw: the core consults this hook on
-/// handler nodes, and a `throw` is a jump it never reaches — which left
-/// the check dead for the language it was written for.
+/// handler nodes, and a `throw` is a jump it never reaches, so asking
+/// of the throw would leave the check dead for the language it was
+/// written for.
 fn loses_context(node: Node, src: &[u8]) -> bool {
     if node.kind() != "catch_clause" {
         return false;
@@ -646,8 +649,8 @@ fn attrs<'a>(node: Node, src: &'a [u8]) -> Option<&'a str> {
 
 /// `Assert.Equal`, `Assert.True`, `value.Should().Be(...)`: every
 /// assertion library here names the assertion on the RECEIVER, so
-/// reading the trailing member alone (`Equal`, `True`) found none of
-/// them and the whole assertion family read zero.
+/// reading the trailing member alone (`Equal`, `True`) finds none of
+/// them and the assertion family reads zero.
 fn asserty(call: Node, src: &[u8]) -> bool {
     let Some(f) = call.child_by_field_name("function") else {
         return false;
@@ -718,8 +721,9 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     }
 }
 
-/// `override` and `virtual` both mark a member of the inheritance
-/// contract: one supplies the default, the other replaces it.
+/// `override`, `virtual` and `abstract` all mark a member of the
+/// inheritance contract: `virtual` supplies a default, `override`
+/// replaces it, `abstract` demands one.
 fn is_override(node: Node, src: &[u8]) -> bool {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
@@ -755,18 +759,17 @@ mod tests {
         // FluentValidation/src/FluentValidation/AbstractValidator.cs:226
         // writes `CollectionPropertyRule<T, TElement>.Create(...)` and
         // :347 `IncludeRule<T>.Create(...)`. Those are the ONLY
-        // references either file receives, and the qualifier arm
-        // required a bare `identifier`, so both named nothing — the
+        // references either file receives, and a qualifier arm
+        // requiring a bare `identifier` names nothing for them: the
         // wrapper's own text is `CollectionPropertyRule<T, TElement>`,
         // which no file answers to.
         //
-        // The member side carried the same bug. Dapper writes
+        // The member side needs the same unwrapping. Dapper writes
         // `....CastResult<DbDataReader, IDataReader>()` at
         // SqlMapper.Async.cs:1098 against `Dapper/Extensions.cs`, and
         // Polly's specs `nonGenericPolicy.AsPolicy<ResultClass>()`
-        // against `ISyncPolicyExtensions.cs` — a file this hunt first
-        // reported as genuinely dead on the strength of the unfixed
-        // reading, and which its own suite calls twice.
+        // against `ISyncPolicyExtensions.cs`, a file that reads as dead
+        // without it although its own suite calls it twice.
         let src = "class C { void M(System.Data.IDataReader r) {\n\
                      CollectionPropertyRule<T, TElement>.Create(x);\n\
                      r.CastResult<DbDataReader, IDataReader>();\n\
@@ -774,8 +777,7 @@ mod tests {
         assert!(named(src, Reach::Mention).contains(&"CollectionPropertyRule".to_string()));
         assert!(named(src, Reach::Member).contains(&"CastResult".to_string()));
         // `T`, `TKey`, `TResult` are the generic PARAMETERS the .NET
-        // naming guidelines spell exactly that way, and no declared type
-        // does.
+        // naming guidelines spell that way, and no declared type does.
         for name in named(src, Reach::Mention) {
             assert_ne!(name, "TElement");
         }
@@ -788,8 +790,8 @@ mod tests {
         // forty times over against `Fallback/AsyncFallbackSyntax.cs`,
         // which declares `FallbackAsync` as an extension on
         // PolicyBuilder. Reading the whole chain's TEXT for a leading
-        // capital saw `Policy...` and refused it, losing every extension
-        // method reached through a builder.
+        // capital sees `Policy...` and refuses it, losing every
+        // extension method reached through a builder.
         let src = "class C { void M() {\n\
                      Policy.Handle<E>().FallbackAsync(a);\n\
                      Constants.Check(b);\n\
@@ -809,8 +811,8 @@ mod tests {
         // NullableAttributes.cs:71 declares `internal sealed class
         // NotNullWhenAttribute`. Counted across production files:
         // DynamicallyAccessedMembers 22 uses, NotNullWhen 20,
-        // UnconditionalSuppressMessage 19 — every one against a file
-        // that read as an orphan.
+        // UnconditionalSuppressMessage 19, every one against a file that
+        // reads as an orphan without the suffix.
         let src = "class C { [NotNullWhen(true)] [SerializableAttribute] void M() {} }\n";
         let seen = named(src, Reach::Mention);
         assert!(seen.contains(&"NotNullWhenAttribute".to_string()));
@@ -824,9 +826,9 @@ mod tests {
         // CircuitBreakerSyntax.cs:26 declares `CircuitBreaker(this
         // PolicyBuilder policyBuilder, int, TimeSpan)` and
         // CircuitBreakerTResultSyntax.cs:28 calls
-        // `policyBuilder.CircuitBreaker(...)` — the declaring class is
+        // `policyBuilder.CircuitBreaker(...)`: the declaring class is
         // spelled NOWHERE in the call, so the member name is the only
-        // handle on the file. 40 of gold C#'s 86 orphans declared
+        // handle on the file. 40 of gold C#'s 86 orphans declare
         // nothing but extension methods.
         let f = facts(
             "static class S {\n\

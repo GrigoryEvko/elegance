@@ -1,5 +1,5 @@
 //! Metric registry and measurement: pure functions over facts. Budgets are
-//! `[lo, hi]` bands — most metrics cap only the high side, comment ratio is
+//! `[lo, hi]` bands. Most metrics cap only the high side. Comment ratio is
 //! two-sided (too few comments is obscurity, too many is noise).
 
 use crate::facts::{BodyShape, CtrlFact, FileFacts, UnitFacts};
@@ -26,9 +26,9 @@ pub struct MetricDef {
     pub calib: Calib,
 }
 
-/// One-sided budgets pin to gold p99; bands to gold p05/p95; policy
-/// metrics (flag params, asserts) encode taste, not statistics — no
-/// percentile may legitimize them.
+/// One-sided budgets pin to gold p99, bands to gold p05/p95. Policy
+/// metrics (flag params, asserts) encode taste rather than statistics,
+/// and no percentile may legitimize them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Calib {
     P99,
@@ -37,7 +37,7 @@ pub enum Calib {
 }
 
 /// Effective `[lo, hi]` bands per metric. All budget checks go through
-/// this — the static table only supplies defaults.
+/// this; the static table only supplies defaults.
 #[derive(Clone, Copy, PartialEq)]
 pub struct Budgets(pub [(Option<f32>, Option<f32>); N]);
 
@@ -73,7 +73,7 @@ pub fn band_label(m: usize, (lo, hi): (Option<f32>, Option<f32>)) -> String {
 /// Per-language budgets: defaults, refined by the compiled-in gold
 /// calibration snapshot, then repo config overrides on top (uniformly
 /// across languages). One number per metric across languages is provably
-/// wrong — doc-comment culture alone shifts comment bands by 25 points.
+/// wrong: doc-comment culture alone shifts comment bands by 25 points.
 #[derive(Clone, Copy)]
 pub struct LangBudgets(pub [Budgets; crate::lang::LANGS.len()]);
 
@@ -127,17 +127,17 @@ struct CalibEntry {
 }
 
 /// The metrics rendered as coverage RATES rather than per-unit
-/// findings — each one a claim the gold corpus fails most of the time,
-/// where a wall of findings would only teach readers to scroll past.
+/// findings. Each one is a claim the gold corpus fails most of the
+/// time, where a wall of findings would only teach readers to scroll
+/// past.
 pub const RATE_METRICS: [usize; 2] = [ASSERTS, PUBLIC_DOCS];
 
 /// Does this budget rest on the gold corpus, or on nothing but the
 /// compiled-in default? Three things put a metric in the second
-/// group, and a reader deserves to tell them apart: the corpus held
-/// fewer than the 200 samples a percentile needs (Go declares 29
-/// interfaces in all of gold), the metric is a POLICY that no
-/// percentile may legitimize, or its gold p99 was zero and pinning it
-/// would gate everything the day extraction improves.
+/// group: the corpus held fewer than the 200 samples a percentile
+/// needs (Go declares 29 interfaces in all of gold), the metric is a
+/// POLICY that no percentile may legitimize, or its gold p99 was zero
+/// and pinning it would gate everything the day extraction improves.
 pub fn is_pinned(lang: crate::lang::Lang, m: usize) -> bool {
     use std::sync::OnceLock;
     type Pinned = [[bool; N]; crate::lang::LANGS.len()];
@@ -263,9 +263,10 @@ pub const METRICS: &[MetricDef] = &[
     MetricDef { name: "flag params",   rung: 3, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
     MetricDef { name: "expr depth",    rung: 1, lo: None,       hi: Some(10.0), fmt: Fmt::Int, calib: Calib::P99 },
     // Attribute chains >=3 data links (Lieberherr: only talk to friends);
-    // fluent call chains exempt, self forgives one link. Calibrated, not
-    // policy: 16% of TigerBeetle "violates" hi=0 — systems code reaches
-    // through explicit state paths, and a gate the gold fails is wrong.
+    // fluent call chains exempt, self forgives one link. Calibrated
+    // rather than policy: 16% of TigerBeetle "violates" hi=0. Systems
+    // code reaches through explicit state paths, and a gate the gold
+    // fails is wrong.
     MetricDef { name: "demeter",       rung: 1, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::P99 },
     // Double negatives, negated negative names, De Morgan candidates
     // (K&P: say what you mean).
@@ -278,7 +279,7 @@ pub const METRICS: &[MetricDef] = &[
     // Action at a distance: eval/exec, computed attrs, metaclasses,
     // transmute, mutable defaults (Dijkstra: text must predict the run).
     // Rung 3, not 1. Every remaining gold firing was adjudicated a TRUE
-    // positive — click's __import__(f"cmd_{name}"), starlette's
+    // positive: click's __import__(f"cmd_{name}"), starlette's
     // globals()[f"_{name}"] and getattr(self, handler_name), attrs'
     // eval(bytecode), vscode's eval of a source expression. The detector
     // is right and dynamic dispatch is still a legitimate design choice,
@@ -292,10 +293,10 @@ pub const METRICS: &[MetricDef] = &[
     // (Ousterhout's shallow wrapper, Fowler's Middle Man).
     //
     // Rung 4, demoted from 3, and the number is why. Three exclusions
-    // took gold from 13,474 findings to 9,470 — a declared override, a
-    // lambda, a constructor re-declaring its superclass's — and every
-    // one of them was a forward the language DEMANDED. What remains is
-    // still 4.8% of Scala's units and 2.1% of Java's, and the largest
+    // took gold from 13,474 findings to 9,470: a declared override, a
+    // lambda, a constructor re-declaring its superclass's. Every one of
+    // them was a forward the language DEMANDED. The residue is still
+    // 4.8% of Scala's units and 2.1% of Java's, and the largest
     // shape left is a type-instantiation family: http4s writes `year`,
     // `yearMonth`, `zoneOffset` each forwarding to the same encoder
     // with a different type parameter, where the TYPE is the content
@@ -305,7 +306,7 @@ pub const METRICS: &[MetricDef] = &[
     MetricDef { name: "pass-through",  rung: 4, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
     // Public **kwargs: an interface that reveals nothing about its contract.
     MetricDef { name: "kw opacity",    rung: 3, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
-    // A name with "and" in it confesses two responsibilities — temporal
+    // A name with "and" in it confesses two responsibilities: temporal
     // cohesion, the worst rung of Constantine & Yourdon's ladder.
     MetricDef { name: "and name",      rung: 4, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
     // A name built entirely from junk vocabulary carries no theory (Naur;
@@ -314,8 +315,8 @@ pub const METRICS: &[MetricDef] = &[
     // A method living in another object's data belongs on that object
     // (Fowler). Suspicion: visitors and serializers legitimately envy.
     MetricDef { name: "feature envy",  rung: 4, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
-    // Zen: errors should never pass silently — a silent handler is a
-    // violation, gated.
+    // Zen: errors should never pass silently. A silent handler is a
+    // violation, so this gates.
     MetricDef { name: "swallowed",     rung: 2, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
     // Bare/Exception-wide catches: suspicion (top-level handlers are legit).
     MetricDef { name: "broad catch",   rung: 3, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
@@ -324,25 +325,25 @@ pub const METRICS: &[MetricDef] = &[
     // The name is a contract: is_/has_ must return bool; get_ must not
     // take &mut self (Cunningham's expectation test, typed langs only).
     MetricDef { name: "lying name",    rung: 3, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
-    // Beck's first rule is "passes the tests" — a test that asserts
+    // Beck's first rule is "passes the tests". A test that asserts
     // nothing passes vacuously.
     MetricDef { name: "test asserts",  rung: 3, lo: Some(1.0),  hi: None,       fmt: Fmt::Int, calib: Calib::Policy },
     // Emitted only for complex units (cognitive >= ASSERT_WORTHY), and
     // rendered as a COVERAGE RATE, never per-unit findings: admired code
     // fails "every complex unit asserts" 89.6% of the time, and a
     // suspicion the gold corpus fails nine times in ten is a
-    // distributional fact wearing the wrong rung. No budget — the rate
-    // beside gold's rate is the entire verdict.
+    // distributional fact wearing the wrong rung. No budget: the
+    // verdict is this rate beside gold's rate.
     MetricDef { name: "asserts",       rung: 5, lo: None,  hi: None,       fmt: Fmt::Int, calib: Calib::Policy },
     // Contract docs on the public surface only (Ousterhout: interface
     // comments are part of the interface; internal coverage is vanity).
     // A rate for the same reason as `asserts`: gold fails the per-unit
     // claim 80.6% of the time, so the honest verdict is "12% documented,
-    // admired same-language reads 19%" — not 3,429 findings.
+    // admired same-language reads 19%" rather than 3,429 findings.
     MetricDef { name: "public docs",   rung: 5, lo: None,  hi: None,       fmt: Fmt::Int, calib: Calib::Policy },
     // Comments restating adjacent code (K&P: "don't just echo the code").
     // Rung 3, not 0: the gold corpus violates it in ALL EIGHT languages,
-    // and a gate the admired corpus fails is measuring taste — the same
+    // and a gate the admired corpus fails is measuring taste, the same
     // argument that moved `demeter` off Policy.
     //
     // Four precision repairs (closing-delimiter labels, first-line target
@@ -352,48 +353,50 @@ pub const METRICS: &[MetricDef] = &[
     // and Go have no `///` convention, so `/* Free the vector set object
     // */` above freeVectorSetObject() is simultaneously the only
     // documentation and a literal restatement. That is a real property of
-    // those ecosystems, which is exactly why this reports rather than
-    // gates. Promote back to rung 0 only if every language reads under 5%.
+    // those ecosystems, which is why this reports rather than gates.
+    // Promote back to rung 0 only if every language reads under 5%.
     MetricDef { name: "echo comments", rung: 3, lo: None,       hi: Some(0.0),  fmt: Fmt::Int, calib: Calib::Policy },
-    // Two-sided in principle; one-sided in practice. Gold p05 is 0% in
-    // every language — files without a single comment are ordinary in
-    // admired code — so calibration writes lo = 0.00 and the "too few
-    // comments is obscurity" flank can never fire. Kept for the day a
-    // corpus disagrees; the generated file says so at each entry.
+    // Two-sided in principle, one-sided in practice. Gold p05 is 0% in
+    // every language: files without a single comment are ordinary in
+    // admired code. Calibration therefore writes lo = 0.00, and the
+    // "too few comments is obscurity" flank can never fire. Kept for
+    // the day a corpus disagrees; the generated file says so at each
+    // entry.
     MetricDef { name: "comment ratio", rung: 3, lo: Some(0.02), hi: Some(0.60), fmt: Fmt::Pct, calib: Calib::Band },
     // A parameter with no declared type is surface a refactor cannot be
     // checked against: the moment a caller changes shape, nothing fails
     // until runtime. Emitted only where the language HAS type syntax, so
-    // JavaScript is silent rather than uniformly 100%. Calibrated, not
-    // policy — Python's own gold corpus decides what its bar is, and a
-    // gate the admired corpus fails is measuring taste.
+    // JavaScript is silent rather than uniformly 100%. Calibrated
+    // rather than policy: Python's own gold corpus decides what its bar
+    // is, and a gate the admired corpus fails is measuring taste.
     MetricDef { name: "untyped params", rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
     // Worse than untyped, because it reads as a decision: `Any`, `any`,
     // `interface{}`, `anytype`, `void *` annotate without asserting.
-    // TypeScript's `unknown` is deliberately NOT here — it is the safe
+    // TypeScript's `unknown` is deliberately absent: it is the safe
     // alternative that forces a narrowing, and flagging it would punish
     // the fix.
     MetricDef { name: "loose types",    rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
     // A cast is where the compiler stops checking and starts believing.
     // Some are unavoidable (C has no other conversion; Rust's numeric
     // `as` is idiomatic), which is why this is calibrated per language
-    // rather than decreed — the finding is a unit that casts far more
+    // rather than decreed. The finding is a unit that casts far more
     // than its own ecosystem's tail does.
     MetricDef { name: "casts",          rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
-    // Type safety asserted by comment. Policy, not percentile: unlike a
-    // cast this has no legitimate density — every one is a checker told
-    // to stop looking, with no record of what it would have said.
+    // Type safety asserted by comment. Policy rather than percentile:
+    // unlike a cast this has no legitimate density. Every one is a
+    // checker told to stop looking, with no record of what it would
+    // have said.
     //
     // Gold files carrying at least one: py 16.5%, ts 1.3%, c 0%. Python
     // is an order of magnitude above TypeScript because its ecosystem
     // types libraries it does not own, and `# type: ignore` is how a
     // stub's gaps get papered over. That is a real finding about
-    // gradually-typed Python, not a reason to soften the rule — which is
-    // why it reports at rung 3 and never gates.
+    // gradually-typed Python rather than a reason to soften the rule,
+    // which is why it reports at rung 3 and never gates.
     MetricDef { name: "suppressions",   rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
     // Adjacent parameters of the same declared type are swappable at
-    // every call site, and nothing — compiler, test, or reviewer reading
-    // the call — will notice. The remedy is a newtype per role, or a
+    // every call site, and nothing (compiler, test, or reviewer reading
+    // the call) will notice. The remedy is a newtype per role, or a
     // parameter object once the run gets long.
     //
     // Measures ADJACENCY, not totals: reordering a signature so the
@@ -402,7 +405,7 @@ pub const METRICS: &[MetricDef] = &[
     //
     // Gold p99 is 2 nearly everywhere (go 3, c 4), so the calibrated
     // budget fires at three in a row. That means the textbook
-    // `copy(src: Path, dst: Path)` does NOT fire — a run of two is
+    // `copy(src: Path, dst: Path)` does NOT fire: a run of two is
     // ubiquitous in admired code, and gating on it would be noise. The
     // corpus decides where the bar is, not the anecdote.
     MetricDef { name: "confusable",     rung: 3, lo: None, hi: Some(2.0), fmt: Fmt::Int, calib: Calib::P99 },
@@ -412,31 +415,31 @@ pub const METRICS: &[MetricDef] = &[
     // value is that span, so the finding says how far the name has to
     // carry. Loop counters stay cheap because they die quickly.
     //
-    // Rung 3, not 1. `live span` already gates at rung 2 on the very
-    // same fact; gating again here would fail a build twice for one
-    // variable, and what this adds on top — that the name is also too
-    // short — is a review comment, not a violation. It fired eight times
-    // on this repository and every one was true (`u` across 43 lines of
-    // for_each), which is exactly the sort of finding a human should
-    // read and then decide about.
+    // Rung 3, not 1. `live span` already gates at rung 2 on the same
+    // fact; gating again here would fail a build twice for one
+    // variable, and what this adds on top, that the name is also too
+    // short, is a review comment rather than a violation. It fired
+    // eight times on this repository and every one was true (`u` across
+    // 43 lines of for_each), which is the sort of finding a human
+    // should read and then decide about.
     MetricDef { name: "terse name",     rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
     // Names built from crushed vowels: `usr`, `cfg`, `mgr`, `bufr`. The
     // list is deliberately short and excludes abbreviations that have
-    // become words in their own right — id, url, http, db, io, api, cpu
-    // — because those are vocabulary, not compression.
+    // become words in their own right (id, url, http, db, io, api,
+    // cpu), because those are vocabulary rather than compression.
     MetricDef { name: "abbreviated",    rung: 0, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
     // An assertion whose subject is a literal passes whatever the code
     // under test did. Beck's first rule is "passes the tests", and a
     // test that is green by construction is not passing anything. This
-    // has no legitimate density, so it is policy rather than percentile
-    // — unlike `test asserts`, which merely counts them.
+    // has no legitimate density, so it is policy rather than
+    // percentile, unlike `test asserts`, which merely counts them.
     MetricDef { name: "vacuous asserts", rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
     // A handler that binds the error, raises a new one, and never
     // mentions the original throws away the stack that explains WHY.
     // The report then says only that something failed at the top, which
     // is the difference between a five-minute fix and an afternoon.
     // Python has `raise ... from err` (PEP 3134) and JS has `{ cause }`
-    // for exactly this; languages without exceptions read zero.
+    // for the purpose; languages without exceptions read zero.
     MetricDef { name: "lost context",   rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
     // A credential in the source is in the artifact and in the history,
     // so rotating it is a release rather than a config change. Rung 0:
@@ -445,11 +448,11 @@ pub const METRICS: &[MetricDef] = &[
     // entropy rather than trusting a credential-shaped name.
     MetricDef { name: "secrets",        rung: 0, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
     // A blocking call inside an async unit stalls the whole executor,
-    // not just its own task — the one bug where a single line silently
-    // caps a server's throughput at one request. Only the unambiguous
-    // forms count: every runtime ships its own sleep BECAUSE the
-    // standard one parks the thread, and Node's *Sync family is named
-    // after the problem.
+    // not just its own task. It is the one bug where a single line
+    // silently caps a server's throughput at one request. Only the
+    // unambiguous forms count: every runtime ships its own sleep
+    // BECAUSE the standard one parks the thread, and Node's *Sync
+    // family is named after the problem.
     MetricDef { name: "blocking async", rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
     // A spawned task whose handle is discarded: nothing can await it,
     // nothing observes its panic, and the runtime may drop it at
@@ -461,8 +464,8 @@ pub const METRICS: &[MetricDef] = &[
     // matching is most of what an ML-family type system is FOR, and a
     // wildcard opts out of it one construct at a time.
     //
-    // Calibrated, because a match over an open domain — integers, HTTP
-    // codes, bytes — needs a catch-all and always will. The finding is
+    // Calibrated, because a match over an open domain (integers, HTTP
+    // codes, bytes) needs a catch-all and always will. The finding is
     // a unit that reaches for one far more than its ecosystem does.
     MetricDef { name: "wildcard match", rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
     // A parameter that names an identity but is typed as text: any
@@ -471,26 +474,27 @@ pub const METRICS: &[MetricDef] = &[
     // unrepresentable.
     MetricDef { name: "stringly id",    rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
     // Mechanical sympathy, tier one: EXACT. Three nested loops is cubic
-    // in whatever they range over — that is arithmetic, not a guess.
+    // in whatever they range over, which is arithmetic rather than a
+    // guess.
     //
-    // Rung 3, not 2, and the distinction matters. The measurement is
-    // exact but the VERDICT is not: a matrix multiply is three loops and
-    // correct, and failing that build would be the tool being wrong
-    // about code that is right. It fired twice on this repository —
-    // surface_use at 3 and collect_clumps at 4 — and both are true;
-    // collect_clumps really does enumerate parameter subsets in
-    // quartic time, bounded only by a guard that stops at eight
-    // parameters. That is worth a human reading it, which is what
-    // rung 3 means, and is not worth stopping a build over.
+    // Rung 3, not 2. The measurement is exact but the VERDICT is not: a
+    // matrix multiply is three loops and correct, and failing that
+    // build would be the tool being wrong about code that is right. It
+    // fired twice on this repository, surface_use at 3 and
+    // collect_clumps at 4, and both are true; collect_clumps really
+    // does enumerate parameter subsets in quartic time, bounded only by
+    // a guard that stops at eight parameters. That is worth a human
+    // reading it, which is what rung 3 means, and is not worth stopping
+    // a build over.
     //
-    // What this deliberately does NOT do is judge memory access patterns
-    // or claim a loop should be vectorised. Both need types, alignment,
-    // aliasing and the target ISA; a syntax tree has none of those, and a
-    // tool that guessed would be wrong exactly where it mattered most.
+    // This deliberately does not judge memory access patterns or claim
+    // a loop should be vectorised. Both need types, alignment,
+    // aliasing and the target ISA; a syntax tree has none of those, and
+    // a tool that guessed would be wrong where it mattered most.
     MetricDef { name: "loop depth",     rung: 3, lo: None, hi: Some(2.0), fmt: Fmt::Int, calib: Calib::P99 },
     // Tier two: a NAME-based approximation, and labelled as one. Only
-    // the names that mean nothing else — to_string, to_owned, to_vec,
-    // deepcopy — each of which exists because the alternative is
+    // the names that mean nothing else (to_string, to_owned, to_vec,
+    // deepcopy), each of which exists because the alternative is
     // borrowing. One inside a loop is a copy per iteration. `clone` is
     // absent on purpose: it is often the only way to satisfy the borrow
     // checker, and flagging it would be noise.
@@ -498,14 +502,14 @@ pub const METRICS: &[MetricDef] = &[
     // A hook reached through a branch. React identifies a hook by the
     // ORDER it is called in, so the first time the condition flips,
     // every hook after it renumbers and the component reads state that
-    // belongs to a different hook — a corruption, not a style
-    // question, and the reason eslint-plugin-react-hooks exists.
+    // belongs to a different hook. That is a corruption rather than a
+    // style question, and the reason eslint-plugin-react-hooks exists.
     //
-    // Rung 2 and Policy: this has no legitimate density. It is not a
-    // percentile to calibrate but a rule the framework itself states,
-    // and admired code obeys it — gold reads 0.0%.
+    // Rung 2 and Policy: this has no legitimate density. The framework
+    // itself states the rule, so there is no percentile to calibrate,
+    // and admired code obeys it: gold reads 0.0%.
     MetricDef { name: "conditional hook", rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
-    // Four values travelling together are a struct in hiding — the
+    // Four values travelling together are a struct in hiding: the
     // `params` argument pointed at the OTHER end of the signature, and
     // the remedy is the same Introduce Parameter Object. Only languages
     // that declare multi-value results play: a JS array or an OCaml
@@ -514,21 +518,21 @@ pub const METRICS: &[MetricDef] = &[
     // rs 2, py 2, ts/tsx 1).
     //
     // Rung 3, not 2, and the reason is TS: Go and Rust DECLARE every
-    // width, so their budgets price width alone — but a TS tuple
-    // annotation is optional, so its p99 of 1 rides on how often gold
-    // annotates at all, and a declared `[value, setter]` pair is
-    // legitimate style. One rung must fit the least-certain language.
+    // width, so their budgets price width alone. A TS tuple annotation
+    // is optional, so its p99 of 1 rides on how often gold annotates at
+    // all, and a declared `[value, setter]` pair is legitimate style.
+    // One rung must fit the least-certain language.
     MetricDef { name: "returns",       rung: 3, lo: None,       hi: Some(3.0),  fmt: Fmt::Int, calib: Calib::P99 },
-    // The bigger the interface, the weaker the abstraction — Go's own
+    // The bigger the interface, the weaker the abstraction: Go's own
     // proverb, and the Interface Segregation Principle in one number.
     // An implementer owes every method whether or not any caller
     // wanted them together, so width is a tax on every implementation
     // that will ever exist. Methods only: a TS props shape is a
-    // record, and an embedded interface is composition — the cure for
-    // width, never billed as the disease.
+    // record, and an embedded interface is composition, the cure for
+    // width and never billed as the disease.
     MetricDef { name: "interface width", rung: 3, lo: None, hi: Some(12.0), fmt: Fmt::Int, calib: Calib::P99 },
     // A straight-line `x = ...` whose new value never mentions the old
-    // gives the same name a SECOND meaning — Fowler's Split Variable —
+    // gives the same name a SECOND meaning (Fowler's Split Variable),
     // and every earlier read the reader remembers is silently wrong.
     // This is the one def-use insight worth having at syntax cost:
     // what a data-flow graph would call a killed definition, judged
@@ -541,7 +545,7 @@ pub const METRICS: &[MetricDef] = &[
     // result discarded. In Python the coroutine is created and never
     // runs; in Rust the future is dropped unpolled; in TS the promise
     // floats with nobody to catch its rejection. Same-file,
-    // unambiguous-name evidence only — a cross-file callee or a name
+    // unambiguous-name evidence only: a cross-file callee or a name
     // with a sync twin is never guessed at.
     //
     // Policy, because this is a rule the runtimes themselves state
@@ -550,22 +554,22 @@ pub const METRICS: &[MetricDef] = &[
     //
     // Rung 3, DEMOTED from 2, and the reason is that nothing has ever
     // exercised it. Zero violations in 329,279 measurements across all
-    // twenty-four corpora — 26,614 Python units and 11,214 Rust in
-    // gold, 268,577 and 22,874 in the user trees — while every other
+    // twenty-four corpora (26,614 Python units and 11,214 Rust in
+    // gold, 268,577 and 22,874 in the user trees), while every other
     // language holds a declared-dead row with measured > 0. The recall
-    // seeds fire, so the rule is wired; what is unproven is that the
-    // SHAPE occurs in code anyone writes. The conjunction is very
-    // narrow — statement position, parent exactly an expression
-    // statement, result discarded, not under an await, and every
-    // same-file unit of that name async — and in practice a stray
-    // coroutine is handed to gather or create_task rather than left
-    // standing, and is cross-file more often than same-file.
+    // seeds fire, so the rule is wired. Whether the SHAPE occurs in
+    // code anyone writes is unproven. The conjunction is narrow:
+    // statement position, parent exactly an expression statement,
+    // result discarded, not under an await, and every same-file unit of
+    // that name async. In practice a stray coroutine is handed to
+    // gather or create_task rather than left standing, and is
+    // cross-file more often than same-file.
     //
     // A build gate has to be able to fail a build. This one has never
     // had the opportunity, on 1.4M measurements, so it reports until it
     // does. Promote it back the day a corpus disagrees.
     MetricDef { name: "unawaited coroutine", rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
-    // `pointless async` — an async unit that never awaits — was built,
+    // `pointless async` (an async unit that never awaits) was built,
     // measured, and REJECTED. Admired code violates it 21.6% of the
     // time in Python, 17.4% in TypeScript, 18.2% in TSX and 20.5% in
     // JavaScript: three to four times the suspicion ceiling, in every
@@ -582,7 +586,7 @@ pub const METRICS: &[MetricDef] = &[
     //
     // Same argument that turned `asserts` and `public docs` into rates
     // and moved `demeter` off Policy. Do not re-propose without new
-    // evidence — the measurement is cheap to repeat and it said no.
+    // evidence: the measurement is cheap to repeat and it said no.
     //
     // The other half of `magic numbers`: the same non-trivial string
     // written out again and again is a constant nobody named, and
@@ -596,21 +600,21 @@ pub const METRICS: &[MetricDef] = &[
     // the wrong way to wait for a result, so every flavour counts.
     MetricDef { name: "sleepy test",   rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
     // The suppression that wears a test's name: the suite still
-    // reports green and nothing records what the test would have
-    // said — a sibling of `suppressions`, where a checker was told to
+    // reports green and nothing records what the test would have said.
+    // It is a sibling of `suppressions`, where a checker was told to
     // stop looking. Unconditional skips only: `skipif(platform)` and a
     // guarded `t.Skip()` are stated judgment, and the test still runs
     // where it applies.
     MetricDef { name: "skipped tests", rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
-    // `move(x, true, false)` — the CALL-SITE complement of `flag
+    // `move(x, true, false)`: the CALL-SITE complement of `flag
     // params`, and the only version that can see a third party's
     // signature, since the declaration lives in someone else's
     // repository. Two is the threshold, not one: a lone `force` flag
     // reads fine, and two is where nothing says which is which and
-    // swapping them still type-checks. A keyword argument is exempt —
-    // naming it at the call site IS the remedy.
+    // swapping them still type-checks. A keyword argument is exempt,
+    // because naming it at the call site IS the remedy.
     MetricDef { name: "bool traps",    rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::P99 },
-    // Code someone commented out instead of deleting — which the
+    // Code someone commented out instead of deleting, which the
     // version control system was already remembering for them. Judged
     // by PARSING it: a block of two or more non-doc comment lines that
     // reads as valid source with two or more statements. Doc comments
@@ -621,37 +625,37 @@ pub const METRICS: &[MetricDef] = &[
     // methods fall into, where two are connected when they touch a
     // member in common or one calls the other. One group is cohesive;
     // more means the class is several objects sharing a name, and the
-    // remedy is Extract Class. Rung 4 is what this rung is FOR — it
-    // held only `and name` and `feature envy` before.
+    // remedy is Extract Class. Rung 4 is what this rung is FOR: class
+    // and module cohesion, beside `and name` and `feature envy`.
     //
     // Methods touching NO member are excluded: a helper that reads no
     // state is a free function living in a class, and counting it as
     // its own island would call every class with a helper incoherent.
     //
-    // The known blind spot, stated rather than hidden: a data holder
-    // with one accessor per field reads as many groups and is a
-    // legitimate design. regex's RegexTest — twelve independent
-    // fields, an accessor each — sits in the tail beside vscode's
-    // CommandCenter, which registers 192 commands in one class. Both
-    // are TRUE readings of the same number; only a person can say
-    // which one wanted fixing, which is exactly what a suspicion is.
+    // The known blind spot: a data holder with one accessor per field
+    // reads as many groups and is a legitimate design. regex's
+    // RegexTest (twelve independent fields, an accessor each) sits in
+    // the tail beside vscode's CommandCenter, which registers 192
+    // commands in one class. Both are TRUE readings of the same
+    // number; only a person can say which one wanted fixing, which is
+    // what a suspicion is.
     //
     // The default is 5, the MEDIAN of the per-language gold p99s that
-    // exist — py 3, ts 4, rs 5, php 6, java 11 — which is the same
-    // construction the doc-length defaults use and for the same reason.
-    // It used to be 1, a number no corpus chose, and eleven of the
-    // sixteen measuring languages inherited it: gold declares 45
-    // JavaScript classes in total, 18 Solidity, 14 C# and 12 CUDA, two
-    // orders under the 200 a percentile needs, so those cells never
-    // pin. At hi = 1 they read 83 to 444 violations per thousand
-    // measured classes while the five calibrated ones read 6 to 12 — a
-    // rung-4 suspicion admired code trips on a third of its Scala
-    // classes is measuring the budget, not the code.
+    // exist (py 3, ts 4, rs 5, php 6, java 11), the same construction
+    // the doc-length defaults use and for the same reason. A default of
+    // 1 is a number no corpus chose, and eleven of the sixteen
+    // measuring languages would inherit it: gold declares 45 JavaScript
+    // classes in total, 18 Solidity, 14 C# and 12 CUDA, two orders
+    // under the 200 a percentile needs, so those cells never pin. At
+    // hi = 1 they read 83 to 444 violations per thousand measured
+    // classes while the five calibrated ones read 6 to 12. A rung-4
+    // suspicion admired code trips on a third of its Scala classes is
+    // measuring the budget, not the code.
     MetricDef { name: "cohesion",      rung: 4, lo: None, hi: Some(5.0), fmt: Fmt::Int, calib: Calib::P99 },
     // An SQL statement ASSEMBLED from values rather than written: an
     // f-string, a template literal, a Sprintf. The oldest
-    // vulnerability there is, and the one whose remedy — a parameter
-    // marker — this deliberately cannot see, because a parameterized
+    // vulnerability there is, and the one whose remedy (a parameter
+    // marker) this deliberately cannot see, because a parameterized
     // query carries no interpolation at all. A fully literal query is
     // silent whatever it says.
     //
@@ -662,7 +666,7 @@ pub const METRICS: &[MetricDef] = &[
     // The same hole at a bigger sink: a command ASSEMBLED and handed
     // to a shell, where the shell will re-parse whatever was spliced
     // in. `shell=True` with a literal command is a style choice and
-    // stays silent — nothing untrusted reaches the parser — and the
+    // stays silent, since nothing untrusted reaches the parser. The
     // remedy, an argument LIST, needs no shell and carries no
     // interpolation, so the fix makes the finding disappear.
     MetricDef { name: "shelled out",   rung: 2, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
@@ -670,45 +674,44 @@ pub const METRICS: &[MetricDef] = &[
     // something: nullary, body is one bare literal, and three or more
     // lines of documentation above it.
     //
-    // The CONJUNCTION carries the whole signal. Bare content-free-ness
-    // is worthless as a measure — gold Rust runs 51 such declarations
+    // No clause of the CONJUNCTION works alone. Bare content-free-ness
+    // is worthless as a measure: gold Rust runs 51 such declarations
     // per thousand and one AI corpus runs 100, both ABOVE the corpus
-    // this was built from at 61. The doc gate is what separates: at
+    // this was built from at 61. The doc gate separates them: at
     // three lines the human rate over 512,927 declarations in twelve
     // languages is 11, and at ten lines it is 1.
     //
-    // Override points are excluded, and that exclusion is the metric.
-    // A trait default carrying nine lines of documentation is
-    // documented at length so implementors know when to replace it;
-    // counting those produced 79 false positives on admired code, and
-    // dropping them cost 6 real findings out of 3,187.
+    // Override points are excluded. A trait default carrying nine lines
+    // of documentation is documented at length so implementors know
+    // when to replace it; counting those produced 79 false positives on
+    // admired code, and dropping them cost 6 real findings out of 3,187.
     //
-    // Rung 3, DEMOTED from 2, and this is the honest reading of its own
-    // precision. Zero findings in 710,967 gold measurements across all
-    // twenty-two corpora; the user's own trees give the only live
-    // evidence at seven firings in 672,357 measurements, about one per
-    // hundred thousand. Its 1.0 precision is VACUOUS — there is no
-    // false positive on admired code because there is no positive — and
-    // its liveness rests entirely on two recall seeds. A gate that has
-    // never had the chance to fail a build is not a gate; it is a
-    // suspicion with an untested precision claim, and it should say so
-    // rather than sit among the metrics gold has adjudicated.
+    // Rung 3, DEMOTED from 2. Zero findings in 710,967 gold
+    // measurements across all twenty-two corpora; the user's own trees
+    // give the only live evidence at seven firings in 672,357
+    // measurements, about one per hundred thousand. Its 1.0 precision
+    // is VACUOUS: there is no false positive on admired code because
+    // there is no positive, and its liveness rests on two recall seeds
+    // alone. A gate that has never had the chance to fail a build is
+    // not a gate; it is a suspicion with an untested precision claim,
+    // and it should say so rather than sit among the metrics gold has
+    // adjudicated.
     MetricDef { name: "ceremony",      rung: 3, lo: None, hi: Some(0.0), fmt: Fmt::Int, calib: Calib::Policy },
-    // DOC LENGTH, one budget per comment ROLE. This is the entire
-    // wordiness signal: compression, type-token ratio and per-word
-    // semantic density were all measured against the same corpus and
-    // either tracked something else or moved under 10%, while plain
-    // length moved 2.09x under paired regeneration (r=0.47, n=193) and
-    // replicated in 36 of 43 repositories — rs 1.97x, py 2.42x, go
-    // 1.93x.
+    // DOC LENGTH, one budget per comment ROLE. Length is the only
+    // wordiness measure that survived: compression, type-token ratio
+    // and per-word semantic density were all measured against the same
+    // corpus and either tracked something else or moved under 10%,
+    // while plain length moved 2.09x under paired regeneration
+    // (r=0.47, n=193) and replicated in 36 of 43 repositories (rs
+    // 1.97x, py 2.42x, go 1.93x).
     //
     // PROSE words, not lines: `crate::prose` has already taken the
     // fenced example, the indented example, the inline spans and the
-    // URLs away, which is what lets a thirty-line builder doc measure
-    // as its four words of writing.
+    // URLs away, so a thirty-line builder doc measures as its four
+    // words of writing.
     //
     // Per ROLE, because one budget across roles is meaningless for all
-    // of them — gold means run module 93 words against trailing 1.3,
+    // of them: gold means run module 93 words against trailing 1.3,
     // with fn 41 and field 37 between. A role too thin to hold a
     // percentile inherits its language's POOLED doc p99 and
     // calibration.toml records that it borrowed.
@@ -720,8 +723,8 @@ pub const METRICS: &[MetricDef] = &[
     // metrics rather than one with an invented floor.
     //
     // Trailing comments have no budget. A trailing run is a single
-    // node by construction — the run walk stops at the line it shares
-    // with code — so its length measures line width, not writing.
+    // node by construction: the run walk stops at the line it shares
+    // with code. Its length therefore measures line width, not writing.
     //
     // The defaults below are the MEDIAN of the twenty-two per-language
     // gold p99s: a language calibration has never seen is judged by
@@ -733,16 +736,17 @@ pub const METRICS: &[MetricDef] = &[
     MetricDef { name: "field doc",     rung: 3, lo: None, hi: Some(90.0),  fmt: Fmt::Int, calib: Calib::P99 },
     MetricDef { name: "inline doc",    rung: 3, lo: None, hi: Some(80.0),  fmt: Fmt::Int, calib: Calib::P99 },
     // A parameter the documentation NAMES and the signature does not
-    // declare: renamed when the code changed, or invented. Provable
-    // without reference to any corpus — the signature is right there —
-    // and the one comment-quality question with a decidable answer.
+    // declare: renamed when the code changed, or invented. The
+    // signature is right there, so this is provable without reference
+    // to any corpus, and it is the one comment-quality question with a
+    // decidable answer.
     //
     // ONE DIRECTION. A parameter left undocumented is coverage, which
     // `public docs` measures; a documented parameter that does not
     // exist is a false statement about code.
     //
     // Rung 3, and the corpus chose it. Over 14,068 gold units that name
-    // a parameter in documentation, 254 name one that is absent —
+    // a parameter in documentation, 254 name one that is absent:
     // 1.81%, past the 1% a rung-2 gate may cost. Per language, scoped
     // as calibration scopes: cu 18.7%, c 12.5%, ts 7.4%, rb 4.8%,
     // py 2.7%, js 1.1%, php 0.2%, java 0.1%, and zero in cs, scala,
@@ -753,14 +757,14 @@ pub const METRICS: &[MetricDef] = &[
     // read on admired code was true, and a percentile here would
     // decree that one invented parameter name per function is normal.
     //
-    // The three over the suspicion ceiling were read verbatim before
-    // this shipped, and all three are stale documentation. vscode's
-    // `ComputeRecursionPoint` documents `midOriginal` against
-    // `midOriginalArr`; cutlass's `softmax` documents the fifteen
-    // parameters it had before they were packed into four tuples;
-    // cuda-samples documents a `g_idata` that was deleted, a `bigData`
-    // renamed to `trash`, and a `reference` in a function that takes
-    // `testData` — fourteen of its seventy-three documented kernels.
+    // The three over the suspicion ceiling were read verbatim, and all
+    // three are stale documentation. vscode's `ComputeRecursionPoint`
+    // documents `midOriginal` against `midOriginalArr`; cutlass's
+    // `softmax` documents the fifteen parameters it had before they
+    // were packed into four tuples; cuda-samples documents a `g_idata`
+    // that was deleted, a `bigData` renamed to `trash`, and a
+    // `reference` in a function that takes `testData`, fourteen of its
+    // seventy-three documented kernels.
     // curl and redis carry the same drift in C: `my_sha256_update`
     // documents `md` and `inlen` against `ctx` and `len`. Roughly a
     // sixth of the TypeScript firings are one vendored copy of the
@@ -770,7 +774,7 @@ pub const METRICS: &[MetricDef] = &[
     // Two exclusions carry the precision, and both are undecidability
     // rather than taste: a signature that binds by SHAPE
     // (`{ limitLength, headerName }`) has no name to compare with, and
-    // one carrying a SPLAT accepts arguments it does not name — but the
+    // one carrying a SPLAT accepts arguments it does not name. The
     // splat pardons only where the documentation named something real,
     // or `def control(self, *control)` documented as `control_codes`
     // would go free.
@@ -781,7 +785,7 @@ pub const METRICS: &[MetricDef] = &[
 /// pool the thin cells; nothing else needs the grouping.
 pub const DOC_LENGTH: [usize; 5] = [MODULE_DOC, TYPE_DOC, FN_DOC, FIELD_DOC, INLINE_DOC];
 
-/// Which length budget judges a comment run. `Trailing` has none — see
+/// Which length budget judges a comment run. `Trailing` has none; see
 /// the METRICS entry.
 fn doc_metric(role: crate::facts::CommentRole) -> Option<usize> {
     use crate::facts::CommentRole as R;
@@ -800,13 +804,13 @@ fn doc_metric(role: crate::facts::CommentRole) -> Option<usize> {
 ///
 /// Every clause is load-bearing and was measured against 512,927 human
 /// declarations. Nullary, because a function taking arguments does
-/// something with them. A bare literal body, because that is the whole
-/// of "asserts nothing". Three doc lines, because bare content-free-ness
-/// is COMMONER in admired code than in the corpus this was built from,
-/// and only the documentation separates them. Not an override point,
-/// because a trait default is documented for implementors on purpose.
-/// Not a test, because a stub returning `true` is how a fixture is
-/// written.
+/// something with them, and not a method. A bare literal body, because
+/// a bare literal is what "asserts nothing" means. Three doc lines,
+/// because bare content-free-ness is COMMONER in admired code than in
+/// the corpus this was built from, and only the documentation separates
+/// them. Not an override point, because a trait default is documented
+/// for implementors on purpose. Not a test, because a stub returning
+/// `true` is how a fixture is written.
 fn ceremony(u: &UnitFacts) -> u32 {
     let documented_nothing = u.params.is_empty()
         && !u.is_method
@@ -822,17 +826,16 @@ fn ceremony(u: &UnitFacts) -> u32 {
 /// conventionally names it, and the signature declares it in one
 /// language and hides it in the next.
 ///
-/// Stripped from BOTH sides, and that symmetry is the whole point: the
-/// first survey of this measured gold at 3.45-6.61% almost entirely
-/// because it took `self` off one side only.
+/// Stripped from BOTH sides. Stripping `self` from one side only
+/// measures gold at 3.45-6.61%, almost entirely on that asymmetry.
 const RECEIVERS: &[&str] = &["self", "cls", "this", "me"];
 
 /// Parameter names the documentation claims that the signature does not
-/// declare — renamed when the code changed, or invented.
+/// declare: renamed when the code changed, or invented.
 ///
 /// None where the comparison cannot be made, which is three cases. A
 /// doc that names no parameter claims nothing. A signature binding by
-/// SHAPE has no names to compare against — JSDoc documenting `options`
+/// SHAPE has no names to compare against: JSDoc documenting `options`
 /// against `{ limitLength, headerName }` is CORRECT, and no amount of
 /// syntax says so. And a signature carrying a SPLAT accepts arguments
 /// it does not name, so documenting them individually is right too:
@@ -848,16 +851,17 @@ fn undeclared_params(u: &UnitFacts) -> Option<u32> {
     }
     // The receiver, under whichever name declares it. `self` and `this`
     // are the language's word and nobody documents them; C# lets an
-    // extension method name its own — `this PolicyBuilder policyBuilder`
-    // — and the XML convention DOES carry a `<param name="policyBuilder">`
-    // for it. Dropping the receiver from the parameter list without
-    // pardoning its name put `cs doc param` in breach at 24% of gold,
-    // every hit a documented extension method.
+    // extension method name its own (`this PolicyBuilder
+    // policyBuilder`), and the XML convention DOES carry a
+    // `<param name="policyBuilder">` for it. Dropping the receiver from
+    // the parameter list without pardoning its name put `cs doc param`
+    // in breach at 24% of gold, every hit a documented extension
+    // method.
     let receiver = |n: &str| {
         RECEIVERS.iter().any(|r| n.eq_ignore_ascii_case(r))
             || (!u.receiver_name.is_empty() && n.eq_ignore_ascii_case(&u.receiver_name))
     };
-    // A LEADING underscore marks a binding as deliberately unused —
+    // A LEADING underscore marks a binding as deliberately unused:
     // phoenix writes `onMessage(_event, payload, _ref)` and documents
     // `event` and `ref`, which is the same parameter under the mark the
     // language reads. Only the leading one: `_ttlMs` and `max_length`
@@ -892,8 +896,9 @@ const ASSERT_WORTHY: u32 = 10;
 const TERSE_SPAN: u16 = 12;
 
 /// Crushed vowels. Deliberately short, and deliberately excluding the
-/// abbreviations that became words — id, url, http, db, io, api, cpu,
-/// max, min, len — because those are vocabulary, not compression.
+/// abbreviations that became words (id, url, http, db, io, api, cpu,
+/// max, min, len), because those are vocabulary rather than
+/// compression.
 const CRUSHED: &[&str] = &[
     "usr", "cfg", "mgr", "bufr", "buf", "ctx", "obj", "val", "str", "cnt", "idx", "tmp", "cmd",
     "msg", "req", "res", "resp", "err", "attr", "arg", "params", "opts", "prev", "curr", "elem",
@@ -903,7 +908,7 @@ const CRUSHED: &[&str] = &[
 /// Vocabulary that names nothing: a unit named entirely from this list
 /// fails Ward Cunningham's test ("each routine is pretty much what you
 /// expected"). Conventional idioms (main, new, init, run, get, set) are
-/// deliberately absent — they carry convention, which is meaning.
+/// deliberately absent: they carry convention, which is meaning.
 const JUNK_WORDS: &[&str] = &[
     "util", "utils", "helper", "helpers", "manager", "managers", "handler", "handlers", "handle",
     "misc", "common", "stuff", "thing", "things", "tmp", "temp", "foo", "bar", "baz", "data",
@@ -950,7 +955,7 @@ pub enum Case {
     Camel,
     Pascal,
     Screaming,
-    /// Single words, prose labels, operators — nothing to be consistent
+    /// Single words, prose labels, operators: nothing to be consistent
     /// about, so they are counted separately and excluded from entropy.
     Neutral,
 }
@@ -974,8 +979,8 @@ pub fn case_of(name: &str) -> Case {
 }
 
 /// Normalized Shannon entropy of a spelling distribution: 0 when one
-/// style is used throughout, 1 when every style is equally likely.
-/// This is the number that separates a house style from a habit.
+/// style is used throughout, 1 when every style is equally likely. It
+/// separates a house style from a habit.
 pub fn idiom_entropy(counts: &[u32; CASES]) -> f64 {
     let total: u32 = counts.iter().sum();
     if total == 0 {
@@ -997,7 +1002,7 @@ pub fn idiom_entropy(counts: &[u32; CASES]) -> f64 {
 }
 
 /// Lowercased words of an identifier: snake, camel, whitespace (Zig test
-/// labels are prose) and dot splits — a dot joins two names in every
+/// labels are prose) and dot splits: a dot joins two names in every
 /// language that writes one, and gtest's `args_test.basic` is three
 /// words rather than one.
 fn name_words(name: &str) -> Vec<String> {
@@ -1028,7 +1033,7 @@ pub(crate) fn own_name(qualname: &str) -> &str {
 /// The word a unit's own name starts with: what job it claims to do.
 ///
 /// Read from `own_name`, because a method's qualname leads with the type
-/// it hangs off — `JsonReader.close` would claim the job "json", and so
+/// it hangs off: `JsonReader.close` would claim the job "json", and so
 /// would every other method of that class, which makes every sibling
 /// look like it does the same work.
 pub(crate) fn job_word(qualname: &str) -> Option<String> {
@@ -1041,8 +1046,8 @@ pub const N: usize = METRICS.len();
 ///
 /// The label is lent from `facts` rather than copied, so a caller can
 /// hold every measurement a file made without allocating a name per
-/// measurement. That is what lets a finding say what the REST of its
-/// file did with the same budget.
+/// measurement. A finding can then say what the REST of its file did
+/// with the same budget.
 pub fn for_each<'a>(facts: &'a FileFacts, mut f: impl FnMut(usize, f32, u32, &'a str)) {
     for u in &facts.units {
         unit_metrics(u, facts, &mut f);
@@ -1071,13 +1076,13 @@ fn unit_metrics<'a>(
     );
     f(EXPR_DEPTH, u.max_expr_depth as f32, u.line, &u.qualname);
     f(NEGATIONS, u.negations as f32, u.line, &u.qualname);
-    // Test bodies are made of literals — expected values, fixtures,
+    // Test bodies are made of literals: expected values, fixtures,
     // status codes. Judging them by production budgets made 88% of
     // this gating metric's firings noise (same guard as UNWRAPS).
     //
-    // An assertion DSL is chain-shaped by construction —
-    // `expect(x).to.have.nested.property(..)`, `h.state.zoom.value`,
-    // `channel.pipeline.syncOperations.addHandler(..)` — so the same
+    // An assertion DSL is chain-shaped by construction
+    // (`expect(x).to.have.nested.property(..)`, `h.state.zoom.value`,
+    // `channel.pipeline.syncOperations.addHandler(..)`), so the same
     // guard covers Demeter, where 40.7% of gold's findings were in test
     // paths and no reviewer would ask for one of them to change.
     if !u.is_test && !facts.is_test_file {
@@ -1086,10 +1091,9 @@ fn unit_metrics<'a>(
     }
     // A file's top level is code too, and in shell it is the WHOLE
     // program: a provisioning script that sets REGION at line 40 and
-    // resets it at line 300 deploys to the wrong place, and that was
-    // invisible while this metric only spoke inside functions. Module
-    // scope has no parameters and closes no handlers, so it reaches
-    // none of the other unit_shape metrics — this one it does.
+    // resets it at line 300 deploys to the wrong place. Module scope
+    // has no parameters and closes no handlers, so it reaches none of
+    // the other unit_shape metrics; it reaches this one.
     if u.is_module && !u.is_test && !facts.is_test_file {
         f(REPURPOSED, u.repurposed as f32, u.line, &u.qualname);
     }
@@ -1099,7 +1103,7 @@ fn unit_metrics<'a>(
     }
 }
 
-/// What a unit's SHAPE is measured by — everything a module scope has
+/// What a unit's SHAPE is measured by: everything a module scope has
 /// no answer to (it declares no parameters and closes no handlers).
 fn unit_shape<'a>(
     u: &'a UnitFacts,
@@ -1149,12 +1153,12 @@ fn unit_shape<'a>(
                 f(UNWRAPS, u.unwraps as f32, u.line, &u.qualname);
                 f(CASTS, u.casts as f32, u.line, &u.qualname);
                 // A test runs scenarios in sequence, refilling one
-                // variable per scenario — the idiom of the genre, not
-                // a second meaning. Gold said so loudly: every top
+                // variable per scenario: the idiom of the genre rather
+                // than a second meaning. Gold said so: every top
                 // violator unguarded was a test body (test_deque 14,
                 // TestFlagCompletion 11, listpackTest 82).
                 f(REPURPOSED, u.repurposed as f32, u.line, &u.qualname);
-                // A table test enumerates the truth table on purpose —
+                // A table test enumerates the truth table on purpose:
                 // vscode's pickRunningLocation calls its subject 64
                 // times across every boolean combination, which is the
                 // CORRECT way to test two booleans. Same exemption as
@@ -1165,12 +1169,11 @@ fn unit_shape<'a>(
                 // subject. Same exemption as unwraps and magic numbers.
                 //
                 // A ONE-SHOT SCRIPT is exempt for a different reason,
-                // and it is this metric's own reason read back: a
-                // blocking call is a defect because it stalls the
-                // EXECUTOR, and a build step has no other task waiting
-                // on one. 79 of the 110 findings gold had left were
-                // `readFileSync` inside `async function main()` in a
-                // build pipeline.
+                // this metric's own reason read back: a blocking call
+                // is a defect because it stalls the EXECUTOR, and a
+                // build step has no other task waiting on one. 79 of
+                // the 110 findings gold had left were `readFileSync`
+                // inside `async function main()` in a build pipeline.
                 if !facts.is_script_file {
                     f(
                         BLOCKING_IN_ASYNC,
@@ -1236,8 +1239,8 @@ fn file_metrics<'a>(facts: &'a FileFacts, f: &mut impl FnMut(usize, f32, u32, &'
             first_echo,
             "",
         );
-        // Tests exercise dynamic machinery on purpose — metaclasses,
-        // setattr, monkeypatched fixtures are the point of the test.
+        // Tests exercise dynamic machinery on purpose: metaclasses,
+        // setattr and monkeypatched fixtures are the point of the test.
         if !facts.is_test_file {
             let first_spooky = facts.spooky_lines.iter().min().copied().unwrap_or(1);
             f(SPOOKY, facts.spooky_lines.len() as f32, first_spooky, "");
@@ -1257,12 +1260,10 @@ fn file_metrics<'a>(facts: &'a FileFacts, f: &mut impl FnMut(usize, f32, u32, &'
     }
 }
 
-/// What the file's COMMENTS are measured by: how long each run runs,
-/// and how often the statement-attached ones give a reason.
+/// What the file's COMMENTS are measured by: how long each run runs.
 ///
-/// Length is per run and judged by the run's role. Density is per
-/// FILE, because a single comment is far too small a denominator —
-/// one `because` in an eight-word run reads as 125 per thousand.
+/// Length is per run and judged by the run's role, so a role with no
+/// length budget is skipped. `Trailing` is the only such role.
 fn comment_metrics<'a>(facts: &'a FileFacts, f: &mut impl FnMut(usize, f32, u32, &'a str)) {
     for c in &facts.comments {
         let Some(m) = doc_metric(c.role) else {
@@ -1279,15 +1280,14 @@ fn comment_metrics<'a>(facts: &'a FileFacts, f: &mut impl FnMut(usize, f32, u32,
     }
 }
 
-/// What a unit's NAME promises and whether the unit keeps it: honest
-/// vocabulary, honest receiver, honest predicate, honest test, honest
-/// public surface. All of these read `name_words` once.
 /// The identifier-convention metrics: conjunctions, junk vocabulary,
-/// crushed vowels. A declared test never reaches here — its name is
-/// PROSE, a sentence stating a behavior, where "and" is grammar and
-/// identifier conventions do not apply. Judging tests as identifiers
-/// flagged every well-named test: 36 of 36 and-name findings on this
-/// repository were tests. Same reasoning collect_spellings applies.
+/// crushed vowels.
+///
+/// A declared test never reaches here: its name is PROSE, a sentence
+/// stating a behavior, where "and" is grammar and identifier
+/// conventions do not apply. Judging tests as identifiers flagged every
+/// well-named test: 36 of 36 and-name findings on this repository were
+/// tests. collect_spellings applies the same reasoning.
 fn identifier_names<'a>(
     u: &'a UnitFacts,
     words: &[String],
@@ -1315,6 +1315,9 @@ fn name_lies(u: &UnitFacts, lang: Lang, head: Option<&str>) -> bool {
     lying_predicate || mutating_getter
 }
 
+/// What a unit's NAME promises and whether the unit keeps it: honest
+/// vocabulary, honest receiver, honest predicate, honest test, honest
+/// public surface. All of these read `name_words` once.
 fn names_and_contracts<'a>(
     u: &'a UnitFacts,
     lang: Lang,
@@ -1344,7 +1347,7 @@ fn names_and_contracts<'a>(
         &u.qualname,
     );
     // A test's name is a SENTENCE, and `Should_throw_when_provider_is_null`
-    // promises nothing about a return type — it names the behaviour under
+    // promises nothing about a return type; it names the behaviour under
     // test. `should` alone was 2,915 of C#'s 3,026 gold findings, all of
     // them [Fact] methods returning void. Same exemption, same reason, as
     // identifier_names above.
@@ -1362,7 +1365,7 @@ fn names_and_contracts<'a>(
     let asserts =
         u.assert_calls as u32 + u.ctrl.iter().filter(|c| c.sem == Sem::Assert).count() as u32;
     // Test-quality signals judge declared tests only (#[test], test_-named,
-    // `test` blocks) — test-file helpers are exempt.
+    // `test` blocks); test-file helpers are exempt.
     if u.named_test {
         f(TEST_ASSERTS, asserts as f32, u.line, &u.qualname);
         f(SLEEPY_TEST, u.sleep_calls as f32, u.line, &u.qualname);
@@ -1512,26 +1515,24 @@ mod tests {
         use crate::lang::Lang;
         // Pinned: 190k TypeScript units decide this one.
         assert!(is_pinned(Lang::TypeScript, COGNITIVE));
-        // Default, and the distinction is the whole point: Go declares
-        // 29 interfaces in all of gold, two orders below the sample
-        // floor a percentile needs, so the number comes from this file
-        // rather than from admired code.
+        // Default: Go declares 29 interfaces in all of gold, two orders
+        // below the sample floor a percentile needs, so the number
+        // comes from this file rather than from admired code.
         assert!(!is_pinned(Lang::Go, INTERFACE_WIDTH));
         assert!(is_pinned(Lang::TypeScript, INTERFACE_WIDTH));
-        // A policy is never pinned — no percentile may legitimize it.
+        // A policy is never pinned: no percentile may legitimize it.
         for lang in crate::lang::LANGS {
             assert!(!is_pinned(lang, SECRETS), "{lang:?} pinned a policy");
         }
         // A `rate` entry records coverage, not a budget, and must not
         // read as one.
         assert!(!is_pinned(Lang::Rust, PUBLIC_DOCS));
-        // CUDA is pinned now, and the fact that it took a change to
-        // CALIBRATION rather than to the corpus is the point. The units
-        // were always there; what blocked them was that a repository
-        // fetched for CUDA also donated its build tooling to Python and
-        // its host code to C++, moving 46 budgets in languages nobody
-        // was editing. Scoping ended that, and this asserts the payoff
-        // did not quietly regress.
+        // CUDA is pinned, and CALIBRATION rather than the corpus is
+        // what pins it: the units were always there, but a repository
+        // fetched for CUDA also donates its build tooling to Python and
+        // its host code to C++, which moved 46 budgets in languages
+        // nobody was editing. Scoping ends that, and this asserts the
+        // payoff has not quietly regressed.
         for m in [COGNITIVE, LENGTH, PARAMS, MAGIC_NUMBERS] {
             assert!(
                 is_pinned(Lang::Cuda, m),
@@ -1542,15 +1543,15 @@ mod tests {
 
     #[test]
     fn an_unmeasured_default_is_the_middle_of_the_measured_ones() {
-        // A default nobody chose reads exactly like a measured budget.
-        // `cohesion` inherited hi = 1 in eleven of its sixteen
-        // measuring languages — gold declares 45 JavaScript classes in
+        // A default nobody chose reads like a measured budget. A
+        // `cohesion` default of hi = 1 reaches eleven of its sixteen
+        // measuring languages (gold declares 45 JavaScript classes in
         // all, 18 Solidity, 14 C# and 12 CUDA, two orders under the 200
-        // a percentile needs — and at that budget admired code failed
+        // a percentile needs), and at that budget admired code failed
         // on 83 to 444 of every thousand classes it measured, against 6
-        // to 12 in the five languages that DO pin. The default is now
-        // the median of the pinned ones, which is the same construction
-        // the doc-length defaults already use.
+        // to 12 in the five languages that DO pin. The default is the
+        // median of the pinned ones, the same construction the
+        // doc-length defaults already use.
         use crate::lang::{LANGS, Lang};
         let cal = LangBudgets::calibrated();
         let mut measured: Vec<f32> = LANGS
@@ -1637,9 +1638,7 @@ mod tests {
         );
         assert!(readme.contains(&cpp), "README drifted: {cpp:?} missing");
         // The prose does not just quote those four numbers, it draws a
-        // conclusion from them — so the conclusion is pinned too. The
-        // first draft of this sentence called C++ the loosest of the
-        // eleven and this loop is what caught it.
+        // conclusion from them, so the conclusion is pinned too.
         assert!(
             hi(Lang::Cpp, COGNITIVE) * 2.0 < hi(Lang::C, COGNITIVE),
             "README claims C++ branches less than half as hard as C; it no longer does"
@@ -1652,10 +1651,10 @@ mod tests {
 
     #[test]
     fn the_readme_cuda_numbers_cannot_drift_either() {
-        // This paragraph went stale within a DAY of being written: a
-        // two-point [cu] length move left the prose quoting 247 against
-        // a calibration saying 249. Unpinned quoted numbers are exactly
-        // the failure the drift tests exist for, so it gets its own.
+        // A two-point [cu] length move leaves the prose quoting 247
+        // against a calibration saying 249. Unpinned quoted numbers are
+        // the failure the drift tests exist for, so the CUDA paragraph
+        // gets its own.
         use crate::lang::Lang;
         let readme = include_str!("../../README.md").replace('\n', " ");
         let cal = LangBudgets::calibrated();
@@ -1792,7 +1791,8 @@ mod tests {
     }
 
     /// One honest predicate and one liar per language, so the rule is
-    /// proved in both directions where it used to answer only one.
+    /// proved in both directions.
+    ///
     /// Every honest spelling below was a gold FINDING before this table
     /// existed: Scala's capital `Boolean` (495 of its 570), Swift's
     /// `Bool` (all 76), TypeScript's type predicate (1,212 of 1,348),
@@ -2075,10 +2075,9 @@ mod tests {
                 .secrets
                 .len()
         };
-        // The same hardcoded password, wherever it is spelled. The
-        // detector was structurally DEAD in Rust, Zig and C: nothing
-        // anchored their binding kinds, so an identical leak fired in
-        // Python and vanished in Rust.
+        // The same hardcoded password, wherever it is spelled. Each
+        // language's binding kinds have to be anchored, or an identical
+        // leak fires in Python and vanishes in Rust, Zig and C.
         assert_eq!(
             secrets(Lang::Python, "a.py", "password = \"hunter2x9k2m44aa\"\n"),
             1
@@ -2139,7 +2138,7 @@ mod tests {
 
     #[test]
     fn a_connection_string_carries_its_password_in_a_named_position() {
-        // The name promises nothing — DATABASE_URL is honestly a URL —
+        // The name promises nothing (DATABASE_URL is honestly a URL),
         // but the scheme defines where the credential sits, which is
         // the vendor-prefix argument in another spelling.
         assert_eq!(
@@ -2180,8 +2179,8 @@ mod tests {
             "too short to be worth a release to rotate"
         );
         // Prose that quotes a URL is not a connection string: an
-        // authority holds no whitespace. A tweet in trpc's gold corpus
-        // parsed its own words as userinfo before this rule.
+        // authority holds no whitespace. Without this rule a tweet in
+        // trpc's gold corpus parses its own words as userinfo.
         assert_eq!(
             secrets(
                 "QUOTE = \"impressed by @alexdotjs http://trpc.io: end-to-end safety is awesome in 2024\"\n"
@@ -2385,8 +2384,8 @@ mod tests {
         use crate::lang::Lang;
         const DOC: &str = "/// Whether the fast path is available.\n///\n/// Three lines.\n";
 
-        // SILENT — and each of these is why the rule has the shape it
-        // has, measured against 512,927 human declarations.
+        // SILENT. Each of these is why the rule has the shape it has,
+        // measured against 512,927 human declarations.
 
         // Bare content-free-ness is COMMONER in admired code than in the
         // corpus this was built from. Only the documentation separates.
@@ -2483,11 +2482,11 @@ mod tests {
 
     #[test]
     fn a_long_example_is_not_a_long_doc() {
-        // The finding that killed doc:body-ratio, now as the restraint
-        // case for every length budget: a builder doc is four words of
-        // writing and thirty lines of example, and only the writing is
-        // measured. Gold Rust appeared to out-document its comparison
-        // 2336 to 1751 per mille on the strength of `let` bindings.
+        // The restraint case for every length budget: a builder doc is
+        // four words of writing and thirty lines of example, and only
+        // the writing is measured. Measured by lines, gold Rust appears
+        // to out-document its comparison 2336 to 1751 per mille on the
+        // strength of `let` bindings.
         let mut doc = String::from("/// Sets the case sensitivity.\n///\n/// ```\n");
         for n in 0..30 {
             doc.push_str(&format!("/// let b{n} = RegexBuilder::new(pattern);\n"));
@@ -2519,23 +2518,23 @@ mod tests {
 
     #[test]
     fn aws_keys_fire_paths_do_not_and_vendor_prefixes_need_no_name() {
-        // AWS secret keys are base64 WITH slashes; the old blanket '/'
-        // exclusion made the #1 cloud provider's format invisible.
+        // AWS secret keys are base64 WITH slashes, so a blanket '/'
+        // exclusion makes the #1 cloud provider's format invisible.
         assert_eq!(
             secrets("AWS_SECRET_ACCESS_KEY = \"wJalrXUtnFEMI/K7MDENG/bPxRfiCYZQRSTKEYQQ\"\n"),
             1,
             "base64-with-slashes under a promising name"
         );
-        // A path is lowercase words, not a key — even under the name.
+        // A path is lowercase words rather than a key, even under the name.
         assert_eq!(secrets("PRIVATE_KEY_PATH = \"keys/prod/signing2\"\n"), 0);
         // Vendor-prefixed values identify THEMSELVES: no name needed.
-        // Every fixture below is ASSEMBLED rather than written out, and
-        // that is not squeamishness — a literal carrying a provider's
-        // exact shape trips the scanners that read THIS repository,
-        // starting with GitHub's own push protection. A tool that
-        // detects credentials has no business shipping decoys that make
-        // everyone else's detector cry wolf. The assembled string is
-        // byte-identical, so the test judges exactly what it claims to.
+        // Every fixture below is ASSEMBLED rather than written out: a
+        // literal carrying a provider's exact shape trips the scanners
+        // that read THIS repository, starting with GitHub's own push
+        // protection. A tool that detects credentials has no business
+        // shipping decoys that make everyone else's detector cry wolf.
+        // The assembled string is byte-identical, so the test judges
+        // what it claims to.
         assert_eq!(
             secrets(&format!(
                 "BUILD_ID = \"{}\"\n",
@@ -2585,7 +2584,7 @@ mod tests {
             0
         );
         // A slug is short words wearing separators, whatever its name
-        // promises — playwright maps "libsecret-1.so.0" to the package
+        // promises: playwright maps "libsecret-1.so.0" to the package
         // id "libsecret-1-0", and four such rows read as credentials.
         assert_eq!(secrets("libsecret_key = \"libsecret-1-0\"\n"), 0);
         assert_eq!(secrets("secret_pkg = \"production-db-primary\"\n"), 0);
@@ -2672,7 +2671,7 @@ mod tests {
     #[test]
     fn only_the_documented_sync_family_parks_a_thread() {
         // The suffix is not the family. `Sync` is an ordinary domain
-        // noun — vscode's whole user-data-SYNC feature — and the
+        // noun (vscode's whole user-data-SYNC feature) and the
         // conventional name for a pure-CPU variant of a user API.
         // Reading it cost 48 of this metric's 137 gold false positives
         // against 3 true ones.
@@ -2706,9 +2705,9 @@ mod tests {
             assert_eq!(park(domain), 0, "{domain} is a domain noun, not an API");
         }
         // AWAITING PROVES NOTHING once the table decides. A synchronous
-        // function returns a value, not a promise, so awaiting it wraps
-        // an answer already computed on this thread — the suggested
-        // `ctx.awaited` guard silenced both of these.
+        // function returns a value rather than a promise, so awaiting
+        // it wraps an answer already computed on this thread. A
+        // `ctx.awaited` guard would silence both of these.
         assert_eq!(
             park("await fs.readFileSync(p)"),
             1,
@@ -2726,7 +2725,7 @@ mod tests {
         );
     }
 
-    /// A build step has no executor to stall, and this metric's whole
+    /// A build step has no executor to stall, and this metric's
     /// argument is that one line caps a SERVER's throughput. 79 of the
     /// 110 findings gold had left after the Sync-name table were
     /// `readFileSync` inside `async function main()` in a build
@@ -2823,7 +2822,7 @@ mod tests {
             "urlopen names nothing else in the ecosystem"
         );
         // Rust: std::fs spells its qualifier; tokio::fs spells ITS
-        // qualifier and is the remedy — the asyncio.sleep lesson.
+        // qualifier and is the remedy, as asyncio.sleep is.
         assert_eq!(
             blocking(
                 Lang::Rust,
@@ -2846,9 +2845,9 @@ mod tests {
 
     #[test]
     fn the_runtimes_own_sleep_is_the_fix_not_the_bug() {
-        // Judging the trailing name alone flagged every `sleep` — which
-        // condemned exactly the correct pattern: 26/26 findings on a
-        // production FastAPI backend were `await asyncio.sleep(...)`.
+        // Judging the trailing name alone flags every `sleep`, which
+        // condemns the correct pattern: 26/26 findings on a production
+        // FastAPI backend were `await asyncio.sleep(...)`.
         assert_eq!(
             blocking(
                 Lang::Python,
@@ -3004,8 +3003,8 @@ mod tests {
         // A class body declares attributes OF A TYPE, and a type body
         // opens no unit, so every class in a file shares the module's
         // live map. click's `name = "integer"` and `name = "boolean"`
-        // are two classes' own attributes, not one rewriting the other
-        // — ten such pairs in one file before this landed.
+        // are two classes' own attributes rather than one rewriting the
+        // other: ten such pairs in one file.
         assert_eq!(
             repurposed(
                 Lang::Python,
@@ -3032,8 +3031,8 @@ mod tests {
         // Zig spells a declaration and a write with the SAME node kind,
         // so POSITION decides: a fresh binding states `var` or `const`
         // first, and its name therefore cannot start where the node
-        // starts. Six sibling-scope `const run = ...` declarations in
-        // ghostty read as five repurposings until this landed.
+        // starts. Without that rule, six sibling-scope `const run = ...`
+        // declarations in ghostty read as five repurposings.
         assert_eq!(
             repurposed(
                 Lang::Zig,
@@ -3059,7 +3058,7 @@ mod tests {
     #[test]
     fn repurposing_fires_on_a_straight_line_second_meaning() {
         // The finding: the same name, a second meaning, in a straight
-        // line — every earlier read the reader remembers is now wrong.
+        // line. Every earlier read the reader remembers is now wrong.
         assert_eq!(
             repurposed(
                 Lang::Python,
@@ -3165,8 +3164,8 @@ mod tests {
             0
         );
         // A deref target writes THROUGH the pointer; nothing is
-        // rebound. This repository's own set_switch was the first
-        // false positive: `let slot = match ...; *slot = true`.
+        // rebound. This repository's own set_switch is the shape:
+        // `let slot = match ...; *slot = true`.
         assert_eq!(
             repurposed(
                 Lang::Rust,
@@ -3175,8 +3174,8 @@ mod tests {
             ),
             0
         );
-        // A shadowing `let` is a NEW binding — Rust's own remedy for
-        // repurposing — and judging it without scopes would flag
+        // A shadowing `let` is a NEW binding, Rust's own remedy for
+        // repurposing, and judging it without scopes would flag
         // sibling blocks.
         assert_eq!(
             repurposed(
@@ -3234,10 +3233,10 @@ mod tests {
         );
         // A QUERY IS NOT A COMMAND. `exec` is in the shell list for
         // Node's child_process and is also how half the world runs SQL,
-        // so `db.exec(f"SELECT ...")` was reported as a shelled-out
-        // command as well as a built query — two different accusations
-        // about two different attack surfaces, one of them wrong. Found
-        // by the editor hook firing twice on one line.
+        // so `db.exec(f"SELECT ...")` would otherwise be reported as a
+        // shelled-out command as well as a built query: two different
+        // accusations about two different attack surfaces, one of them
+        // wrong.
         assert_eq!(
             shelled(
                 Lang::Python,
@@ -3322,12 +3321,12 @@ mod tests {
                 "{tool} -c is not a shell"
             );
         }
-        // A SHELL SCRIPT IS THE SHELL. The matrix has declared this cell
-        // dead since the row was written — "the whole language IS the
-        // shell" — and nothing enforced it: gold shell read 36 findings
-        // at precision zero. `exec` here is the POSIX builtin, which
-        // replaces the process with an argv vector and shares only a
-        // spelling with Node's child_process.exec.
+        // A SHELL SCRIPT IS THE SHELL. The matrix declares this cell
+        // dead ("the whole language IS the shell"), and unenforced it
+        // let gold shell read 36 findings at precision zero. `exec`
+        // here is the POSIX builtin, which replaces the process with an
+        // argv vector and shares only a spelling with Node's
+        // child_process.exec.
         assert_eq!(
             shelled(
                 Lang::Shell,
@@ -3458,7 +3457,7 @@ mod tests {
             1
         );
         // THE REMEDY. A parameterized query carries no interpolation
-        // at all, so the metric cannot see it — which is the point.
+        // at all, so the metric cannot see it, which is the point.
         assert_eq!(
             built(
                 Lang::Python,
@@ -3537,8 +3536,8 @@ mod tests {
             [("Both".to_string(), 2)]
         );
         // A call through the receiver connects them: that is what a
-        // self-call looks like to a syntax tree, and regex's LookSet
-        // read as eleven groups until this counted.
+        // self-call looks like to a syntax tree, and without counting
+        // it regex's LookSet reads as eleven groups.
         assert_eq!(
             groups(
                 Lang::Rust,
@@ -3547,8 +3546,8 @@ mod tests {
             ),
             [("LookSet".to_string(), 1)]
         );
-        // Rust spells `self` with its own node kind, so every
-        // self.field in the language was invisible before this.
+        // Rust spells `self` with its own node kind; unless that kind
+        // is anchored, every self.field in the language is invisible.
         assert_eq!(
             groups(
                 Lang::Rust,
@@ -3567,7 +3566,7 @@ mod tests {
             ),
             [("Store".to_string(), 1)]
         );
-        // One stateful method is trivially cohesive — no question to
+        // One stateful method is trivially cohesive: no question to
         // ask, so no finding to make.
         assert_eq!(
             groups(
@@ -3813,7 +3812,7 @@ mod tests {
     #[test]
     fn only_an_unconditional_skip_is_a_suppression() {
         // The suite reports green and nothing records what the test
-        // would have said — a suppression wearing a test's name.
+        // would have said: a suppression wearing a test's name.
         for (lang, path, src, want, why) in SKIP_CASES {
             assert_eq!(skips(*lang, path, src), *want, "{lang:?}: {why}");
         }
@@ -3844,7 +3843,7 @@ mod tests {
             1
         );
         // The reversal: asyncio.sleep is the RIGHT way to yield an
-        // executor, which is why `blocking async` exempts it — and the
+        // executor, which is why `blocking async` exempts it, and the
         // WRONG way to wait for a result, which is why this does not.
         assert_eq!(
             sleeps(
@@ -3864,8 +3863,8 @@ mod tests {
             ),
             0
         );
-        // A helper in a test file declares no test, so it is exempt —
-        // the same line the whole test-quality family draws.
+        // A helper in a test file declares no test, so it is exempt,
+        // the same line every test-quality metric draws.
         assert_eq!(
             sleeps(
                 Lang::Python,
@@ -3896,8 +3895,8 @@ mod tests {
             ),
             1
         );
-        // A TABLE is content, not logic — the same reason clone
-        // detection refuses duplicated data. gold's worst offender was
+        // A TABLE is content rather than logic, the same reason clone
+        // detection refuses duplicated data. Gold's worst offender was
         // a TextMate grammar repeating one include 186 times inside a
         // single object literal.
         assert_eq!(
@@ -3910,7 +3909,7 @@ mod tests {
             "one unit repeating a literal is a table"
         );
         // A named constant IS the remedy, so it must not read as the
-        // disease — however many places then use the name.
+        // disease, however many places then use the name.
         assert_eq!(
             magic_strings(
                 Lang::Python,
@@ -3958,7 +3957,7 @@ mod tests {
 
     #[test]
     fn an_unawaited_coroutine_is_judged_same_file_and_unambiguous_only() {
-        // The bug: work() builds a coroutine and throws it away — the
+        // The bug: work() builds a coroutine and throws it away. The
         // body never runs, and Python only warns at runtime.
         assert_eq!(
             unawaited(
@@ -4009,7 +4008,7 @@ mod tests {
             1
         );
         // TS/JS are declared dead, and the reason is semantic: a
-        // promise is EAGERLY scheduled — persist() runs, only its
+        // promise is EAGERLY scheduled, so persist() runs and only its
         // rejection goes unobserved. That weaker claim belongs to
         // no-floating-promises, and gold showed admired code making
         // this exact call on purpose, 144 times, for telemetry.
@@ -4056,8 +4055,8 @@ mod tests {
             ),
             [("T".to_string(), 2)]
         );
-        // TS: a props shape full of data fields — even function-typed
-        // ones — is a record, not a contract, and reads width 0.
+        // TS: a props shape full of data fields, even function-typed
+        // ones, is a record rather than a contract, and reads width 0.
         assert_eq!(
             widths(
                 Lang::TypeScript,
@@ -4069,7 +4068,7 @@ mod tests {
         );
         // `type X = { ... }` is the same declaration in a newer
         // keyword, and a contract does not narrow because its author
-        // preferred one spelling — 2,144 of them in gold TypeScript.
+        // preferred one spelling: 2,144 of them in gold TypeScript.
         assert_eq!(
             widths(
                 Lang::TypeScript,
@@ -4118,7 +4117,7 @@ mod tests {
             arity(Lang::Rust, "a.rs", "fn f() -> (u8, u8, u8) { (0, 0, 0) }\n"),
             3
         );
-        // An array VALUE without a tuple type stays one value — JS has
+        // An array VALUE without a tuple type stays one value: JS has
         // no way to state the intent, so the JS pack answers 0.
         assert_eq!(
             arity(
@@ -4186,7 +4185,7 @@ mod tests {
             ),
             2
         );
-        // Without this the entire async half of TypeScript read as 1.
+        // Without this the async half of TypeScript reads as 1.
         assert_eq!(
             arity(
                 Lang::TypeScript,
@@ -4260,7 +4259,7 @@ mod tests {
             "no react import, no rules-of-hooks question"
         );
         // A lowercase factory is not a component or a hook, so the rule
-        // does not reach it — tRPC's createTRPCNext is the shape.
+        // does not reach it; tRPC's createTRPCNext is the shape.
         assert_eq!(
             hooks(
                 Lang::Tsx,
@@ -4310,7 +4309,7 @@ mod tests {
 
     #[test]
     fn restraint_where_the_adjacent_pattern_is_correct() {
-        // copy(src, dst) is the textbook confusable pair — and a run of
+        // copy(src, dst) is the textbook confusable pair, and a run of
         // two is ubiquitous in admired code, so the budget starts at
         // three. Named parameters on a public fn state a contract, so
         // kw-opacity has nothing to say.
@@ -4334,7 +4333,7 @@ mod tests {
     /// Where each metric's restraint case lives: the test asserting it
     /// stays SILENT on the adjacent correct pattern. Seven confirmed
     /// detector bugs shipped under a green suite, because every test
-    /// asserted FIRING and almost none asserted silence — asyncio.sleep
+    /// asserted FIRING and almost none asserted silence: asyncio.sleep
     /// beside time.sleep, AKIA beside password_field.
     const RESTRAINT: &[(&str, &str)] = &[
         ("cognitive", "flat_function_costs_nothing"),
@@ -4630,7 +4629,7 @@ mod tests {
     #[test]
     fn declared_tests_are_judged_whatever_their_style() {
         // Zig `test "label"` blocks: the prose label names the unit and
-        // the block is a declared test — judged like test_-named functions.
+        // the block is a declared test, judged like test_-named functions.
         let pack = Lang::Zig.pack();
         let mut parser = pack.make_parser();
         let facts = extract(

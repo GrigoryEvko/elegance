@@ -1,8 +1,8 @@
 //! One walk of the history, shared by everything that reads it.
 //!
 //! Hotspots want per-file churn; coupling wants which files moved
-//! together and who moved them. Both are the same `git log`, so it is
-//! parsed once here rather than twice badly.
+//! together and who moved them. Both read the same `git log`, so this
+//! module parses it once and serves both.
 
 use std::error::Error;
 use std::path::Path;
@@ -18,8 +18,9 @@ pub struct Commit {
     pub files: Vec<Box<str>>,
 }
 
-/// Every non-merge commit, newest first. A repository without history is
-/// an empty list, not an error — most modes are useful without one.
+/// Every non-merge commit, newest first. A repository without history
+/// gives an empty list rather than an error, since most modes are
+/// useful without one.
 pub fn log(root: &Path) -> Result<Vec<Commit>, Box<dyn Error>> {
     let out = Command::new("git")
         .arg("-C")
@@ -60,8 +61,8 @@ pub fn newest(commits: &[Commit]) -> u64 {
 }
 
 /// When each line of a file was last written, indexed by line number
-/// minus one. Empty when the file is untracked or git is unavailable —
-/// a line whose age cannot be read is left unjudged rather than dated
+/// minus one. Empty when the file is untracked or git is unavailable.
+/// A line whose age cannot be read is left unjudged rather than dated
 /// to now.
 pub fn line_ages(root: &Path, path: &str) -> Vec<u64> {
     let out = Command::new("git")
@@ -94,7 +95,7 @@ pub fn is_shallow(root: &Path) -> bool {
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
 }
 
-/// `<sha>\t<unix time>\t<author>` — the format we asked git for.
+/// `<sha>\t<unix time>\t<author>`: the format we asked git for.
 fn header(line: &str) -> Option<(u64, &str)> {
     let mut parts = line.split('\t');
     let sha = parts.next()?;

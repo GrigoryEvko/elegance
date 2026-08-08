@@ -27,7 +27,7 @@ const SHOW: usize = 20;
 struct Signature {
     params: Vec<Box<str>>,
     types: Vec<Box<str>>,
-    /// Optional at the call site, per parameter — an ADDED optional
+    /// Optional at the call site, per parameter. An ADDED optional
     /// breaks nobody, which is the most common non-breaking change.
     optional: Vec<bool>,
     returns: Box<str>,
@@ -274,8 +274,8 @@ mod tests {
 
     #[test]
     fn an_added_optional_parameter_breaks_nobody() {
-        // The most common non-breaking API evolution there is — and it
-        // used to exit 1.
+        // The most common non-breaking API change there is, and the one
+        // a surface check must stay silent about.
         let two = sig(&["host", "port"], &["str", "int"], "Conn");
         let mut widened = sig(&["host", "port", "tls"], &["str", "int", "bool"], "Conn");
         widened.optional[2] = true;

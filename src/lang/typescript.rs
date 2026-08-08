@@ -59,7 +59,7 @@ const KINDS: &[(&str, Sem)] = &[
 ];
 
 /// `<X>expr` is a cast in .ts, but ambiguous with a JSX element in
-/// .tsx — the TSX grammar has no such node at all.
+/// .tsx: the TSX grammar has no such node at all.
 const TS_ONLY: &[(&str, Sem)] = &[("type_assertion", Sem::Cast)];
 
 const DEF_SITES: &[(&str, &str)] = &[
@@ -257,9 +257,9 @@ fn bound_name(child: Node) -> Option<Node> {
 
 /// The specifier a statement names. `import File = require("vinyl")` is
 /// an `import_statement`, but the grammar hangs its `source` field on
-/// the `import_require_clause` beneath — so reading only the statement
-/// answered None and the edge was dropped without trace. vscode writes
-/// it 18 times.
+/// the `import_require_clause` beneath, so reading only the statement
+/// answers None and drops the edge without trace. vscode writes it 18
+/// times.
 fn statement_source<'t>(node: Node<'t>) -> Option<Node<'t>> {
     if let Some(source) = node.child_by_field_name("source") {
         return Some(source);
@@ -273,8 +273,8 @@ fn statement_source<'t>(node: Node<'t>) -> Option<Node<'t>> {
 /// The specifier of a `require("./x")` or `import("./x")`, given the
 /// argument list that holds it.
 ///
-/// The ARGUMENT LIST is what carries the import, because it is the one
-/// node on the path that carries no Sem of its own: refining the
+/// The ARGUMENT LIST carries the import, because it is the one node on
+/// the path that carries no Sem of its own: refining the
 /// `call_expression` would take it out of the call ledger and out of
 /// clone logic density, and refining the callee would take an
 /// identifier out of the name ledger. `arguments` is inert in
@@ -350,16 +350,16 @@ fn bound_names(root: Node, src: &[u8]) -> Vec<Box<str>> {
     names
 }
 
-/// `import d, { a, b as c }, * as ns from "./x"` — one edge, every
+/// `import d, { a, b as c }, * as ns from "./x"`: one edge, every
 /// bound local collected. A re-export reads the same way: `export { a }
 /// from "./x"` is the barrel depending on ./x. Without a source there
 /// is no dependency, so `export function f()` yields nothing.
 ///
 /// `require("./x")` and `import("./x")` state the same dependency in
-/// call form, and reading only the statement forms left mithril — 103
-/// files, 296 requires, not one import statement — with no module graph
-/// at all: `production_view` needs an edge to exist, so the whole
-/// architecture section was absent from its report.
+/// call form. Reading only the statement forms leaves mithril (103
+/// files, 296 requires, not one import statement) with no module graph
+/// at all: `production_view` needs an edge to exist, so the entire
+/// architecture section drops out of its report.
 pub(super) fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let text = |n: Node| n.utf8_text(src).unwrap_or("");
     let (source, names) = match node.kind() {
@@ -401,10 +401,10 @@ pub(super) fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 /// `build/buildfile.ts` — and 23 of its files read as depended on by
 /// nothing because the loader is a string and not an import.
 ///
-/// THREE components at least, which is the whole safety of it. A path
-/// that deep can only be matched by one file, and shorter strings are
-/// where the damage is: `require('crypto')` names Node's module and
-/// there is a `crypto.ts` in the tree, `('uri')` likewise.
+/// THREE components at least. A path that deep can only be matched by
+/// one file, and shorter strings are where the damage is:
+/// `require('crypto')` names Node's module and there is a `crypto.ts`
+/// in the tree, `('uri')` likewise.
 ///
 /// The ARGUMENT LIST carries it, for the reason `call_specifier` gives:
 /// the string keeps its own Sem and every literal check still sees it.
@@ -439,10 +439,10 @@ fn module_mention(node: Node, src: &[u8]) -> Option<Box<str>> {
 
 /// Node's `assert` module, destructured. vscode writes
 /// `import { strictEqual, ok } from 'assert'` in 109 gold files and then
-/// calls the bare name, which is neither assertish nor expectish — so
-/// those suites read as asserting nothing. A bare `ok(x)` is far too
-/// common a spelling to accept on the name alone, so the import is
-/// checked before the name is believed.
+/// calls the bare name, which is neither assertish nor expectish, so
+/// those suites read as asserting nothing. A bare `ok(x)` is too common
+/// a spelling to accept on the name alone, so the import is checked
+/// before the name is believed.
 const NODE_ASSERT: &[&str] = &[
     "strictEqual",
     "notStrictEqual",
@@ -506,7 +506,7 @@ fn imports_node_assert(node: Node, src: &[u8]) -> bool {
         })
 }
 
-/// `it.skip(...)`, `describe.skip(...)`, `xit(...)` — the suite still
+/// `it.skip(...)`, `describe.skip(...)`, `xit(...)`: the suite still
 /// reports green and nothing records what the test would have said.
 /// `it.only(...)` is deliberately absent: it silences its SIBLINGS
 /// rather than itself, which is a different claim, and CI usually
@@ -534,10 +534,10 @@ pub(super) fn skips_test(node: Node, src: &[u8]) -> bool {
 
 /// A React-style hook: `useState`, `useEffect`, a custom `useThing`.
 /// React identifies a hook by the ORDER it is called in, not by its
-/// name — so one reached through a branch renumbers every hook after
-/// it the moment the condition flips, and the component reads another
-/// hook's state. The capital after `use` is what separates a hook from
-/// `used()` or `useful()`, the same rule `expectish` uses.
+/// name, so one reached through a branch renumbers every hook after it
+/// the moment the condition flips, and the component reads another
+/// hook's state. The capital after `use` separates a hook from `used()`
+/// or `useful()`, the same rule `expectish` uses.
 ///
 /// Solid's `createSignal`/`createEffect` are deliberately absent: Solid
 /// tracks dependencies at run time rather than by call order, so a
@@ -570,7 +570,7 @@ pub(super) fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
         Some(f) if f.kind() == "member_expression" => {
             // `Object.setPrototypeOf(this, X.prototype)` is the idiom
             // TypeScript MANDATES for subclassing Error when targeting
-            // ES5 — prescribed boilerplate, not prototype surgery.
+            // ES5: prescribed boilerplate, not prototype surgery.
             let restores_own_prototype = node.child_by_field_name("arguments").is_some_and(|a| {
                 a.named_child(0).is_some_and(|x| x.kind() == "this")
                     && a.named_child(1)
@@ -621,11 +621,11 @@ pub(super) fn is_public(node: Node, src: &[u8]) -> bool {
 /// declaration statement (promoted lambdas: `/** */ const f = () => ...`).
 pub(super) fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
     // Up to the export statement: arrow -> declarator -> declaration ->
-    // export. Only through a WRAPPER, and that restriction is the
-    // whole correctness of this: climbing to any parent walked out of
-    // a class body and handed every method of a documented class the
-    // CLASS's JSDoc — 2,000 methods of phoenix's Socket documented by
-    // the comment above `class Socket`, with its `@param` list.
+    // export. Only through a WRAPPER: climbing to any parent walks out
+    // of a class body and hands every method of a documented class the
+    // CLASS's JSDoc, which is 2,000 methods of phoenix's Socket
+    // documented by the comment above `class Socket` and its `@param`
+    // list.
     const CARRIERS: &[&str] = &[
         "export_statement",
         "variable_declarator",
@@ -671,7 +671,7 @@ pub(super) fn record_keys(node: Node, src: &[u8]) -> Option<Vec<Box<str>>> {
 }
 
 /// `catch (e) { throw new Error("...") }` drops the cause unless it is
-/// forwarded — ES2022 `{ cause: e }`, or interpolated into the message.
+/// forwarded: ES2022 `{ cause: e }`, or interpolated into the message.
 pub(super) fn loses_context(node: Node, src: &[u8]) -> bool {
     let bound = node
         .child_by_field_name("parameter")
@@ -698,8 +698,8 @@ const TEST_DIRS: &[&str] = &[
 
 /// Shared with the JavaScript pack. The ecosystem spells test files two
 /// ways — suffix (`.test.ts`, `.spec.tsx`) and directory (`tests/`,
-/// `e2e/`) — and every other pack already honored its directories.
-/// Matching only suffixes left fixture credentials inside `tests/`
+/// `e2e/`) — and every other pack already honors its directories.
+/// Matching only suffixes leaves fixture credentials inside `tests/`
 /// reading as production secrets.
 pub(super) fn test_path(p: &str) -> bool {
     let file = p.rsplit('/').next().unwrap_or(p);
@@ -725,7 +725,7 @@ const LAMBDA_HOMES: &[&str] = &[
 /// `describe`/`suite` are deliberately absent. They take the same shape
 /// but declare a NAMESPACE, not a test: the body is the whole suite, its
 /// assertions belong to the nested tests, and counting it as a unit both
-/// tripled the length p99 (ts 115 -> 189, tsx 227 -> 319) and made every
+/// raises the length p99 (ts 115 -> 189, tsx 227 -> 319) and makes every
 /// group read as a test that asserts nothing.
 const TEST_DECLARERS: &[&str] = &["test", "it", "bench"];
 
@@ -735,7 +735,7 @@ fn declaring_test<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let call = args.parent().filter(|c| c.kind() == "call_expression")?;
     let callee = call.child_by_field_name("function")?;
     // `test(...)` and `test.each(...)`/`it.skip(...)` alike: the leading
-    // identifier is what names the framework's intent.
+    // identifier names the framework's intent.
     let name = callee.utf8_text(src).ok()?;
     let head = name.split(['.', '(']).next()?;
     TEST_DECLARERS.contains(&head).then_some(args)
@@ -747,7 +747,7 @@ pub(super) fn is_declared_test(node: Node, src: &[u8]) -> bool {
 }
 
 /// A declared test's name is its first argument, which is prose rather
-/// than an identifier — exactly as Zig's `test "label"` is handled.
+/// than an identifier, as Zig's `test "label"` is handled.
 pub(super) fn test_label(node: Node) -> Option<Node> {
     let args = node.parent().filter(|p| p.kind() == "arguments")?;
     args.named_child(0)
@@ -765,7 +765,7 @@ pub(super) fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         {
             Sem::Import
         }
-        // else if -> flat chain, exactly as in the Rust pack.
+        // else if -> flat chain, as in the Rust pack.
         Sem::If if node.parent().is_some_and(|p| p.kind() == "else_clause") => Sem::ElseIf,
         Sem::Else
             if node
@@ -811,7 +811,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         }),
         "required_parameter" | "optional_parameter" => Some(ParamInfo {
             // A rest parameter binds the name INSIDE the pattern:
-            // reading the pattern whole gave `...buffers`, a name no
+            // reading the pattern whole gives `...buffers`, a name no
             // call site and no documentation ever writes.
             name: node
                 .child_by_field_name("pattern")
@@ -822,7 +822,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
                 .unwrap_or("")
                 .into(),
             boolish: boolish_type(node) || boolish_default(node),
-            // `b?: number` or `b = 1` — a required_parameter with an
+            // `b?: number` or `b = 1`: a required_parameter with an
             // initializer is optional at every call site.
             optional: node.kind() == "optional_parameter"
                 || node.child_by_field_name("value").is_some(),
@@ -835,7 +835,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
             loose: node
                 .child_by_field_name("type")
                 .is_some_and(|t| super::is_loose(text(t), LOOSE)),
-            // `function f({ limitLength, headerName }: Options)` — the
+            // `function f({ limitLength, headerName }: Options)`: the
             // annotation names the shape, the binding does not.
             destructured: node
                 .child_by_field_name("pattern")
@@ -876,7 +876,7 @@ pub(super) fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {
 }
 
 /// The `override` keyword (4.3+), and a member of a class that declares
-/// something to implement or extend — where a stub body is the contract
+/// something to implement or extend, where a stub body is the contract
 /// being satisfied rather than an empty claim.
 fn is_override(node: Node, src: &[u8]) -> bool {
     if node
@@ -911,15 +911,15 @@ mod tests {
     #[test]
     fn a_module_named_by_a_call_is_a_dependency_all_the_same() {
         // mithril states every one of its 296 dependencies with
-        // `require`, and reading only the statement forms left it with
-        // no module graph at all: `production_view` needs one edge to
-        // exist, so 103 files and 26153 lines reported no architecture
-        // section whatsoever. vscode writes 337 `require` and 617
-        // `import(...)` besides.
+        // `require`, and reading only the statement forms leaves it with
+        // no module graph: `production_view` needs one edge to exist, so
+        // 103 files and 26153 lines report no architecture section at
+        // all. vscode writes 337 `require` and 617 `import(...)`
+        // besides.
         //
         // `import File = require("vinyl")` is an import_statement whose
         // `source` field hangs on the clause beneath it, so reading the
-        // statement alone answered None — 18 of those in vscode.
+        // statement alone answers None. vscode writes 18 of those.
         const SRC: &str = concat!(
             "import a from \"./a\";\n",
             "const { b, c: d } = require(\"./b\");\n",
@@ -967,8 +967,8 @@ mod tests {
     fn a_call_that_names_a_module_stays_a_call() {
         // The edge is emitted from the ARGUMENT LIST, which carries no
         // Sem of its own, so the call ledger, cyclomatic complexity and
-        // clone hashing see exactly what they saw before. Refining the
-        // call itself would have moved all three.
+        // clone hashing are left untouched. Refining the call itself
+        // would move all three.
         use crate::sem::Sem;
         let pack = Lang::TypeScript.pack();
         let mut parser = pack.make_parser();
@@ -996,10 +996,9 @@ mod tests {
         // because the loader takes a string where the language has an
         // import.
         //
-        // THREE components at least, which is the whole safety of it:
-        // a loose tail match let `require('crypto')` find a `crypto.ts`
-        // and `('uri')` a `uri.ts`, and 12 of that variant's 65 hits
-        // were exactly that.
+        // THREE components at least. A loose tail match lets
+        // `require('crypto')` find a `crypto.ts` and `('uri')` a
+        // `uri.ts`, and 12 of that variant's 65 hits were exactly that.
         const SRC: &str = concat!(
             "createModuleDescription('vs/editor/common/services/editorWebWorkerMain');\n",
             "FileAccess.asBrowserUri('vs/base/worker/workerMain.js');\n",

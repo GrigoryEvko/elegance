@@ -1,18 +1,18 @@
 //! Recall floors: seeded smells the detectors must keep finding.
 //!
-//! Precision has two gates — gold-corpus rates and the policy audit —
-//! and recall had none: a detector that decays toward silence passes
+//! Precision has two gates, the gold-corpus rates and the policy audit.
+//! This file is recall's: a detector that decays toward silence passes
 //! every precision check by finding nothing. Each fixture under
 //! `fixtures/recall/` is realistic code with COUNTED smells planted in
-//! it, and this suite asserts the totals never drop.
+//! it, and the test below asserts the totals never drop.
 //!
 //! Scope: the count-shaped detectors (swallowed, secrets, casts, ...).
 //! Distribution metrics (cognitive, length, depth) are pinned by the
-//! cross-language conformance suite instead — their recall is the
-//! extractor's correctness, not a detector's.
+//! cross-language conformance suite instead: their recall is the
+//! extractor's correctness rather than a detector's.
 //!
 //! Convention: a new detector adds a seed here AND a restraint entry in
-//! the metrics RESTRAINT table — one test for firing, one for silence.
+//! the metrics RESTRAINT table, one test for firing and one for silence.
 //! Fixtures end in `.seed` so no scan ever reads them as source.
 
 use std::path::Path;
@@ -277,19 +277,19 @@ pub(crate) const SEEDS: &[(&str, &str, f32)] = &[
     // A documented parameter the signature does not declare, in the two
     // conventions that carry the check: a Google `Args:` block and a
     // JSDoc `@param`. Both fixtures document `control_codes` against a
-    // parameter called `control` — rich/console.py:1610, planted.
+    // parameter called `control`, planted from rich/console.py:1610.
     ("service.py", "doc param", 1.0),
-    // `ceremony` was the one metric of its cohort with a restraint test
-    // and no floor, which is the exact shape a detector decays into
-    // silence in: the override-point exclusion that took its gold
-    // findings from 195 to 3 could tighten one clause further and no
-    // test would notice. A nullary free-standing declaration whose body
-    // is one bare literal, documented at length and overriding nothing.
+    // A restraint test with no floor is the shape a detector decays into
+    // silence in: the override-point exclusion that took `ceremony`'s
+    // gold findings from 195 to 3 could tighten one clause further and
+    // no test would notice. The seed is a nullary free-standing
+    // declaration whose body is one bare literal, documented at length
+    // and overriding nothing.
     ("service.py", "ceremony", 1.0),
     ("worker.rs", "ceremony", 1.0),
     // And once more in a third language, because the rule is about a
-    // SHAPE -- nullary, one bare literal, documented at length -- not
-    // about anything Rust or Python spells particularly.
+    // SHAPE (nullary, one bare literal, documented at length) rather
+    // than about anything Rust or Python spells particularly.
     ("handler.ts", "ceremony", 1.0),
     ("handler.ts", "doc param", 1.0),
     ("handler.ts", "shelled out", 1.0),

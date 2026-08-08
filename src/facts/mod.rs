@@ -1,10 +1,10 @@
-//! Language-agnostic facts about one source file — the waist of the system.
+//! Language-agnostic facts about one source file: the waist of the system.
 //! Packs produce facts; metrics consume them; neither sees the other.
 
 mod extract;
 
 pub use extract::{extract, is_leaked_credential};
-/// A directory whose files RUN rather than get imported — the graph asks
+/// A directory whose files RUN rather than get imported. The graph asks
 /// the same question `is_sink` answers for a C translation unit.
 pub(crate) use extract::{one_shot_dir, rooted};
 
@@ -47,8 +47,8 @@ pub struct FileFacts {
     /// said.
     pub suppressions: Vec<u32>,
     /// Lines binding a credential-shaped name to a literal with real
-    /// entropy — a secret compiled into the artifact and committed to
-    /// history, where rotating it means a release.
+    /// entropy. The secret is compiled into the artifact and committed
+    /// to history, where rotating it means a release.
     pub secrets: Vec<u32>,
     /// Rows carrying a debt marker — TODO, FIXME, HACK, XXX — in a
     /// comment. A marker is a promise with no deadline; only its AGE
@@ -58,18 +58,18 @@ pub struct FileFacts {
     /// code someone commented out instead of deleting, which the
     /// version control system was already remembering for them.
     pub commented_code: Vec<u32>,
-    /// Lines that switch a test off unconditionally — `#[ignore]`,
+    /// Lines that switch a test off unconditionally: `#[ignore]`,
     /// `it.skip(...)`, `t.Skip()`. A suppression wearing a test's
-    /// name: the suite still reports green, and nothing records what
+    /// name. The suite still reports green, and nothing records what
     /// the test would have said. A CONDITIONAL skip is absent by
-    /// design — `skipif(platform)` is stated judgment.
+    /// design, since `skipif(platform)` is stated judgment.
     pub skipped_tests: Vec<u32>,
     /// The same non-trivial string literal, written out again and
     /// again in one file: a constant nobody named. Clone detection
-    /// cannot see these — duplicated DATA is content, not logic — so
-    /// nothing else in the tool owns this smell.
+    /// cannot see these, because duplicated DATA is content rather than
+    /// logic, and nothing else in the tool owns this smell.
     pub magic_strings: Vec<u32>,
-    /// Lines building an SQL statement by INTERPOLATION — an f-string,
+    /// Lines building an SQL statement by INTERPOLATION: an f-string,
     /// a template literal, a format call. A literal query is safe
     /// whatever it says; a query assembled from values is the oldest
     /// vulnerability there is, and the remedy (a parameter marker) is
@@ -77,19 +77,19 @@ pub struct FileFacts {
     pub sql_built: Vec<u32>,
     /// Lines handing an ASSEMBLED command to a shell. `shell=True`
     /// with a literal is a style choice; with a value spliced in it is
-    /// the same hole as a built query, at a bigger sink. The remedy —
-    /// an argument LIST, which needs no shell — carries no
+    /// the same hole as a built query, at a bigger sink. The remedy
+    /// (an argument LIST, which needs no shell) carries no
     /// interpolation and is invisible here, as it should be.
     pub shelled_out: Vec<u32>,
     /// Lines where the text stops predicting the run: eval/exec, computed
     /// attribute access, metaclasses, transmute, mutable defaults.
     pub spooky_lines: Vec<u32>,
-    /// Names referenced inside this file's test units — the join key for
+    /// Names referenced inside this file's test units: the join key for
     /// untested-complexity analysis (name association, not coverage).
     pub test_refs: Vec<Box<str>>,
     /// Normalized case-label sets of match/switch constructs (>=3 arms).
     /// The same set dispatched in many places means every new variant
-    /// forces N edits — the polymorphism smell (Fowler), invisible to
+    /// forces N edits: the polymorphism smell (Fowler), invisible to
     /// clone detection because surrounding code differs.
     pub switch_sigs: Vec<LabelSet>,
     /// Key sets of anonymous record literals (>=3 keys). The same set
@@ -98,16 +98,16 @@ pub struct FileFacts {
     /// finding every construction site by hand.
     pub record_shapes: Vec<LabelSet>,
     /// Imports as written (`a.b`, `./util`, `crate::x::y`) with the
-    /// local names each one binds — the raw material of the dependency
-    /// graph and of interface-utilization analysis. Resolution against
-    /// the scanned file set happens at aggregation time.
+    /// local names each one binds: the raw material of the dependency
+    /// graph and of interface-utilization analysis. These resolve
+    /// against the scanned file set at aggregation time.
     pub imports: Vec<ImportFact>,
     /// The module's declared surface: names of public units and types.
     /// Parnas: a module is a decision-hiding unit with a declared
-    /// interface — depth metrics need the interface.
+    /// interface, and depth metrics need the interface.
     pub exports: Vec<Box<str>>,
     /// Names of units this file declares as reachable through a RECEIVER
-    /// it takes as its first parameter — a C# extension method. Nothing
+    /// it takes as its first parameter: a C# extension method. Nothing
     /// names the declaring class at the call site, so the member name is
     /// the only statement about where the call lands.
     pub receiver_units: Vec<Box<str>>,
@@ -118,24 +118,24 @@ pub struct FileFacts {
     /// bind the symbol itself.
     pub mentioned: Vec<Box<str>>,
     /// Intra-file call direction (down, up): a downward reference points
-    /// at a unit defined later — the step-down narrative (Clean Code;
-    /// Knuth: programs are literature). Bare-name calls only.
+    /// at a unit defined later, which is the step-down narrative (Clean
+    /// Code; Knuth: programs are literature). Bare-name calls only.
     pub step_refs: (u32, u32),
     /// Public-before-private ordering: (public-first pairs, total
-    /// public/private pairs) — entry points first, details after.
+    /// public/private pairs). Entry points first, details after.
     pub pub_order: (u32, u32),
     /// Declared classes with two or more methods, and how many
     /// disconnected groups those methods fall into.
     pub classes: Vec<ClassFact>,
     /// Declared method bundles (Go `interface`, Rust `trait`, TS
     /// `interface`) and how many methods each one demands. The bigger
-    /// the interface, the weaker the abstraction — an implementer owes
+    /// the interface, the weaker the abstraction: an implementer owes
     /// every method whether or not a caller ever wanted them together.
     pub interfaces: Vec<InterfaceFact>,
     /// Every comment RUN in the file, classified by what it documents
-    /// and measured as prose. A run, not a line: `///` parses one node
-    /// per line, and a fenced example cannot be recognized — nor a
-    /// sentence counted — a line at a time.
+    /// and measured as prose. A run rather than a line: `///` parses one
+    /// node per line, and a fenced example cannot be recognized, nor a
+    /// sentence counted, a line at a time.
     pub comments: Vec<CommentFact>,
 }
 
@@ -143,15 +143,15 @@ pub struct FileFacts {
 ///
 /// Pooling these into one distribution makes a budget meaningless for
 /// all of them: a field's doc is a phrase, a module header is a page,
-/// and a function summary sits between. The classification is made from
-/// the ontology alone, so it means the same thing in every language.
+/// and a function summary sits between. Each role is decided from the
+/// ontology alone, so it means the same thing in every language.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CommentRole {
     /// Opens the file and documents no single declaration.
     ModuleHeader,
     /// Introduces a class, struct, trait or interface.
     TypeDoc,
-    /// Introduces a function or method — the contract a caller reads.
+    /// Introduces a function or method: the contract a caller reads.
     FnSummary,
     /// Introduces a member of a type that is neither: a field, a
     /// property, a constant, an enum case.
@@ -163,7 +163,7 @@ pub enum CommentRole {
 }
 
 impl CommentRole {
-    /// Every role, in declaration order — the index into per-role
+    /// Every role, in declaration order. The index into per-role
     /// tallies is the discriminant.
     pub const ALL: [CommentRole; 6] = [
         CommentRole::ModuleHeader,
@@ -187,13 +187,13 @@ impl CommentRole {
 }
 
 /// One comment run: where it is, what it documents, and how much it
-/// says. Counts rather than text — see `crate::prose`.
+/// says. Counts rather than text (see `crate::prose`).
 pub struct CommentFact {
     /// 1-based line the run starts on.
     pub line: u32,
     pub role: CommentRole,
     /// Index into `units` when the run documents one, which only a
-    /// `FnSummary` or an `Inline` comment does — a type and a field are
+    /// `FnSummary` or an `Inline` comment does. A type and a field are
     /// not measured units.
     pub unit: Option<u32>,
     pub prose: Prose,
@@ -211,7 +211,7 @@ pub struct ClassFact {
 
 /// One declared interface: what it is called, where, and how many
 /// methods it requires. Data fields and embedded interfaces are not
-/// methods — a props shape is a record, and embedding is composition.
+/// methods: a props shape is a record, and embedding is composition.
 pub struct InterfaceFact {
     pub name: Box<str>,
     pub line: u32,
@@ -248,7 +248,7 @@ pub enum BodyShape {
     BoolLiteral,
     /// One literal of any other kind: `{ 1 }`, `= "v1"`.
     Literal,
-    /// Documentation and nothing else — a decorator target, an abstract
+    /// Documentation and nothing else: a decorator target, an abstract
     /// method, a protocol stub. All three are legitimate, so `ceremony`
     /// passes over them.
     Empty,
@@ -260,9 +260,9 @@ pub enum BodyShape {
 
 pub struct UnitFacts {
     pub name: Box<str>,
-    /// Scope-qualified name (`Class.method`, `Type::method`, `outer.inner`)
-    /// — what reports and machine output show, since bare names are
-    /// ambiguous at scale.
+    /// Scope-qualified name (`Class.method`, `Type::method`,
+    /// `outer.inner`): what reports and machine output show, since bare
+    /// names are ambiguous at scale.
     pub qualname: Box<str>,
     /// 1-based line of the definition.
     pub line: u32,
@@ -273,29 +273,29 @@ pub struct UnitFacts {
     pub is_public: bool,
     /// Parameters in declaration order, receiver excluded on methods.
     pub params: Vec<ParamFact>,
-    /// Contract-documentation lines (docstring, `///`, JSDoc) — interface
+    /// Contract-documentation lines (docstring, `///`, JSDoc): interface
     /// docs, distinct from inline implementation comments.
     pub doc_lines: u32,
     /// Parameter names that documentation CLAIMS this unit takes, in no
     /// order and deduplicated. Empty unless the doc uses one of the
-    /// naming conventions — see `crate::docparam`.
+    /// naming conventions (see `crate::docparam`).
     pub documented_params: Box<[Box<str>]>,
     /// Whether this declaration's body says anything.
     pub body: BodyShape,
     /// A trait/interface default, or a method marked as overriding one.
-    /// Only meaningful when `body` is not `Real` — see `open_unit`.
+    /// Only meaningful when `body` is not `Real` (see `open_unit`).
     pub is_override: bool,
     pub max_vis_depth: u16,
-    /// Tallest single-line expression tree — the clever-one-liner signal.
+    /// Tallest single-line expression tree: the clever-one-liner signal.
     pub max_expr_depth: u16,
     /// Unnamed non-trivial numeric literals outside constant contexts.
     pub magic_numbers: u16,
-    /// Longest local live span in lines, with the variable's name —
+    /// Longest local live span in lines, with the variable's name.
     /// McConnell: keep variables live for as short a time as possible.
     pub max_live_span: u16,
     pub max_live_var: Box<str>,
     /// Straight-line reassignments whose new value never mentions the
-    /// old — the same name now means something else, and every earlier
+    /// old. The same name now means something else, and every earlier
     /// read the reader remembers is silently wrong (Fowler's Split
     /// Variable). Collecting updates (`x = x + 1`, `s = s.trim()`),
     /// conditional overrides, and try-sheltered fills are all exempt:
@@ -307,8 +307,8 @@ pub struct UnitFacts {
     /// Negative logic a reader must invert twice: double negation,
     /// negated negative-polarity names, De Morgan candidates.
     pub negations: u16,
-    /// Body is a single call forwarding this unit's own parameters —
-    /// Ousterhout's shallow wrapper / Fowler's Middle Man.
+    /// Body is a single call forwarding this unit's own parameters:
+    /// Ousterhout's shallow wrapper, Fowler's Middle Man.
     pub is_passthrough: bool,
     /// Member accesses rooted at the receiver (methods only).
     pub self_accesses: u16,
@@ -316,7 +316,7 @@ pub struct UnitFacts {
     /// methods that share none of them, and never call each other, are
     /// two objects wearing one class's name (Hitz & Montazeri's LCOM4).
     pub own_members: Vec<Box<str>>,
-    /// The most-touched foreign receiver and its access count — a method
+    /// The most-touched foreign receiver and its access count. A method
     /// that spends its time in another object's data belongs there
     /// (Fowler's Feature Envy).
     pub envy_count: u16,
@@ -325,10 +325,10 @@ pub struct UnitFacts {
     pub swallowed: u16,
     /// Bare or Exception-wide catches.
     pub broad_catch: u16,
-    /// Handlers that raise a new error without forwarding the original —
-    /// the stack that explains WHY is gone.
+    /// Handlers that raise a new error without forwarding the original.
+    /// The stack that explains WHY is gone.
     pub lost_context: u16,
-    /// unwrap()/expect() calls — panics where errors belonged.
+    /// unwrap()/expect() calls: panics where errors belonged.
     pub unwraps: u16,
     /// Types asserted rather than proved: `as`, `x.(T)`, `(T)x`,
     /// `cast(T, x)`, `@intCast`.
@@ -338,8 +338,8 @@ pub struct UnitFacts {
     pub is_async: bool,
     /// Calls that park the thread inside an async unit.
     pub blocking_calls: u16,
-    /// Calls carrying two or more BARE boolean literals — `move(x,
-    /// true, false)` — where the reader cannot bind a meaning to
+    /// Calls carrying two or more BARE boolean literals (`move(x,
+    /// true, false)`) where the reader cannot bind a meaning to
     /// either. The declaration-side complement of `flag params`, and
     /// the only version that can see a third party's signature. A
     /// keyword argument (`strict=True`) is exempt: naming it at the
@@ -353,10 +353,10 @@ pub struct UnitFacts {
     /// Statement-position calls to a SAME-FILE async unit with no await
     /// and the result discarded. In Python the coroutine never runs; in
     /// Rust the future is dropped unpolled; in TS the promise floats
-    /// with nobody to catch its rejection. Same-file evidence only —
-    /// a cross-file callee is never guessed at.
+    /// with nobody to catch its rejection. Same-file evidence only: a
+    /// cross-file callee is never guessed at.
     pub unawaited: u16,
-    /// Winnowed fingerprints of this unit's normalized token stream —
+    /// Winnowed fingerprints of this unit's normalized token stream:
     /// the raw material of near-clone detection. Empty for units too
     /// short to say anything.
     pub fingerprints: Vec<u64>,
@@ -370,23 +370,24 @@ pub struct UnitFacts {
     /// Hook calls (`useState`, `useEffect`, ...) reached through a
     /// branch or a loop. React identifies a hook by CALL ORDER, so a
     /// conditional one shifts every later hook's identity the first
-    /// time the branch flips — state belonging to another hook.
+    /// time the branch flips, leaving each with state belonging to
+    /// another hook.
     pub conditional_hooks: u16,
     /// Matches with a catch-all arm: adding a variant will not break
-    /// this, which is the entire benefit of an exhaustive match.
+    /// this, which is the benefit of an exhaustive match.
     pub wildcard_matches: u16,
-    /// Spawned tasks whose handle is discarded — nothing can await them,
+    /// Spawned tasks whose handle is discarded: nothing can await them,
     /// nothing observes their panic, and the runtime may drop them at
     /// shutdown mid-write.
     pub dropped_tasks: u16,
     /// Test by attribute, naming convention, or test-file location.
     pub is_test: bool,
     /// Declared a test by evidence its context supports: an attribute,
-    /// structure, or a `test` block anywhere — or the naming convention,
+    /// structure, or a `test` block anywhere; the naming convention,
     /// inside a test file only. Test-quality metrics judge these;
     /// test-file helpers and `cfg(test)` fixtures are exempt, unjudged.
     pub named_test: bool,
-    /// Assertion calls/macros — a test without any tests nothing.
+    /// Assertion calls/macros. A test without any tests nothing.
     pub assert_calls: u16,
     /// Assertions that cannot fail: the subject is a literal, so the
     /// check passes no matter what the code under test did.
@@ -396,10 +397,10 @@ pub struct UnitFacts {
     /// How many values a caller must destructure: a Go result list's
     /// width, a Rust or TS tuple return type's width, the widest tuple
     /// a Python `return` ships. Four values travelling together are a
-    /// struct in hiding — the same argument `params` makes, pointed at
+    /// struct in hiding: the same argument `params` makes, pointed at
     /// the other end of the signature.
     pub return_arity: u16,
-    /// Receiver taken mutably (`&mut self`) — a getter that mutates lies.
+    /// Receiver taken mutably (`&mut self`): a getter that mutates lies.
     pub mut_receiver: bool,
     /// The name the receiver is DECLARED under, where the parameter list
     /// declares it. `self` and `this` are spelled by the language and
@@ -415,9 +416,9 @@ pub struct UnitFacts {
 
 pub struct ParamFact {
     pub name: Box<str>,
-    /// Boolean-typed or boolean-defaulted — flag parameter candidate.
+    /// Boolean-typed or boolean-defaulted: flag parameter candidate.
     pub boolish: bool,
-    /// `**kwargs`-style splat — interface opacity.
+    /// `**kwargs`-style splat: interface opacity.
     pub kw_splat: bool,
     /// Optional at the call site (default value, `?`, splat): adding
     /// one to a signature breaks no caller.
@@ -428,11 +429,11 @@ pub struct ParamFact {
     pub loose: bool,
     /// Declared type as written, empty when absent.
     pub type_name: Box<str>,
-    /// Bound by a pattern rather than by a name — see
-    /// `crate::lang::ParamInfo::destructured`.
+    /// Bound by a pattern rather than by a name (see
+    /// `crate::lang::ParamInfo::destructured`).
     pub destructured: bool,
-    /// Stands for arguments it does not name — see
-    /// `crate::lang::ParamInfo::splat`.
+    /// Stands for arguments it does not name (see
+    /// `crate::lang::ParamInfo::splat`).
     pub splat: bool,
 }
 
@@ -502,7 +503,7 @@ impl UnitFacts {
         best
     }
 
-    /// A named unit with everything else empty — fixture scaffolding.
+    /// A named unit with everything else empty: fixture scaffolding.
     #[cfg(test)]
     pub fn for_test(name: &str) -> UnitFacts {
         let mut u = extract::blank_unit();

@@ -1,18 +1,18 @@
 //! Terminal styling for the report.
 //!
-//! Four inks, and everything that is neither a gate, a suspicion, nor
-//! secondary stays uncoloured — colouring every row conveys exactly as
-//! much as colouring none.
+//! Four inks — a gate, a suspicion, a command, secondary text — and
+//! everything else stays uncoloured. Colouring every row conveys as much
+//! as colouring none.
 //!
 //! Secondary text is an explicit 256-colour grey rather than SGR 2. `dim`
-//! is advisory and terminals are free to ignore it; measured on a real
-//! terminal it rendered paths at full brightness, so the one thing that
-//! ink existed to do — let the finding lead and the path follow — did not
-//! happen at all. A grey is a colour, and colours get honoured.
+//! is advisory and terminals are free to ignore it. Measured on a real
+//! terminal, `dim` rendered paths at full brightness, so the finding did
+//! not lead and the path did not follow. A grey is a colour, and colours
+//! get honoured.
 //!
 //! Enabled only on a tty, and never when `NO_COLOR` is set. A piped
-//! consumer therefore gets clean text without asking for it, which is why
-//! there is no `--plain` flag and no separate machine-readable renderer.
+//! consumer therefore gets clean text without asking for it, so there is
+//! no `--plain` flag and no separate machine-readable renderer.
 
 use std::io::IsTerminal;
 
@@ -55,8 +55,8 @@ impl Ink {
         self.code("\x1b[38;5;245m")
     }
 
-    /// Rungs 0-2. Red because these are what a build fails on, not because
-    /// they are the biggest numbers on screen.
+    /// Rungs 0-2. Red because a build fails on these, not because they
+    /// are the biggest numbers on screen.
     pub fn gate(self) -> &'static str {
         self.code("\x1b[31m")
     }

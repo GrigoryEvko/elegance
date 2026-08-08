@@ -7,20 +7,21 @@
 pub enum Sem {
     #[default]
     None,
-    /// Named function/method definition — becomes its own measured unit.
+    /// Named function/method definition; becomes its own measured unit.
     FnDef,
-    /// Anonymous function — attributed to the enclosing unit.
+    /// Anonymous function, attributed to the enclosing unit.
     Lambda,
     /// Class/struct/interface definition.
     TypeDef,
     If,
-    /// `elif` / `else if` — flat continuation of a chain, not deeper nesting.
+    /// `elif` / `else if`: a flat continuation of a chain, not deeper nesting.
     ElseIf,
     Else,
     /// Conditional expression (ternary).
     Ternary,
     Loop,
-    /// `match`/`switch` — one decision for the whole construct.
+    /// `match`/`switch`: one cognitive decision for the construct, not one
+    /// per arm.
     Match,
     /// One arm of a match/switch.
     CaseArm,
@@ -30,26 +31,25 @@ pub enum Sem {
     /// Boolean operator (`and`/`or`); sequences of the same operator count once
     /// for cognitive complexity, each for cyclomatic.
     BoolOp,
-    /// Comprehension/guard filter clause — a decision without a block.
+    /// Comprehension/guard filter clause: a decision without a block.
     Filter,
     Assert,
-    /// `break`/`continue` — free within their loop.
+    /// `break`/`continue`: free within their loop.
     Jump,
-    /// `goto` — a flat +1 cognitive (Sonar): the reader must find the
+    /// `goto` costs a flat +1 cognitive (Sonar): the reader must find the
     /// label. Unconditional, so no cyclomatic decision.
     Goto,
-    /// `await` — transparent to every complexity metric, but the fact
-    /// that a call sits under one is what separates a coroutine that
-    /// RUNS from one that was created and dropped.
+    /// `await` is transparent to every complexity metric. A call sitting
+    /// under one is still what separates a coroutine that RUNS from one
+    /// that was created and dropped.
     Await,
     Call,
     /// A type the programmer asserted rather than proved: `as`, `x.(T)`,
-    /// `(T)x`, `cast(T, x)`, `@intCast`. The compiler stops checking here
-    /// and starts believing.
+    /// `(T)x`, `cast(T, x)`, `@intCast`. The compiler stops checking here.
     Cast,
     Comment,
     Import,
-    /// Any identifier — α-abstracted in clone hashing so renamed copies match.
+    /// Any identifier, α-abstracted in clone hashing so renamed copies match.
     Ident,
     NumLit,
     StrLit,
@@ -116,7 +116,7 @@ impl Sem {
     ///
     /// Assertions deliberately do NOT count: NASA Power of 10, design by
     /// contract, and TigerStyle treat them as executable invariant
-    /// documentation — a virtue, measured separately as assertion density.
+    /// documentation, a virtue measured separately as assertion density.
     pub fn cyclomatic(self) -> bool {
         use Sem::*;
         matches!(

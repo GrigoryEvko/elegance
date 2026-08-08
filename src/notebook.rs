@@ -1,11 +1,9 @@
 //! Jupyter notebooks: code cells read at TRUE file lines.
 //!
-//! A `.ipynb` is JSON, so the obvious reading is that the padding trick
-//! the other containers use cannot work — there are no source lines in
-//! the file to preserve. That turns out to be wrong, and the format is
-//! the reason. nbformat stores a cell's `source` as an ARRAY OF LINES,
-//! and every writer in the ecosystem pretty-prints it one element per
-//! line:
+//! A `.ipynb` is JSON, and the padding trick the other containers use
+//! still works, because nbformat stores a cell's `source` as an ARRAY
+//! OF LINES and every writer in the ecosystem pretty-prints it one
+//! element per line:
 //!
 //! ```text
 //!    "source": [
@@ -16,10 +14,10 @@
 //!
 //! So each Python line already occupies exactly one line of the file,
 //! and the container can emit it there. Findings point at real lines in
-//! the real file, which matters for more than tidiness: `--diff` decides
-//! what a commit touched by intersecting unit line ranges with git's
-//! changed-line ranges, and a synthesized buffer would make every
-//! notebook finding either always or never in range.
+//! the real file: `--diff` decides what a commit touched by intersecting
+//! unit line ranges with git's changed-line ranges, and a synthesized
+//! buffer would make every notebook finding either always or never in
+//! range.
 //!
 //! The alternative design — concatenate the cells and report "cell 3,
 //! line 8" — was rejected for that reason. It would have been fine for
@@ -40,7 +38,8 @@ use crate::lang::Lang;
 /// The code cells of a notebook, as a buffer of the notebook's own
 /// length with everything that is not code blanked out. `None` when
 /// this is not a readable notebook, when its kernel is not one of the
-/// languages here, or when its lines cannot be placed exactly.
+/// languages here, or when its lines cannot be placed at the file lines
+/// that hold them.
 pub fn code_of(source: &str) -> Option<(Lang, String)> {
     let doc: Value = serde_json::from_str(source).ok()?;
     let lang = kernel_language(&doc)?;
@@ -82,7 +81,7 @@ fn place(source: &str, lang: Lang, wanted: &[Option<Vec<String>>]) -> Option<(La
     };
     let mut out = String::with_capacity(source.len());
     // Every line of the notebook gets a line of the buffer, blank
-    // unless it holds code — the padding the other containers use, and
+    // unless it holds code: the padding the other containers use, and
     // the reason no column moves. Separators go before each line after
     // the first and one terminator closes the buffer, because a
     // notebook's last line is `}` and pads to blank: joined with
@@ -106,7 +105,7 @@ fn place(source: &str, lang: Lang, wanted: &[Option<Vec<String>>]) -> Option<(La
 
 /// What one raw line of the notebook contributes to the buffer.
 enum Step {
-    /// Scaffolding, prose, an output, or a magic — the line pads.
+    /// Scaffolding, prose, an output, or a magic: the line pads.
     Blank,
     /// Python, to be written at exactly this line.
     Code(String),
@@ -116,9 +115,9 @@ enum Step {
 }
 
 /// Where the scan is: which cell it is walking, and — when inside that
-/// cell's `source` array — which line of it comes next. The array gate
-/// is not decoration: nbformat writes `outputs` BEFORE `source`, so a
-/// notebook that prints code would otherwise place an output line.
+/// cell's `source` array — which line of it comes next. nbformat writes
+/// `outputs` BEFORE `source`, so without the array gate a notebook that
+/// prints code would place an output line.
 struct Scan<'a> {
     wanted: &'a [Option<Vec<String>>],
     cell: usize,
@@ -136,9 +135,9 @@ impl Scan<'_> {
 
     /// Outside an array, only a `"source"` key changes anything. An
     /// empty cell writes `"source": []`, opening and closing on one
-    /// line; reading that as an opening brace ran the scan a whole cell
-    /// behind for the rest of the file, which is what refused ten of
-    /// the eleven notebooks lost in the first real measurement.
+    /// line; read as an opening brace it runs the scan a whole cell
+    /// behind for the rest of the file. Ten of the eleven notebooks
+    /// lost in measurement failed that way.
     fn open(&mut self, trimmed: &str) -> Step {
         if !trimmed.starts_with("\"source\"") {
             return Step::Blank;
@@ -166,9 +165,9 @@ impl Scan<'_> {
     }
 
     /// One element of a source array, decoded and checked against the
-    /// parse. A markdown cell is walked past rather than emitted, and a
-    /// magic counts as placed — so the verification still holds — while
-    /// contributing nothing.
+    /// parse. A markdown cell is walked past rather than emitted. A
+    /// magic counts as placed, so the verification still holds, and
+    /// contributes nothing.
     fn accept(&mut self, trimmed: &str, at: usize) -> Step {
         let Some(text) = json_string(trimmed) else {
             return Step::Blank;
@@ -195,15 +194,13 @@ impl Scan<'_> {
 /// The Python in one cell line, if it is Python at all. `%%time`,
 /// `%matplotlib inline` and `!pip install x` are IPython's, rewritten
 /// by the front-end before anything executes, and no line of Python may
-/// begin with either character — so blanking them is safe in the
-/// direction that matters and it is the whole of what made real
-/// notebooks unparseable. Seven of the thirty-eight measured failed the
+/// begin with either character, so blanking them is safe in the
+/// direction that matters. Seven of the thirty-eight measured failed the
 /// confidence bar and every one of them failed on a magic.
 ///
-/// The exception, stated rather than discovered later: a `%` or `!`
-/// opening a line INSIDE a triple-quoted string is blanked too, which
-/// breaks that string. Such a file already failed to parse before this,
-/// so the change costs nothing it was not already costing.
+/// A `%` or `!` opening a line INSIDE a triple-quoted string is blanked
+/// too, which breaks that string. Such a file fails to parse whether or
+/// not the line is blanked, so the blanking costs nothing.
 fn python_line(text: &str) -> Option<&str> {
     let line = text.trim_end_matches('\n');
     match line.trim_start().starts_with(['%', '!']) {
@@ -332,13 +329,11 @@ mod tests {
 
     #[test]
     fn magics_are_blanked_and_empty_cells_do_not_shift_the_rest() {
-        // Both of these were found by running the container over 38 real
-        // notebooks rather than by reasoning about the format. `"source":
-        // []` opens and closes on one line, and reading it as an opening
-        // brace ran the scan a cell behind for the whole file: it refused
-        // ten of the eleven notebooks that first measurement lost. Magics
-        // are not Python and were the sole cause of all seven parse
-        // failures that survived.
+        // `"source": []` opens and closes on one line, and reading it as
+        // an opening brace ran the scan a cell behind for the whole
+        // file: it refused ten of the eleven notebooks that first
+        // measurement lost. Magics are not Python and were the sole
+        // cause of all seven parse failures that survived.
         let nb = NB.replace(
             "    \"import os\\n\",\n    \"\\n\",",
             "    \"%%time\\n\",\n    \"!pip install torch\\n\",",

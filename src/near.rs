@@ -1,17 +1,17 @@
 //! Near-clones: the same code with edits in the middle.
 //!
-//! The Merkle detector in `facts` finds Type-2 clones — identical
+//! The Merkle detector in `facts` finds Type-2 clones: identical
 //! structure, renamed identifiers. It is exact and it is blind to one
 //! inserted line, which is what a copy-paste usually becomes within a
 //! week. Type-3 detection has to survive insertions and deletions.
 //!
 //! Winnowing (Schleimer, Wilkerson & Aiken, SIGMOD 2003, the algorithm
 //! behind MOSS): hash every k-gram of the normalized token stream, then
-//! in each window of w consecutive hashes keep the smallest. That gives
-//! a fingerprint set with two properties worth the trouble — density is
-//! bounded, so a long unit costs proportionally little, and the choice
-//! is position-independent, so inserting a line changes the fingerprints
-//! near the insertion and leaves the rest identical.
+//! in each window of w consecutive hashes keep the smallest. The
+//! resulting fingerprint set has bounded density, so a long unit costs
+//! proportionally little, and its choice is position-independent, so
+//! inserting a line changes the fingerprints near the insertion and
+//! leaves the rest identical.
 
 use std::collections::HashMap;
 
@@ -23,7 +23,7 @@ const K: usize = 5;
 /// K + W - 1 tokens contributes a fingerprint to both sides.
 const W: usize = 4;
 
-/// Units shorter than this are boilerplate — a getter matches every
+/// Units shorter than this are boilerplate: a getter matches every
 /// other getter, and saying so is noise.
 pub const MIN_TOKENS: usize = 40;
 
@@ -63,7 +63,7 @@ pub fn fingerprints(tokens: &[u64]) -> Vec<u64> {
     out
 }
 
-/// splitmix64 constants — the same combiner the Merkle hash uses, so a
+/// splitmix64 constants, the same combiner the Merkle hash uses, so a
 /// gram's identity is derived the same way a subtree's is.
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
 const SCRAMBLE: u64 = 0xBF58_476D_1CE4_E5B9;
@@ -91,11 +91,11 @@ pub struct NearPair {
 }
 
 /// What the pair search found AND what it refused to look at. The cap
-/// exists because pairing cost is the sum of squared posting lengths —
-/// but fifteen near-identical handlers share every core fingerprint at
-/// posting length fifteen, so the WORST duplication is exactly what the
-/// cap suppresses. Suppression without a count is a silent cap, and
-/// this tool's own doctrine forbids those.
+/// exists because pairing cost is the sum of squared posting lengths.
+/// Fifteen near-identical handlers share every core fingerprint at
+/// posting length fifteen, so the cap suppresses the WORST duplication.
+/// Suppression without a count is a silent cap, and this tool's own
+/// doctrine forbids those.
 pub struct NearStats {
     pub pairs: Vec<NearPair>,
     /// Fingerprint cores shared by more units than the idiom cap,
@@ -122,7 +122,7 @@ pub fn pairs(units: &[Print], show: usize) -> NearStats {
     let mut widest_core = 0u32;
     for list in postings.values() {
         if list.len() > MAX_POSTINGS {
-            // An idiom — or mass duplication; either way, counted.
+            // An idiom, or mass duplication. Either way, counted.
             suppressed_cores += 1;
             widest_core = widest_core.max(list.len() as u32);
             continue;
@@ -180,8 +180,9 @@ mod tests {
 
     #[test]
     fn an_inserted_passage_leaves_most_fingerprints_untouched() {
-        // This is the whole point: the Merkle detector sees a different
-        // tree and reports nothing, while winnowing sees the rest match.
+        // The case Type-2 detection misses: the Merkle detector sees a
+        // different tree and reports nothing, winnowing sees the rest
+        // match.
         let original = stream(0, 200);
         let mut edited = original.clone();
         edited.splice(90..90, stream(500, 12));
@@ -245,9 +246,9 @@ mod tests {
     #[test]
     fn mass_duplication_above_the_cap_is_counted_not_silenced() {
         // Fifteen near-copies share every core fingerprint at posting
-        // length fifteen — above MAX_POSTINGS, so no pairs form. That
-        // suppression used to be invisible: fifteen copies reported
-        // LESS than five did.
+        // length fifteen, above MAX_POSTINGS, so no pairs form. Left
+        // uncounted the suppression is invisible, and fifteen copies
+        // report LESS than five do.
         let many: Vec<Print> = (0..15)
             .map(|i| {
                 let mut tokens = stream(0, 200);

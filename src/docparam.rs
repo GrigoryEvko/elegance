@@ -2,18 +2,18 @@
 //!
 //! The signature is the truth and the documentation is a claim about
 //! it; a name in the claim that the signature does not declare was
-//! renamed or invented, and the reader who trusts it is wrong. Reading
-//! the claim is what this module does — comparing it against the
-//! signature is `crate::metrics`.
+//! renamed or invented, and the reader who trusts it is wrong. This
+//! module reads the claim; `crate::metrics` compares it against the
+//! signature.
 //!
 //! CONVENTIONS, NOT LANGUAGES. Every parser here runs on every
-//! comment, and that is deliberate: JSDoc's `@param` is written in
-//! JavaScript, Java, PHP, C++, Ruby and OCaml, Doxygen's `\param` in C
-//! and C++, and a `Args:` block wherever someone liked the look of it.
-//! A parameter-documentation convention is a property of a COMMUNITY,
-//! not of a grammar, so dispatching on the language would answer the
-//! wrong question — and each convention is recognized by syntax no
-//! other convention writes, so running them all costs only the scan.
+//! comment: JSDoc's `@param` is written in JavaScript, Java, PHP, C++,
+//! Ruby and OCaml, Doxygen's `\param` in C and C++, and a `Args:` block
+//! wherever someone liked the look of it. A parameter-documentation
+//! convention is a property of a COMMUNITY, not of a grammar, so
+//! dispatching on the language would answer the wrong question. Each
+//! convention is recognized by syntax no other convention writes, so
+//! running them all costs only the scan.
 //!
 //! THE SET, NOT THE ORDER. `@param b` before `@param a` documents both
 //! parameters and says nothing about which comes first. Only presence
@@ -22,7 +22,7 @@
 /// Doc tags that introduce one parameter by name: JSDoc and its
 /// descendants (`@param`), Doxygen's backslash spelling, and the two
 /// abbreviations that appear in the wild. `@tparam` is deliberately
-/// absent — it names a TEMPLATE parameter, which no argument list
+/// absent: it names a TEMPLATE parameter, which no argument list
 /// declares.
 const TAGS: &[&str] = &["@param", "@arg", "@argument", "\\param", "\\arg"];
 
@@ -32,7 +32,7 @@ const TAGS: &[&str] = &["@param", "@arg", "@argument", "\\param", "\\arg"];
 /// `out`.
 const DIRECTIONS: &[&str] = &["[in]", "[out]", "[in,out]", "[inout]", "[out,in]"];
 
-/// Headings that open a block of parameter entries — Google's `Args:`,
+/// Headings that open a block of parameter entries: Google's `Args:`,
 /// numpydoc's underlined `Parameters`, and the Markdown `# Arguments`
 /// section a Rust doc writes. Compared case-insensitively against the
 /// heading with its punctuation removed.
@@ -46,10 +46,10 @@ const ARG_HEADINGS: &[&str] = &[
     "other parameters",
 ];
 
-/// Headings that CLOSE one. The trap this exists for: an `Args:` block
-/// read without a terminator swallows the return description, and every
-/// word in it reads as a parameter name. Indentation ends a block on
-/// its own; this catches the docstrings that misindent their sections.
+/// Headings that CLOSE one. An `Args:` block read without a terminator
+/// swallows the return description, and every word in it reads as a
+/// parameter name. Indentation ends a block on its own; this catches
+/// the docstrings that misindent their sections.
 const END_HEADINGS: &[&str] = &[
     "returns",
     "return",
@@ -77,11 +77,11 @@ const END_HEADINGS: &[&str] = &[
 /// Sigils and decoration a name may wear in prose: Perl's and PHP's
 /// variable marks, a splat, C's address-of, Markdown emphasis, a
 /// backtick span, brackets around an optional parameter, and the
-/// punctuation that ends the token. `_` is NOT here — a leading
-/// underscore is part of the name in every language that allows one,
-/// and neither is a BRACE — PHP-Parser writes `@param array{` and
-/// carries the shape over four lines, so a token wearing one is the
-/// wreckage of a type this line-wise reader cannot follow.
+/// punctuation that ends the token. `_` is NOT here: a leading
+/// underscore is part of the name in every language that allows one.
+/// Neither is a BRACE. PHP-Parser writes `@param array{` and carries
+/// the shape over four lines, so a token wearing one is the wreckage
+/// of a type this line-wise reader cannot follow.
 const DECORATION: &[char] = &[
     '`', '*', '[', ']', '(', ')', '<', '>', '"', '\'', ',', ';', ':', '.', '-', '|', '&', '$', '@',
     '%', '\\', '#', '~', '/', '+', '!', '?', '=',
@@ -90,7 +90,7 @@ const DECORATION: &[char] = &[
 /// Words that are never a parameter's name, however a doc writes them.
 ///
 /// `@param The left changes` omits the name and starts on the
-/// description, so the first token is an article — and vscode's diff.ts
+/// description, so the first token is an article, and vscode's diff.ts
 /// writes it twice. `a` and `it` are deliberately absent: both are real
 /// parameter names in code that does arithmetic.
 const NOT_A_NAME: &[&str] = &["the", "an", "this", "that", "these", "those", "its"];
@@ -132,15 +132,15 @@ fn tagged(line: &str, out: &mut Vec<Box<str>>) {
     if let Some(d) = DIRECTIONS.iter().find(|d| rest.starts_with(**d)) {
         rest = rest[d.len()..].trim_start();
     }
-    // `@param {string | MessageFunction} name` — a JSDoc type is a
+    // `@param {string | MessageFunction} name`: a JSDoc type is a
     // brace group, and it may hold braces of its own.
     match rest.starts_with('{') {
         true => rest = rest[brace_group(rest)..].trim_start(),
-        // `@param [Array] collection` — YARD writes the type in SQUARE
+        // `@param [Array] collection`: YARD writes the type in SQUARE
         // brackets, where JSDoc writes an OPTIONAL PARAMETER's name.
         // The two are told apart by what is inside: a type is
         // capitalized, or namespaced, or a union, and a name is none of
-        // those. Only where no brace type was written — after one, a
+        // those. Only where no brace type was written; after one, a
         // bracket can only be JSDoc's `[name=default]`.
         false if rest.starts_with('[') && yard_type(rest) => {
             rest = rest[group(rest, '[', ']')..].trim_start();
@@ -185,8 +185,8 @@ fn yard_type(rest: &str) -> bool {
 ///
 /// PHPDoc writes the TYPE first and the name second — `@param string
 /// $limit` — where JSDoc and Javadoc write the name first. PHP's sigil
-/// is what tells them apart: a `$` on the second token means the first
-/// was a type.
+/// tells them apart: a `$` on the second token means the first was a
+/// type.
 fn first_name(rest: &str) -> Option<Box<str>> {
     /// Tokens of a type before the name it belongs to: `array<string,
     /// mixed> $attributes` splits into three, and a generic with more
@@ -233,7 +233,7 @@ fn sphinx_fields(line: &str, out: &mut Vec<Box<str>>) {
 
 /// C#'s `<param name="x">`. Read from the whole body rather than a line
 /// at a time: the element is XML and nothing stops it wrapping.
-/// `<typeparam name=` cannot match — the opening angle bracket is part
+/// `<typeparam name=` cannot match: the opening angle bracket is part
 /// of the needle.
 fn xml_elements(body: &str, out: &mut Vec<Box<str>>) {
     const OPEN: &str = "<param name=";
@@ -279,19 +279,18 @@ enum Style {
     /// indentation returns to the heading's own column.
     Indented,
     /// `Parameters` over a row of dashes, entries at the heading's own
-    /// column. Ends at the next underlined heading — which is the only
-    /// terminator numpydoc has, its sections being flush left.
+    /// column. Ends at the next underlined heading, the only terminator
+    /// numpydoc has, its sections being flush left.
     Underlined,
 }
 
-/// A heading followed by one entry per parameter — the three block
+/// A heading followed by one entry per parameter: the three block
 /// conventions, which differ in how an entry is written and in what
 /// ends the block.
 ///
-/// Every style has a terminator and that is the point. An `Args:` block
-/// read without one swallows the `Returns:` description, and every word
-/// of it reads as a parameter name — which is most of what the first
-/// survey of this measured.
+/// Every style has a terminator. An `Args:` block read without one
+/// swallows the `Returns:` description, and every word of it reads as
+/// a parameter name.
 fn blocks(lines: &[&str], out: &mut Vec<Box<str>>) {
     let mut at = 0;
     while at < lines.len() {
@@ -372,7 +371,7 @@ fn closes_block(text: &str) -> bool {
     })
 }
 
-/// Is this line numpydoc's underline — the row of dashes that turns the
+/// Is this line numpydoc's underline, the row of dashes that turns the
 /// line above it into a section heading?
 fn underlines(line: Option<&&str>) -> bool {
     line.is_some_and(|l| {
@@ -407,10 +406,10 @@ fn names_arguments(word: &str) -> bool {
 ///
 /// A `*` bullet has already been eaten before this is reached: it is
 /// indistinguishable from the `*` that decorates every continuation
-/// line of a block comment, and stripping that is what lets a JSDoc
-/// block be read at all. So a line that kept its bullet is one, and a
-/// line that did not needs the backticked name Rust's own convention
-/// writes — which the section's PROSE does not have.
+/// line of a block comment, and a JSDoc block is only readable once
+/// that is stripped. So a line that kept its bullet is one, and a line
+/// that did not needs the backticked name Rust's own convention
+/// writes, which the section's PROSE does not have.
 fn bullet_name(text: &str) -> Option<Box<str>> {
     let rest = text
         .strip_prefix("- ")
@@ -426,7 +425,7 @@ fn bullet_name(text: &str) -> Option<Box<str>> {
 ///
 /// The COLON is required. A description that wrapped onto its own line
 /// carries none, and neither does the prose of a section this parser
-/// failed to recognize as one — so a block that runs on names nothing
+/// failed to recognize as one, so a block that runs on names nothing
 /// rather than inventing a parameter per sentence.
 fn entry_names(text: &str) -> Vec<Box<str>> {
     let Some(head) = text.split(':').next().filter(|h| h.len() < text.len()) else {
@@ -440,7 +439,7 @@ fn entry_names(text: &str) -> Vec<Box<str>> {
 ///
 /// Everything decorative comes off: `$limit`, `*args`, `` `name` ``,
 /// `[name=default]`, `&ref`, `**bold**`. A token carrying a DOT is
-/// refused — `options.headerName` documents a member of a parameter,
+/// refused: `options.headerName` documents a member of a parameter,
 /// and the parameter it belongs to is documented on its own line.
 fn name_of(token: &str) -> Option<Box<str>> {
     let token = token.split('=').next().unwrap_or(token);
@@ -548,8 +547,8 @@ mod tests {
 
     #[test]
     fn the_remaining_four_conventions_read_their_own_syntax() {
-        // Rust: rayon's sleep/mod.rs:209, verbatim — a Markdown
-        // heading, a backticked bullet, and a wrapped continuation.
+        // Rust: rayon's sleep/mod.rs:209, verbatim. A Markdown heading,
+        // a backticked bullet, and a wrapped continuation.
         let rust = "/// Signals that jobs were pushed.\n///\n/// # Parameters\n///\n/// - `num_jobs` -- lower bound on number of jobs available.\n///   We'll try to get at least one thread per job.\n";
         assert_eq!(names(rust), ["num_jobs"]);
         // A Rust section that is NOT about arguments contributes
@@ -586,7 +585,7 @@ mod tests {
         assert_eq!(names("/// <inheritdoc />"), [""; 0]);
         // vscode's diff.ts, verbatim: the tag is there and the name is
         // not, so the description's first word stands where a name
-        // would — and it is an article.
+        // would, and it is an article.
         assert_eq!(names(" * @param The left changes"), [""; 0]);
     }
 }

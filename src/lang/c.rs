@@ -2,12 +2,12 @@
 //!
 //! Honest caveats, by decision:
 //! - Macros stay unexpanded. Function-like macros parse as calls; macro
-//!   BODIES are invisible, so macro-heavy code under-measures — numbers
-//!   are floors, not truths, for `.h` tricks.
+//!   BODIES are invisible, so macro-heavy code under-measures. For `.h`
+//!   tricks the numbers are floors rather than truths.
 //! - `#if`/`#ifdef`/`#elif` count as If/ElseIf: conditional compilation
 //!   is a real branch the reader must follow. Convention does not indent
 //!   preprocessor regions, so they add cognitive cost and visual depth
-//!   alike — the depth budget is calibrated with that in.
+//!   alike, and the depth budget is calibrated with that in.
 //! - `goto` is the flat +1 the Sem::Goto variant exists for.
 
 use tree_sitter::Node;
@@ -45,7 +45,7 @@ const KINDS: &[(&str, Sem)] = &[
     // `#include` is only a `preproc_include` where a declaration may
     // stand. Inside a struct or enum body the grammar reads it as the
     // generic `preproc_call`, and every other directive shares that
-    // kind — `include_target` is what tells them apart.
+    // kind, so `include_target` tells them apart.
     ("preproc_call", Sem::Import),
     ("identifier", Sem::Ident),
     ("field_identifier", Sem::Ident),
@@ -118,10 +118,10 @@ pub fn pack() -> Pack {
         // No exceptions, so no chain to break.
         loses_context: |_, _| false,
         panicky,
-        // No async in this language; goroutines and threads are not it.
         // Manual everywhere, so every fopen would fire and none would mean anything.
         // Designated initializers belong to a declared struct.
         record_keys: |_, _| None,
+        // No async in this language; threads are not it.
         is_async: |_, _| false,
         declares_test: |_, _| false,
         names_test: |_, _| false,
@@ -175,9 +175,9 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 /// The header an include node names, or None when the node is not an
 /// include at all.
 ///
-/// `preproc_include` carries a `path` field and is what the grammar
-/// produces wherever a declaration may stand. Where one may not — a
-/// struct body, an enum body — the same line parses as `preproc_call`,
+/// `preproc_include` carries a `path` field, and the grammar produces
+/// it wherever a declaration may stand. Where one may not (a
+/// struct body, an enum body) the same line parses as `preproc_call`,
 /// which is also `#pragma`, `#error` and `#line`, so the directive has
 /// to be read. ctre's pcre_actions.hpp holds 17 of its 22 includes
 /// inside `struct pcre_actions { … }` and every one of those headers
@@ -217,7 +217,7 @@ fn specifier(arg: &str) -> Option<&str> {
 /// An `#include` the grammar could not place.
 ///
 /// A directive is a declaration, and no declaration may stand inside an
-/// ARRAY INITIALIZER — so tree-sitter emits the `#include` token itself
+/// ARRAY INITIALIZER, so tree-sitter emits the `#include` token itself
 /// as an ERROR node and leaves the specifier beside it as an ordinary
 /// string literal. musl splices every one of its character tables in
 /// that way: `iswalpha.c:3` is `static const unsigned char table[] = {`,
@@ -228,7 +228,7 @@ fn specifier(arg: &str) -> Option<&str> {
 /// Promoted from `Sem::None`, and the ENCLOSING error node rather than
 /// the string, so the node gives nothing up: the specifier keeps its own
 /// `StrLit` classification and the secret, repetition and clone checks
-/// go on seeing it. Only a real file is ever named. 13 orphans.
+/// go on seeing it. Only a real file is ever named.
 pub(super) fn spliced_include(node: Node, src: &[u8]) -> bool {
     node.is_error()
         && node
@@ -395,9 +395,9 @@ mod tests {
         );
         let targets: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
         assert_eq!(targets, ["alpha.h", "nonspacing.h"]);
-        // It really is an ERROR node -- the grammar could not place the
-        // directive, which is why the ENCLOSING node and not the string
-        // is what gets promoted.
+        // It really is an ERROR node: the grammar could not place the
+        // directive, which is why the ENCLOSING node rather than the
+        // string is what gets promoted.
         assert!(f.parse_errors > 0, "the grammar could not place it");
     }
 

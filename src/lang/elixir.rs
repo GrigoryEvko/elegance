@@ -1,14 +1,13 @@
 //! Elixir: there is no syntax, so the ontology is built from names.
 //!
 //! `def`, `defmodule`, `if`, `case` and `try` are all ordinary calls
-//! taking a block — the language is homoiconic and its grammar says so,
-//! offering `call` where every other pack here reads a keyword. So this
-//! pack does its whole classification in `refine`, dispatching on the
-//! call's target text. A macro a library defines is indistinguishable
-//! from one the language ships, which is the language working as
-//! designed and a real bound on what can be read: `Enum.each` is a
-//! function call and reads as one, so loops read low the way they do for
-//! OCaml and Ruby.
+//! taking a block. The language is homoiconic and its grammar says so,
+//! offering `call` where every other pack here reads a keyword, so this
+//! pack classifies in `refine`, dispatching on the call's target text.
+//! A macro a library defines is indistinguishable from one the language
+//! ships, which is the language working as designed and a real bound on
+//! what can be read: `Enum.each` is a function call and reads as one, so
+//! loops read low the way they do for OCaml and Ruby.
 
 use tree_sitter::Node;
 
@@ -39,7 +38,7 @@ const KINDS: &[(&str, Sem)] = &[
 const DEF_SITES: &[(&str, &str)] = &[];
 
 /// Rebinding is the norm here and carries none of the meaning it does
-/// elsewhere — `x = transform(x)` is a pipeline written without `|>`.
+/// elsewhere: `x = transform(x)` is a pipeline written without `|>`.
 const REASSIGNS: &[(&str, &str)] = &[];
 
 pub fn pack() -> Pack {
@@ -113,7 +112,7 @@ fn target_text<'a>(node: Node, src: &'a [u8]) -> Option<&'a str> {
     node.child_by_field_name("target")?.utf8_text(src).ok()
 }
 
-/// The argument list is a KIND here, not a field — the grammar labels
+/// The argument list is a KIND here, not a field: the grammar labels
 /// only `target`, `left`, `right`, `operator`, `key` and `value`.
 fn args_of(node: Node) -> Option<Node> {
     let mut cursor = node.walk();
@@ -127,14 +126,14 @@ fn name_node(node: Node) -> Option<Node> {
     let args = args_of(node)?;
     let first = args.named_child(0)?;
     match first.kind() {
-        // `def run(x)` — a call whose target is the name.
+        // `def run(x)`: a call whose target is the name.
         "call" => first.child_by_field_name("target"),
         // `def run do`, and `defmodule Foo do`.
         "identifier" | "alias" => Some(first),
-        // `test "keeps the total" do` — the name is PROSE, the way a
+        // `test "keeps the total" do`: the name is PROSE, the way a
         // Zig test label is.
         "string" => Some(first),
-        // `def run(x) when is_list(x)` — the guard wraps the head.
+        // `def run(x) when is_list(x)`: the guard wraps the head.
         "binary_operator" => first
             .child_by_field_name("left")
             .and_then(|l| l.child_by_field_name("target").or(Some(l))),
@@ -175,8 +174,9 @@ fn starts_a_word(chars: &[char], i: usize) -> bool {
 /// writing its name: the `alias` NODE promoted by `refine` arrives here
 /// too.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    // A module named in expression position — `Plug.Conn.send_resp(...)`
-    // — is the reference itself, with no statement around it.
+    // A module named in expression position, as in
+    // `Plug.Conn.send_resp(...)`, is the reference itself, with no
+    // statement around it.
     if node.kind() == "alias" {
         return node.utf8_text(src).map(spelled).into_iter().collect();
     }
@@ -197,9 +197,9 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     match first.kind() {
         "alias" => first.utf8_text(src).map(module).into_iter().collect(),
         // `alias Foo.{Bar, Baz}` binds two modules, written as a dot
-        // onto a tuple. Reading the argument as one alias found none of
-        // it: gold holds 225 such statements naming 597 modules, so a
-        // filter on the alias kind dropped every one to nothing.
+        // onto a tuple. Reading the argument as one alias finds none of
+        // it: gold holds 225 such statements naming 597 modules, and a
+        // filter on the alias kind drops every one to nothing.
         "dot" => braces(first, src),
         _ => Vec::new(),
     }
@@ -229,8 +229,8 @@ fn mention(target: String) -> super::ImportInfo {
 /// mention rather than a statement: `Enum`, `String` and `Map` are the
 /// standard library and are written thousands of times, so counting
 /// each as a dependency would drown the tally in names the file merely
-/// uses. `@behaviour Plug` is the same node and is a real edge — 20
-/// files under plug/lib write it and plug/lib/plug.ex is the corpus's
+/// uses. `@behaviour Plug` is the same node and is a real edge: 20
+/// files under plug/lib write it, and plug/lib/plug.ex is the corpus's
 /// only `defmodule Plug`.
 fn spelled(target: &str) -> super::ImportInfo {
     match target.contains('.') {
@@ -245,18 +245,18 @@ fn spelled(target: &str) -> super::ImportInfo {
 /// Elixir names a submodule at run time in two ways and gold uses both.
 /// `absinthe/lib/absinthe/schema/prototype.ex:37` writes
 /// `use __MODULE__.Notation` and `schema/notation.ex:2170`
-/// `unquote(__MODULE__).SDL.parse(` — 33 files across the corpus write
+/// `unquote(__MODULE__).SDL.parse(`. 33 files across the corpus write
 /// one of those two forms, and the name they build appears in no file.
 /// `oban/lib/oban/migrations/postgres.ex:71` writes
 /// `[__MODULE__, "V#{pad_idx}"] |> Module.concat()`, where the leaf is
 /// an interpolation and only its SHAPE survives, so each element after
-/// `__MODULE__` becomes one unknown component — which is what reaches
-/// all fourteen of `oban/lib/oban/migrations/postgres/v*.ex`.
+/// `__MODULE__` becomes one unknown component, which reaches all
+/// fourteen of `oban/lib/oban/migrations/postgres/v*.ex`.
 ///
 /// Gold holds 97 `Module.concat` calls and exactly one of them leads
 /// with `__MODULE__`; the other 96 concatenate names this rule has
 /// nothing to say about. `dot` and `list` are unmapped kinds, so
-/// promoting either costs the node nothing — the call keeps being a
+/// promoting either costs the node nothing: the call keeps being a
 /// call and the string keeps being a string.
 fn own_submodule(node: Node, src: &[u8]) -> Option<String> {
     let owner = enclosing_module(node, src)?;
@@ -299,8 +299,8 @@ fn concatenated_here(list: Node, src: &[u8]) -> bool {
     call.and_then(|c| target_text(c, src)) == Some("Module.concat")
 }
 
-/// The module this file declares around `node` — the nearest enclosing
-/// `defmodule`, which is what `__MODULE__` expands to.
+/// The module this file declares around `node`: the nearest enclosing
+/// `defmodule`, the name `__MODULE__` expands to.
 fn enclosing_module(node: Node, src: &[u8]) -> Option<String> {
     let mut at = node.parent();
     while let Some(n) = at {
@@ -343,20 +343,20 @@ fn braces(dot: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 ///
 /// Elixir needs no import to depend on a module: `Plug.Conn.send_resp`
 /// spelled out in full is an edge, and gold expresses most of its
-/// dependency that way — 9308 dotted `alias` nodes stand in expression
+/// dependency that way. 9308 dotted `alias` nodes stand in expression
 /// position across the five repos against 2458 alias/import/require/use
 /// statements, and 6686 of them name a module the corpus defines.
 ///
-/// A single segment used to be excluded, because a one-component
-/// suffix match lands on whatever file bears that name: of 165 distinct
-/// single-segment names that resolved, 9 pointed at a file declaring no
-/// such module, and those 9 carried 537 of the occurrences. The fix for
-/// that is in the RESOLVER, which now answers a name by the file
-/// DECLARING it and refuses a one-component path match outright — so
-/// the exclusion here was costing real edges: `absinthe.ex`,
-/// `phoenix.ex` and `plug.ex` are each their library's front door,
-/// named `Absinthe.run/3`, `mod: {Phoenix, []}` and `@behaviour Plug`,
-/// and every one read as depended on by nothing.
+/// A single segment counts too. A one-component suffix match lands on
+/// whatever file bears that name: of 165 distinct single-segment names
+/// that resolve, 9 point at a file declaring no such module, and those
+/// 9 carry 537 of the occurrences. The RESOLVER answers that, taking a
+/// name by the file DECLARING it and refusing a one-component path
+/// match outright. Excluding a single segment here costs real edges
+/// instead: `absinthe.ex`, `phoenix.ex` and `plug.ex` are each their
+/// library's front door, named `Absinthe.run/3`, `mod: {Phoenix, []}`
+/// and `@behaviour Plug`, and every one would read as depended on by
+/// nothing.
 ///
 /// The cost is that `Enum`, `String` and `Map` become imports too.
 /// They are `Reach::Mention`, so they reach the graph without reaching
@@ -395,10 +395,10 @@ fn declared_here(node: Node, src: &[u8]) -> bool {
 }
 
 /// Parameters are the patterns in the head, and a pattern is not always
-/// a name — `def handle(%User{id: id})` destructures.
+/// a name: `def handle(%User{id: id})` destructures.
 ///
 /// A shape is still a PARAMETER: the head takes it, a caller passes it,
-/// and reading only the plain identifiers made `def put(%Entry{} = e,
+/// and reading only the plain identifiers makes `def put(%Entry{} = e,
 /// state)` look like a function of one argument. It is recorded under
 /// its own text and marked `destructured`, so the checks that need a
 /// binding NAME can pass over it and the ones that only count arguments
@@ -424,7 +424,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     })
 }
 
-/// `dry_run \\ false` — the one binary operator in a head that names a
+/// `dry_run \\ false` is the one binary operator in a head that names a
 /// parameter, and the value beside it is the only evidence a head has
 /// that a parameter is a switch. Every other operator here is a pattern
 /// match (`%Entry{} = e`, `[h | t]`), which binds by shape.
@@ -461,9 +461,9 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let text = node.utf8_text(src).ok()?;
     let negated = text.starts_with('!') || text.starts_with("not ");
     let operand = negated.then(|| node.child_by_field_name("operand"))??;
-    // `not (a and b)` — the parentheses arrive as a one-child `block`,
-    // which is a GROUP here rather than a body, and leaving it wrapped
-    // hid every De Morgan candidate in the language.
+    // `not (a and b)`: the parentheses arrive as a one-child `block`,
+    // which is a GROUP here rather than a body. Left wrapped, it hides
+    // every De Morgan candidate in the language.
     match operand.kind() == "block" && operand.named_child_count() == 1 {
         true => operand.named_child(0),
         false => Some(operand),
@@ -472,7 +472,7 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 
 /// The `rescue` block of a `try`, which the grammar hangs inside the
 /// try's do_block rather than beside it. Every handler check below is
-/// asked of the TRY, because that is the node the ontology names — a
+/// asked of the TRY, because that is the node the ontology names: a
 /// rescue_block carries no Sem of its own and the core never reaches it.
 fn rescue_block<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     if target_text(node, src) != Some("try") {
@@ -571,7 +571,7 @@ fn declares_test(node: Node, src: &[u8]) -> bool {
 }
 
 /// `@tag :skip` is an attribute written ABOVE the test, so the sibling
-/// is where the evidence lives — the test's own text never holds it.
+/// is where the evidence lives; the test's own text never holds it.
 fn skips_test(node: Node, src: &[u8]) -> bool {
     let tagged = |n: Node| {
         n.utf8_text(src)
@@ -601,7 +601,7 @@ fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
     }
 }
 
-/// A map literal with atom keys is a shape nothing declares — the same
+/// A map literal with atom keys is a shape nothing declares, the same
 /// argument as a Ruby hash or a Lua table.
 fn record_keys(node: Node, src: &[u8]) -> Option<Vec<Box<str>>> {
     if node.kind() != "map" {
@@ -634,8 +634,8 @@ fn called_construct(target: Option<&str>) -> Sem {
         Some("defmodule" | "defprotocol" | "defimpl" | "defstruct" | "defexception") => {
             Sem::TypeDef
         }
-        // ExUnit's `test "name" do` is a call, and promoting it is what
-        // gives the test metrics a unit to judge.
+        // ExUnit's `test "name" do` is a call, and promoting it gives
+        // the test metrics a unit to judge.
         Some("test" | "property" | "describe") => Sem::FnDef,
         Some("if" | "unless") => Sem::If,
         Some("case" | "cond" | "with" | "receive") => Sem::Match,
@@ -695,7 +695,7 @@ mod tests {
     #[test]
     fn a_braces_alias_binds_every_module_it_lists() {
         // gold holds 225 of these naming 597 modules; reading the
-        // argument as one alias node found none of them, because the
+        // argument as one alias node finds none of them, because the
         // grammar writes the form as a dot onto a tuple.
         assert_eq!(
             targets("defmodule X do\n  alias Oban.{Config, Job, Notifier}\nend\n"),
@@ -707,7 +707,7 @@ mod tests {
     fn a_module_written_out_is_a_dependency_with_no_statement() {
         // Every form the corpus uses: a qualified call, a struct, an
         // argument, a raise. The module's own name and the target of an
-        // alias are excluded — the statement path already reads those.
+        // alias are excluded: the statement path already reads those.
         let src = "defmodule App.Worker do\n\
                    \x20 alias App.Repo\n\
                    \x20 def run(c) do\n\
@@ -738,7 +738,7 @@ mod tests {
         // thousands of times, so counting each as a dependency would
         // drown the tally; `Plug` is plug.ex, the library's front door,
         // named by `@behaviour Plug` in 20 files under plug/lib and by
-        // nothing else at all. A Mention is both answers at once: an
+        // nothing else. A Mention is both answers at once: an
         // edge where a file declares the name, and never a tally entry.
         assert_eq!(
             reaches(

@@ -1,6 +1,6 @@
-//! SARIF 2.1.0 — the interchange format GitHub code scanning, the VS Code
-//! SARIF viewer and most enterprise pipelines already read. Without it,
-//! adoption means writing glue; with it, PR annotations are a drop-in.
+//! SARIF 2.1.0: the interchange format GitHub code scanning, the VS Code
+//! SARIF viewer and most enterprise pipelines already read. Emitting it
+//! makes PR annotations a drop-in instead of glue each consumer writes.
 //!
 //! The ladder survives translation: rungs 0-2 map to `error`, 3-4 to
 //! `warning`, 5+ to `note`. Rule ids are stable across versions because
@@ -146,8 +146,8 @@ pub fn render(agg: &mut Agg) -> String {
             tool: Tool {
                 driver: Driver {
                     name: "elegance",
-                    // The rules are documented in the tool itself; no URL
-                    // is emitted rather than one that 404s.
+                    // The rules are documented in the tool itself, so no
+                    // URL is emitted; one that 404s would be worse.
                     information_uri: None,
                     rules: rules(),
                 },
@@ -251,11 +251,9 @@ const RECURRENCE_RULES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Findings that are about a SET of sites: the first site is the result
-/// location, the rest are relatedLocations so a viewer can walk them.
-/// Exact clone classes. Split out from the recurrence sweep because
-/// each family there answers a different question and the sweep had
-/// grown to carry three at once.
+/// Exact clone classes, as findings about a SET of sites: the first
+/// site is the result location, the rest are relatedLocations so a
+/// viewer can walk them.
 fn clone_results(agg: &mut Agg) -> Vec<SarifResult> {
     let (clones, _) = select_clones(agg);
     clones

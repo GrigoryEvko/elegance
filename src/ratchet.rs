@@ -1,7 +1,7 @@
 //! Baseline/ratchet: the deployment model that works at any scale. Nobody
 //! fixes 4000 findings; they stop the count growing. `write` records today's
 //! violations as the ledger; `check` fails only on violations that are not
-//! in it — new sludge is blocked, old sludge is tolerated until touched.
+//! in it: new sludge is blocked, old sludge is tolerated until touched.
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry::{Occupied, Vacant};
@@ -17,7 +17,7 @@ use crate::report::Agg;
 /// reports never block a build. Teams tighten or loosen with --fail-on.
 pub const GATED_MAX_RUNG: u8 = 2;
 
-/// Shown on failure; the Infer lesson — overwhelmed engineers fix nothing.
+/// Shown on failure. The Infer lesson: overwhelmed engineers fix nothing.
 const SHOW: usize = 10;
 
 const BASELINE: &str = ".elegance/baseline.json";
@@ -46,12 +46,12 @@ fn default_rung() -> u8 {
 struct Entry {
     metric: String,
     path: String,
-    /// Scope-qualified unit name; lines are deliberately not identity —
+    /// Scope-qualified unit name; lines are deliberately not identity:
     /// they shift with every unrelated edit.
     unit: String,
     /// The tolerated magnitude. Absent in schema 1 baselines, which are
     /// read as "any magnitude tolerated" so an upgrade never fails a
-    /// build spuriously — rewrite the baseline to close that hole.
+    /// build spuriously. Rewrite the baseline to close that hole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     value: Option<f32>,
 }
@@ -66,7 +66,7 @@ impl Entry {
 }
 
 /// Of two tolerated magnitudes for one moved (metric, unit), the one
-/// that tolerates MORE — several same-named units may have left one
+/// that tolerates MORE: several same-named units may have left one
 /// path, and the ratchet errs toward tolerance on renames. `None`
 /// (schema 1, unrecorded) is the most permissive of all.
 fn more_permissive(metric: &str, a: Option<f32>, b: Option<f32>) -> Option<f32> {
@@ -195,7 +195,7 @@ fn check_ledger(agg: &Agg, path: &Path, max_rung: u8) -> Result<i32, Box<dyn Err
 type MovedKey = (String, String);
 
 /// The ledger split for checking: exact identities, plus rename
-/// tolerance — an entry whose recorded path is absent from THIS scan
+/// tolerance. An entry whose recorded path is absent from THIS scan
 /// may have moved, so its (metric, unit) becomes a floating tolerance
 /// at the most permissive magnitude any such entry recorded.
 fn split_ledger(
@@ -278,8 +278,8 @@ mod tests {
 
     #[test]
     fn ratchet_blocks_a_baselined_unit_that_gets_worse() {
-        // The whole promise of the ratchet is "new sludge blocked, old
-        // sludge tolerated until touched". Suppressing by identity alone
+        // The ratchet's promise is "new sludge blocked, old sludge
+        // tolerated until touched". Suppressing by identity alone
         // let a baselined unit degrade without limit and still pass.
         let dir = std::env::temp_dir().join(format!("elegance-worse-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -347,9 +347,9 @@ mod tests {
     #[test]
     fn a_rename_does_not_manufacture_new_violations() {
         // Identity is (metric, path, unit), so renaming a file with 30
-        // baselined violations used to fail CI with 30 "new" ones. An
+        // baselined violations would fail CI with 30 "new" ones. An
         // entry whose path left the scan becomes a floating tolerance
-        // for its (metric, unit) — and worsening hides behind a rename
+        // for its (metric, unit), and worsening hides behind a rename
         // no better than it does in place.
         let dir = std::env::temp_dir().join(format!("elegance-rename-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

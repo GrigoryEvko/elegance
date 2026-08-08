@@ -5,16 +5,15 @@
 //! depending on what came before, and a source filter can rewrite the
 //! file before the interpreter ever sees it. tree-sitter reads the
 //! common shape of the language and gives up locally on the rest, so
-//! Perl numbers are floors the way C's are — the caveat is the same one
-//! and it is here for the same reason.
+//! Perl numbers are floors the way C's are, and the caveat is the same
+//! one for the same reason.
 //!
-//! Two facts make the modern language measurable in a way the 1990s one
-//! was not. Signatures (`sub f ($x, $y = 1)`) declare parameters, so the
-//! whole interface family works on code written since 5.20 and reads
-//! nothing at all from a sub that unpacks `@_` by hand — which is itself
-//! the most informative thing this pack measures about a Perl codebase's
-//! age. And 5.38's `class`/`method` give real declarations where there
-//! were once blessed hash references and a naming convention.
+//! Signatures (`sub f ($x, $y = 1)`) declare parameters, so the whole
+//! interface family works on code written since 5.20 and reads nothing
+//! at all from a sub that unpacks `@_` by hand, which is itself the most
+//! informative thing this pack measures about a Perl codebase's age.
+//! 5.38's `class`/`method` give real declarations where there were once
+//! blessed hash references and a naming convention.
 
 use tree_sitter::Node;
 
@@ -30,7 +29,7 @@ const KINDS: &[(&str, Sem)] = &[
     ("class_statement", Sem::TypeDef),
     ("role_statement", Sem::TypeDef),
     ("conditional_statement", Sem::If),
-    // `return $x if $cond` — a branch written after its consequence.
+    // `return $x if $cond`: a branch written after its consequence.
     ("postfix_conditional_expression", Sem::If),
     ("elsif", Sem::ElseIf),
     ("else", Sem::Else),
@@ -60,8 +59,8 @@ const KINDS: &[(&str, Sem)] = &[
     ("require_expression", Sem::Import),
     // The file itself is asked once, for the namespaces its strings
     // name. Asked of the FILE rather than of each string so a namespace
-    // name stays a StrLit for the secret, repetition and clone checks —
-    // promoting the string would cost it whatever the table said it
+    // name stays a StrLit for the secret, repetition and clone checks.
+    // Promoting the string would cost it whatever the table said it
     // was. See `namespaces`.
     ("source_file", Sem::Import),
     ("identifier", Sem::Ident),
@@ -98,8 +97,8 @@ const REASSIGNS: &[(&str, &str)] = &[("assignment_expression", "left")];
 
 /// The ONLY member access an object has here. A blessed hash reaches
 /// its fields with `->{k}`, whose receiver the grammar leaves unfielded,
-/// and every accessor a class generates is a method — so `->` chains
-/// ARE the data links Demeter is about, and there is no fluent-builder
+/// and every accessor a class generates is a method, so `->` chains ARE
+/// the data links Demeter is about, and there is no fluent-builder
 /// spelling to confuse them with.
 const ATTR: (&str, &str) = ("method_call_expression", "invocant");
 
@@ -130,8 +129,8 @@ pub fn pack() -> Pack {
         // A filehandle closes when its lexical goes out of scope, and
         // that is the idiom; there is no scope-guard statement to miss.
         // Future::AsyncAwait's `async sub` is the ecosystem's async and
-        // the grammar reads it, so the keyword at the head decides —
-        // the same rule every other language here uses.
+        // the grammar reads it, so the keyword at the head decides, the
+        // same rule every other language here uses.
         is_async: super::declared_async,
         refine,
         name_node,
@@ -166,14 +165,14 @@ pub fn pack() -> Pack {
         // `libtest/test*.pl`, and `appveyor.pm`/`azure.pm`/
         // `directories.pm` beside them.
         //
-        // Audited every Perl-family file in all 22 gold corpora under a
-        // `tests` component: 53 in curl and 18 in dune, and dune's are
-        // all `.t`, which the rule above already matched. So this reads
+        // Every Perl-family file under a `tests` component in the 22
+        // gold corpora: 53 in curl and 18 in dune, and dune's are all
+        // `.t`, which the rule above already matched. So this reads
         // curl's harness and nothing else in the corpus.
         //
-        // `/test/` singular is NOT here. Its motivating files were
-        // vscode's `.pl` colorize fixtures, and those are fixtures — the
-        // one-shot rule takes them by name rather than by pretending a
+        // `/test/` singular is NOT here. It would catch vscode's `.pl`
+        // colorize fixtures, and those are fixtures: the one-shot rule
+        // takes them by name rather than by pretending a
         // syntax-highlighting sample is a Perl test.
         test_path: |p| {
             p.contains("/t/") || p.ends_with(".t") || p.contains("/xt/") || p.contains("/tests/")
@@ -194,7 +193,7 @@ pub fn pack() -> Pack {
 fn name_node(node: Node) -> Option<Node> {
     node.child_by_field_name("name").or_else(|| {
         // A promoted `subtest` body takes its name from the string
-        // beside it in the argument list — prose rather than an
+        // beside it in the argument list: prose rather than an
         // identifier, the way a Zig test label is.
         let list = node.parent().filter(|p| p.kind() == "list_expression")?;
         list.named_child(0).filter(|n| n.kind() == "string_literal")
@@ -237,25 +236,24 @@ const SUPERCLASS_ARGS: &[&str] = &["parent", "base", "Mojo::Base"];
 /// Moo/Moose/Role::Tiny composition. `with` consumes roles and
 /// `extends` names a superclass; both take class names and nothing
 /// else. 25 of the corpus's 26 arguments resolve to a project file and
-/// the 26th is Exporter::Tiny, a CPAN dependency — which is the answer
+/// the 26th is Exporter::Tiny, a CPAN dependency, which is the answer
 /// an unresolved one should get.
 const COMPOSERS: &[&str] = &["with", "extends"];
 
-/// Perl declares a dependency four ways and this pack used to read one.
+/// Perl declares a dependency four ways.
 ///
 ///   use Foo::Bar;               the `module` field of `use_statement`
 ///   require Foo::Bar;           `require_expression` carries NO fields
 ///                               at all, so `child_by_field_name` never
-///                               matched and all 32 in the corpus were
-///                               dropped
+///                               matches; 32 in the corpus
 ///   use parent qw(Foo::Bar);    67 superclass arguments, 57 of which
 ///   use Mojo::Base 'Foo::Bar';  name a project file, plus 61 more
 ///   with 'Foo::Role';           26 role compositions, read as ordinary
 ///   extends 'Foo::Base';        calls
 ///
-/// Inheritance and composition ARE the Perl dependency graph — Plack's
-/// middleware chain and Dancer2's roles are built from nothing else —
-/// and 186 of 410 judged modules read as orphaned while they went
+/// Inheritance and composition ARE the Perl dependency graph: Plack's
+/// middleware chain and Dancer2's roles are built from nothing else,
+/// and 186 of 410 judged modules read as orphaned while they go
 /// uncounted.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     match node.kind() {
@@ -273,7 +271,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 /// decided at run time. Plack/lib/Plack/Builder.pm:20 and :31 write
 /// `Plack::Util::load_class($mw, 'Plack::Middleware')`, Runner.pm:194
 /// and :222 the same with `'Plack::Loader'`, and Loader.pm:41 with
-/// `'Plack::Handler'` — Util.pm:401 documents the two-argument form as
+/// `'Plack::Handler'`. Util.pm:401 documents the two-argument form as
 /// `load_class($class [, $prefix ])`. Test.pm:14 writes
 /// `my $subclass = "Plack::Test::$Impl";`, where the literal head IS
 /// the namespace and the leaf is a variable. mojo's Plugins.pm:7 says
@@ -314,8 +312,8 @@ fn namespaces(root: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 
 /// The namespace a string OPENS with, and the glob under it.
 ///
-/// The string must open with the name — one in the middle of a sentence
-/// is prose — and carry two or more `::`-joined segments, so a single
+/// The string must open with the name (one in the middle of a sentence
+/// is prose) and carry two or more `::`-joined segments, so a single
 /// bareword-shaped word cannot fire.
 ///
 /// The exact name is stated only when the literal IS the whole string.
@@ -338,8 +336,8 @@ fn named_namespace(node: Node, src: &[u8]) -> Vec<String> {
 }
 
 /// A module name is the only thing `use` and `require` can reach that a
-/// file might answer to; whether the file is in this project or on CPAN
-/// is what resolution decides, so a miss is an ordinary dependency.
+/// file might answer to; resolution decides whether that file is in
+/// this project or on CPAN, so a miss is an ordinary dependency.
 fn dependency(target: &str) -> super::ImportInfo {
     super::ImportInfo {
         target: target.into(),
@@ -349,7 +347,7 @@ fn dependency(target: &str) -> super::ImportInfo {
 }
 
 /// `require Foo::Bar`. The node has no fields, so the module is its
-/// first child — and it must be a BAREWORD: `require "some/file.pl"`
+/// first child, and it must be a BAREWORD: `require "some/file.pl"`
 /// reads a file off `@INC` rather than naming a module, and `require
 /// $class` names one only at run time.
 fn require_target(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
@@ -379,7 +377,7 @@ fn use_targets(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     out
 }
 
-/// `with 'Foo::Role'` and `extends 'Foo::Base'` — a call to the grammar,
+/// `with 'Foo::Role'` and `extends 'Foo::Base'`: a call to the grammar,
 /// promoted to an import by `refine` the way shell promotes `source`.
 fn composed(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     if !is_composition(node, src) {
@@ -398,18 +396,19 @@ fn is_composition(node: Node, src: &[u8]) -> bool {
     ) && callee_text(node, src).is_some_and(|t| COMPOSERS.contains(&t))
 }
 
-/// The class names a statement quotes. Only STRING content counts: a
-/// `qw()` list holds several per node and a bareword option (`-norequire`,
-/// `-signatures`) holds none, which is exactly the distinction between
-/// an argument that names a class and one that sets a flag.
 /// The class names in one `qw()` word list. A leading `-` marks a flag
-/// — `-norequire`, `-signatures` — rather than a class.
+/// (`-norequire`, `-signatures`) rather than a class.
 fn class_words(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split_whitespace()
         .filter(|w| !w.starts_with('-'))
         .map(str::to_string)
 }
 
+/// The class names a statement quotes. Only STRING content counts: a
+/// `qw()` list holds several per node and a bareword option
+/// (`-norequire`, `-signatures`) holds none, which is exactly the
+/// distinction between an argument that names a class and one that sets
+/// a flag.
 fn superclasses(node: Node, src: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![node];
@@ -425,7 +424,7 @@ fn superclasses(node: Node, src: &[u8]) -> Vec<String> {
 }
 
 /// Signatures, where the code has them. A sub that unpacks `@_` by hand
-/// declares nothing and correctly reads as taking no parameters — the
+/// declares nothing and correctly reads as taking no parameters. The
 /// difference between the two is the age of the code.
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     let name_of = |n: Node| -> Option<String> {
@@ -455,7 +454,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     match node.kind() {
         "mandatory_parameter" => Some(info(name_of(node)?, false, false)),
         "optional_parameter" => Some(info(name_of(node)?, true, false)),
-        // `sub f (:$x)` — named at the call site, so not opaque.
+        // `sub f (:$x)`: named at the call site, so not opaque.
         "named_parameter" => Some(info(name_of(node)?, true, false)),
         // `@rest` / `%opts` swallow whatever is left, which is exactly
         // the opacity `kw opacity` names.
@@ -497,9 +496,9 @@ fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
 }
 
 /// `!$x`, and the low-precedence `not $x`. Both arrive as the generic
-/// unary node — the grammar has a `logical_not_expression` kind and
-/// does not use it for either spelling, which left this language with
-/// no negations at all.
+/// unary node: the grammar has a `logical_not_expression` kind and does
+/// not use it for either spelling, so reading only that kind leaves
+/// this language with no negations at all.
 fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let text = node.utf8_text(src).ok()?;
     let negated = matches!(node.kind(), "unary_expression" | "logical_not_expression")
@@ -511,7 +510,7 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 /// An `eval` whose error is never examined: no `$@` in the statements
-/// that follow it. Deliberately shallow — two statements is what a
+/// that follow it. Deliberately shallow: two statements is what a
 /// reader checks too.
 fn swallows_error(node: Node, src: &[u8]) -> bool {
     if node.kind() != "eval_expression" {
@@ -519,9 +518,9 @@ fn swallows_error(node: Node, src: &[u8]) -> bool {
     }
     // Only a BARE eval statement. `my $ok = eval { ... }` hands the
     // caller a value to test and `eval { ...; 1 } or do { ... }` handles
-    // the failure in the same statement — both keep the error in the
-    // story, and counting them put this rung-2 gate over its ceiling on
-    // the gold corpus at 1.6%.
+    // the failure in the same statement. Both keep the error in the
+    // story, and counting them puts this rung-2 gate over its ceiling
+    // on the gold corpus at 1.6%.
     let Some(parent) = node.parent().filter(|p| p.kind() == "expression_statement") else {
         return false;
     };
@@ -574,7 +573,7 @@ fn is_a_raise(name: &str) -> bool {
 
 /// Test::More and its family. `subtest 'name' => sub { ... }` hands the
 /// test to an anonymous sub, so the SUB is the unit to judge and the
-/// evidence lives on the call it was passed to — the shape jest gives
+/// evidence lives on the call it was passed to, the shape jest gives
 /// TypeScript and busted gives Lua.
 fn declaring_test<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let list = node.parent().filter(|p| p.kind() == "list_expression")?;
@@ -587,8 +586,8 @@ fn declares_test(node: Node, src: &[u8]) -> bool {
 }
 
 /// `skip` and `todo_skip` suppress the block they head. `plan` does not
-/// suppress anything by itself — `plan tests => 15` DECLARES how many
-/// tests will run, which is the opposite — so it counts only in the one
+/// suppress anything by itself: `plan tests => 15` DECLARES how many
+/// tests will run, which is the opposite. It counts only in the one
 /// form that switches a file off wholesale.
 fn skips_test(node: Node, src: &[u8]) -> bool {
     match callee_text(node, src) {
@@ -631,14 +630,14 @@ fn is_public(node: Node, src: &[u8]) -> bool {
 
 /// POD immediately above the sub, or a `#` comment run. POD is usually
 /// gathered at the end of the file rather than sitting above each sub,
-/// so the comment run is what most code actually offers.
+/// so most code offers only the comment run.
 fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
     super::doc_run(node, &["comment", "pod"], &[], src)
 }
 
 /// A hash reference literal with bareword keys is an undeclared shape:
-/// nothing catches a typo in one, which is the whole reason `use strict`
-/// cannot help here.
+/// nothing catches a typo in one, and `use strict` does not reach hash
+/// keys.
 fn record_keys(node: Node, src: &[u8]) -> Option<Vec<Box<str>>> {
     if node.kind() != "anonymous_hash_expression" {
         return None;
@@ -663,7 +662,7 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         Sem::Lambda if declaring_test(node, src).is_some() => Sem::FnDef,
         // `with 'Foo::Role'` composes a role into this class. The
         // grammar has only calls to offer, so the import has to be
-        // recognised as one — the move the shell pack makes for
+        // recognised as one, the move the shell pack makes for
         // `source`.
         Sem::Call if is_composition(node, src) => Sem::Import,
         Sem::BoolOp if node.kind() == "binary_expression" => {
@@ -691,7 +690,7 @@ mod tests {
     fn inheritance_and_composition_are_dependencies_too() {
         // 67 `use parent`/`use base` arguments, 61 Mojo::Base parents,
         // 32 `require`s and 26 role compositions in the Perl gold
-        // corpus, all of them unread while only `use MODULE` counted.
+        // corpus, none of them read when only `use MODULE` counts.
         let got = targets(
             "use parent qw( App::Base );\n\
              use base 'App::Other';\n\
@@ -755,7 +754,7 @@ mod tests {
         assert!(is_test("/curl/tests/appveyor.pm"));
         assert!(is_test("/curl/tests/libtest/test1013.pl"));
         // Production Perl is untouched, and `/test/` singular is not
-        // this rule — vscode's colorize samples are fixtures.
+        // this rule: vscode's colorize samples are fixtures.
         assert!(!is_test("/Plack/lib/Plack/Builder.pm"));
         assert!(!is_test("/curl/docs/libcurl/symbols.pl"));
         assert!(!is_test("/vscode/ext/colorize-fixtures/test.pl"));

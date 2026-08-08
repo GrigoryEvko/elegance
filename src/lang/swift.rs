@@ -37,10 +37,10 @@ const KINDS: &[(&str, Sem)] = &[
     ("disjunction_expression", Sem::BoolOp),
     ("call_expression", Sem::Call),
     // A macro invocation is a call site the grammar spells with a `#`.
-    // swift-testing's whole assertion vocabulary is two of them —
-    // `#expect` and `#require` — and while this kind was unmapped no
-    // hook was ever asked about either, so 677 of the 1,182 gold Swift
-    // tests reported as checking nothing were checking.
+    // swift-testing's assertion vocabulary is two of them, `#expect` and
+    // `#require`, and without this kind no hook is asked about either:
+    // 677 of the 1,182 gold Swift tests reported as checking nothing
+    // were checking.
     ("macro_invocation", Sem::Call),
     ("as_expression", Sem::Cast),
     ("await_expression", Sem::Await),
@@ -63,8 +63,8 @@ const KINDS: &[(&str, Sem)] = &[
 
 const DEF_SITES: &[(&str, &str)] = &[
     // `let`/`var` is where a local is born. Without it the live map
-    // held no definition row for any local, so the repurposing check
-    // had nothing to compare a rewrite against.
+    // holds no definition row for any local, and the repurposing check
+    // has nothing to compare a rewrite against.
     ("property_declaration", "name"),
     ("function_declaration", "name"),
     ("class_declaration", "name"),
@@ -135,8 +135,8 @@ pub fn pack() -> Pack {
         // that ships is named that way. `Benchmarks` is
         // swift-package-benchmark's mandated directory (8 files in
         // gold, 8 orphaned) and `Snippets` is SwiftPM's reserved
-        // sample-code directory (1 file, orphaned) — harness targets a
-        // library cannot import.
+        // sample-code directory (1 file, orphaned). Both are harness
+        // targets a library cannot import.
         test_path: |p| {
             p.ends_with("Tests.swift")
                 || p.split('/')
@@ -185,14 +185,13 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 /// caller writes and an internal one the body uses. `_` suppresses the
 /// label, and that is the form that makes a call site unreadable.
 ///
-/// It is NOT a keyword splat, and reading it as one was the worst cell
-/// in the tool: `kw_splat` used to be `external == Some("_")`, which
-/// billed 1121 of 3604 Swift units — 31.1%, against 2.4% in Python and
-/// 0.2% in Ruby, the two languages that have the construct. A splat
-/// hides how many arguments there are and what they are called; an
-/// underscored label declares exactly one, with its type, and only
-/// suppresses the WORD at the call site. Swift has no `**kwargs`, so
-/// the cell is declared dead rather than tuned.
+/// It is NOT a keyword splat. Reading it as one — `kw_splat` as
+/// `external == Some("_")` — bills 1121 of 3604 Swift units (31.1%),
+/// against 2.4% in Python and 0.2% in Ruby, the two languages that have
+/// the construct. A splat hides how many arguments there are and what
+/// they are called; an underscored label declares exactly one, with its
+/// type, and only suppresses the WORD at the call site. Swift has no
+/// `**kwargs`, so the cell is declared dead rather than tuned.
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     if node.kind() != "parameter" {
         return None;
@@ -208,7 +207,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         optional: node.child_by_field_name("default_value").is_some() || type_text.ends_with('?'),
         // The language has no keyword splat; see the note above.
         kw_splat: false,
-        // `_ xs: Int...` — the ellipsis is a token of the parameter.
+        // `_ xs: Int...`: the ellipsis is a token of the parameter.
         splat: node
             .utf8_text(src)
             .is_ok_and(|t| t.trim_end().ends_with("...")),
@@ -277,7 +276,7 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 /// `catch { }` with no pattern reaches every thrown error. Emptiness
-/// is the wider sin and is asked first — the core consults
+/// is the wider sin and is asked first: the core consults
 /// `swallows_error` on `if` nodes only, so a catch answers both here.
 fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "catch_block" {
@@ -364,8 +363,8 @@ fn declares_test(node: Node, src: &[u8]) -> bool {
 /// `XCTSkip` thrown unconditionally, or swift-testing's `.disabled`
 /// trait. Judged on the CALL, not on any node whose text happens to
 /// contain the word: this hook is asked of every node, so a containment
-/// test made an enclosing function match too and one file reporting 19
-/// `XCTSkip` occurrences counted 33.
+/// test matches the enclosing function too, and one file with 19
+/// `XCTSkip` occurrences counts 33.
 ///
 /// `XCTSkipUnless` and `XCTSkipIf` take their condition as an ARGUMENT,
 /// where the extractor's branch guard cannot see it. They are the
@@ -384,8 +383,9 @@ fn skips_test(node: Node, src: &[u8]) -> bool {
 
 /// XCTest spells an assertion `XCTAssert*`; swift-testing, which
 /// replaced it, spells one `#expect(cond)` and its stop-on-failure form
-/// `#require`. `expectish` is not enough for either: the macro's name is
-/// exactly `expect`, and `require` starts with neither word.
+/// `#require`. The shared `assertish` vocabulary reaches neither: one is
+/// bare `expect`, the other carries no assert word at all. Both names
+/// are matched outright here.
 fn asserty(call: Node, src: &[u8]) -> bool {
     callee_text(call, src).is_some_and(|t| {
         super::assertish(t) || t.starts_with("XCTAssert") || matches!(t, "expect" | "require")
@@ -457,8 +457,10 @@ fn refine(node: Node, _src: &[u8], sem: Sem) -> Sem {
     }
 }
 
-/// `override`, and a member of a protocol EXTENSION, which is how this
-/// language spells a default implementation.
+/// `override`, and a member of an EXTENSION, which is how this language
+/// spells a default implementation. The grammar files an extension under
+/// `class_declaration`, so the ancestor walk reads the declaration's own
+/// text.
 fn is_override(node: Node, src: &[u8]) -> bool {
     let mut cursor = node.walk();
     if node

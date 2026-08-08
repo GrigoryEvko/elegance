@@ -33,7 +33,7 @@ pub struct Hotspot {
 }
 
 /// Churn alone ranks generated files; complexity alone ranks museums.
-/// The product is what Tornhill's analysis is for.
+/// Tornhill's analysis ranks by the product of the two.
 pub fn score(h: &Hotspot) -> f64 {
     h.churn * h.complexity as f64
 }
@@ -129,7 +129,7 @@ fn churn_by_file(root: &Path) -> Result<HashMap<String, Churn>, Box<dyn Error>> 
 }
 
 /// Join churn against the worst gated measurement per file. Files with
-/// no measured complexity (deleted, unsupported, generated) drop out —
+/// no measured complexity (deleted, unsupported, generated) drop out:
 /// churn alone is not a finding.
 fn join(agg: &crate::report::Agg, churn: &HashMap<String, Churn>, root: &Path) -> Vec<Hotspot> {
     let mut worst: HashMap<String, (f32, &'static str)> = HashMap::new();

@@ -1,12 +1,12 @@
 //! Ruby: everything is an object and almost everything is a method call.
 //!
-//! Two facts shape what can be measured here. Blocks are the control
-//! flow — `each`, `map`, `times` are calls taking a block, not loop
-//! syntax — so a loop-based metric reads low the same way it does for
-//! OCaml, and the block is measured as the lambda it is. And privacy is
-//! a run-time toggle: `private` is a method call that changes the
-//! default for everything after it, so visibility has to be tracked by
-//! position within the class body rather than read off a keyword.
+//! Blocks are the control flow: `each`, `map` and `times` are calls
+//! taking a block rather than loop syntax, so `refine` reads a block
+//! given to one of the iteration methods as the loop it is and every
+//! other block as the lambda it is. Privacy is a run-time toggle:
+//! `private` is a method call that changes the default for everything
+//! after it, so visibility has to be tracked by position within the
+//! class body rather than read off a keyword.
 
 use tree_sitter::Node;
 
@@ -67,10 +67,10 @@ const DEF_SITES: &[(&str, &str)] = &[
     ("singleton_method", "name"),
     ("class", "name"),
     ("module", "name"),
-    // A local is BORN at its first assignment — the language has no
-    // declaration keyword. Without this the live map held no definition
-    // row for any Ruby local, so every span read zero and the
-    // repurposing check had nothing to compare a rewrite against.
+    // A local is BORN at its first assignment; the language has no
+    // declaration keyword. Without this the live map holds no definition
+    // row for any Ruby local, so every span reads zero and the
+    // repurposing check has nothing to compare a rewrite against.
     ("assignment", "left"),
 ];
 
@@ -105,7 +105,7 @@ pub fn pack() -> Pack {
         record_keys,
         // `File.open` with a block closes at the end of it, and that is
         // the idiom; the bare form is rare enough not to guess at.
-        // Concurrency is Thread, Fiber and gems — never syntax.
+        // Concurrency is Thread, Fiber and gems, never syntax.
         is_async: |_, _| false,
         refine,
         name_node,
@@ -131,7 +131,7 @@ pub fn pack() -> Pack {
         is_test_code: |_, _| false,
         // `tests/` beside `test/`: tigerbeetle's Ruby client files its
         // suite as `src/clients/ruby/tests/{unit,integration}/test_*.rb`,
-        // ten files, and the pack read only the singular.
+        // ten files the singular spelling never reaches.
         test_path: |p| {
             p.contains("/spec/")
                 || p.contains("/test/")
@@ -159,7 +159,8 @@ fn name_node(node: Node) -> Option<Node> {
 
 /// `require`, `require_relative`, `load` and `autoload` are the import
 /// forms. `autoload` names the constant first and the file second, so
-/// the target is the first STRING argument rather than the first.
+/// the target is the first STRING argument rather than the first
+/// argument.
 ///
 /// A `"#{__dir__}/..."` literal is an import form too, whatever call it
 /// is written in: `__dir__` is the directory of the file holding it, so
@@ -171,7 +172,7 @@ fn name_node(node: Node) -> Option<Node> {
 /// 609 cop files are 55% of every orphan in the Ruby corpus.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     // An argument list is an unmapped kind, so reading one leaves the
-    // call around it a call — which matters here, because the verb is
+    // call around it a call. That matters here, because the verb is
     // whatever the project called it.
     if node.kind() == "argument_list" {
         return autoloaded(node, src)
@@ -230,18 +231,19 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 /// `sinatra/sinatra-contrib/lib/sinatra/contrib/setup.rb:14` defines
 /// `register(name, path)` as `autoload(name, path, :register)` and
 /// `helpers` beside it identically; `contrib.rb:12-32` names all eleven
-/// extensions through them — `register :ConfigFile, 'sinatra/config_file'`
-/// — and nothing else in the corpus names any of the ten files they
-/// reach. The verb is the project's, so the ARGUMENTS have to be what
-/// is read: a CONSTANT symbol and a bare path.
+/// extensions through them (`register :ConfigFile,
+/// 'sinatra/config_file'`), and nothing else in the corpus names any of
+/// the ten files they reach. The verb is the project's, so the
+/// ARGUMENTS have to be what is read: a CONSTANT symbol and a bare
+/// path.
 ///
-/// Both narrowings were measured. 1077 lines across gold pair a
-/// receiverless verb with a symbol and a string; requiring the symbol
-/// to name a CONSTANT leaves 785, which is what keeps `mime_type :foo,
-/// 'application/x-foo'`, `set :views, 'app/views'` and `column :name,
-/// "text"` out. Requiring the string to be stated OUTRIGHT leaves
-/// rubocop's 609 `register_cop :Alias, "#{__dir__}/style/alias"` to the
-/// `__dir__` reading above, which already resolves them as paths.
+/// 1077 lines across gold pair a receiverless verb with a symbol and a
+/// string; requiring the symbol to name a CONSTANT leaves 785, which
+/// keeps `mime_type :foo, 'application/x-foo'`, `set :views,
+/// 'app/views'` and `column :name, "text"` out. Requiring the string to
+/// be stated OUTRIGHT leaves rubocop's 609 `register_cop :Alias,
+/// "#{__dir__}/style/alias"` to the `__dir__` reading above, which
+/// already resolves them as paths.
 fn autoloaded(args: Node, src: &[u8]) -> Option<String> {
     let call = args.parent().filter(|c| c.kind() == "call")?;
     // A receiver makes it somebody's own method, and `autoload` itself
@@ -264,7 +266,7 @@ fn autoloaded(args: Node, src: &[u8]) -> Option<String> {
     text.contains('/').then_some(text)
 }
 
-/// A string with nothing built into it — the only kind whose text the
+/// A string with nothing built into it: the only kind whose text the
 /// source states outright.
 fn plain_text(string: Node, src: &[u8]) -> Option<String> {
     let mut cursor = string.walk();
@@ -279,18 +281,18 @@ fn plain_text(string: Node, src: &[u8]) -> Option<String> {
 ///
 /// `sequel/lib/sequel/database/connecting.rb:84` is
 /// `require "sequel/adapters/#{file}"` and `:76`, six lines above it,
-/// is `file = "#{subdir}/#{scheme}"` — so the hole is TWO components
+/// is `file = "#{subdir}/#{scheme}"`, so the hole is TWO components
 /// wide, and the doc at `:70` says why: ":subdir :: The subdirectory of
 /// sequel/adapters to look in, only to be used for loading
-/// subadapters". Reading the hole as one component reached none of the
+/// subadapters". Reading the hole as one component reaches none of the
 /// eleven `adapters/jdbc/*.rb` or three `adapters/odbc/*.rb`.
 ///
 /// Bounded by an assignment in the file rather than by an unbounded
-/// trailing star, which was the alternative and is a guess:
-/// `glob_modules` is shared with Lua and Python, where `kong.plugins.*`
-/// would then match thousands of files. The `else file = scheme` branch
-/// binds a name rather than a string and is skipped, so a hole nothing
-/// assigns keeps its single star.
+/// trailing star, which would be a guess: `glob_modules` is shared with
+/// Lua and Python, where `kong.plugins.*` would then match thousands of
+/// files. The `else file = scheme` branch binds a name rather than a
+/// string and is skipped, so a hole nothing assigns keeps its single
+/// star.
 fn widened_target(string: Node, src: &[u8]) -> Option<String> {
     let mut cursor = string.walk();
     let parts: Vec<Node> = string.named_children(&mut cursor).collect();
@@ -357,15 +359,15 @@ fn assigned_string<'t>(from: Node<'t>, name: &str, src: &[u8]) -> Option<Node<'t
 }
 
 /// The path a `"#{__dir__}/x/y"` literal names, relative to the file
-/// holding it — here `/x/y`, which `normalize` folds onto the file's own
-/// directory exactly as it folds a `require_relative` argument.
+/// holding it: here `/x/y`, which `normalize` folds onto the file's own
+/// directory as it folds a `require_relative` argument.
 ///
-/// Two narrowings keep this to loads. A FURTHER interpolation makes the
-/// rest of the path a run-time value, and there is nothing to read.
-/// And an extension other than `.rb` names data rather than a module:
-/// rubocop's `File.exist?("#{__dir__}/../rubocop.gemspec")` is the
-/// corpus's one such literal, and it is already excluded by the
-/// receiver its call carries.
+/// A FURTHER interpolation makes the rest of the path a run-time value,
+/// and there is nothing to read. An extension other than `.rb` names
+/// data rather than a module: rubocop's
+/// `File.exist?("#{__dir__}/../rubocop.gemspec")` is the corpus's one
+/// such literal, and it is already excluded by the receiver its call
+/// carries. Both narrowings keep the reading to loads.
 fn dir_rooted_path(string: Node, src: &[u8]) -> Option<String> {
     let mut cursor = string.walk();
     let mut parts = string.named_children(&mut cursor);
@@ -407,7 +409,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         "keyword_parameter" => (node.child_by_field_name("value").is_some(), false),
         // `**opts` is the one that hides what it accepts.
         "hash_splat_parameter" => (true, true),
-        // `def each((key, value))` — the grammar has one node for it,
+        // `def each((key, value))`: the grammar has one node for it,
         // in a method head and in a block's `|(k, v)|` alike.
         "destructured_parameter" => (false, false),
         _ => return None,
@@ -422,7 +424,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         destructured: node.kind() == "destructured_parameter",
         splat: matches!(node.kind(), "splat_parameter" | "hash_splat_parameter"),
         // Nothing declares a type here, so the DEFAULT is the only
-        // evidence a parameter is a switch — `def write(data,
+        // evidence a parameter is a switch: `def write(data,
         // dry_run: false)` says as plainly as an annotation would.
         boolish: defaults_to_a_boolean(node, src),
         ..Default::default()
@@ -457,16 +459,16 @@ fn first_string<'t>(call: Node<'t>) -> Option<Node<'t>> {
 /// being able to say.
 ///
 /// `require "roda/plugins/#{name}"` assembles its name at run time, and
-/// what it builds cannot be read — but everything around it can, so
-/// `roda/plugins/*` is the honest reading, exactly as a Lua `..` prefix
-/// is. Six such lines hold 417 of gold Ruby's 490 orphans.
+/// what it builds cannot be read. Everything around it can, so
+/// `roda/plugins/*` is the honest reading, as a Lua `..` prefix is. Six
+/// such lines hold 417 of gold Ruby's 490 orphans.
 ///
 /// Every literal must meet the run-time value at a `/`, or the `*`
-/// would stand for part of a name rather than a whole one. That is
-/// also what rejects the shapes with nothing to read: sinatra's
+/// would stand for part of a name rather than a whole one. That also
+/// rejects the shapes with nothing to read: sinatra's
 /// `require "#{engine}"` and sequel's `"#{"#{subdir}/" if subdir}#{f}"`
-/// put the very ROOT of the path at run time, and reading past those
-/// reported a dependency literally called `/schema`.
+/// put the ROOT of the path at run time, and reading past those
+/// reports a dependency literally called `/schema`.
 fn load_target(string: Node, src: &[u8]) -> Option<String> {
     let mut cursor = string.walk();
     let parts: Vec<Node> = string.named_children(&mut cursor).collect();
@@ -531,7 +533,7 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 /// with no class at all is the same reach with less written down.
 ///
 /// Emptiness is asked FIRST, and answered here rather than through
-/// `swallows_error` — that hook is consulted on `if` nodes, for the
+/// `swallows_error`: that hook is consulted on `if` nodes, for the
 /// languages where an error is a value, and Ruby's rescue never
 /// reaches it. The wider sin is the one that vanishes the error.
 fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
@@ -544,7 +546,7 @@ fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     let has_class = node.child_by_field_name("exceptions").is_some();
     let text = node.utf8_text(src).unwrap_or("");
     // `rescue Exception` reaches past StandardError to SignalException
-    // and NoMemoryError — the widest net the language offers.
+    // and NoMemoryError, the widest net the language offers.
     match has_class {
         false => Some(super::CatchSin::Broad),
         true if text.contains("rescue Exception") => Some(super::CatchSin::Broad),
@@ -677,11 +679,11 @@ fn record_keys(node: Node, src: &[u8]) -> Option<Vec<Box<str>>> {
     (!keys.is_empty()).then_some(keys)
 }
 
-/// Three normalizations. `elsif` is its own kind and needs no
-/// flattening. `&&`/`||`/`and`/`or` share the binary kind with every
-/// arithmetic operator. And a `block` attached to `each`/`map` is the
-/// language's loop, so it is measured as one rather than as a lambda —
-/// otherwise Ruby would appear to contain no iteration at all.
+/// `elsif` is its own kind and needs no flattening. `&&`/`||`/`and`/`or`
+/// share the binary kind with every arithmetic operator. A `block`
+/// attached to `each`/`map` is the language's loop, so it is measured as
+/// one rather than as a lambda; otherwise Ruby would appear to contain
+/// no iteration at all.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
         Sem::BoolOp => match super::field_text_is(node, "operator", src) {
@@ -690,9 +692,8 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         },
         Sem::Lambda if iterates(node, src) => Sem::Loop,
         // Ruby's import is a CALL, and the core asks about imports at
-        // `Sem::Import` nodes — so until this arm existed the pack's
-        // `imports` hook was written, tested and never once asked, and
-        // Ruby had no module graph at all.
+        // `Sem::Import` nodes. Without this arm the pack's `imports`
+        // hook is never asked and Ruby has no module graph at all.
         Sem::Call if requires(node, src) => Sem::Import,
         // An autoload written under the project's own verb. The
         // ARGUMENT LIST is promoted and not the call, so the twenty
@@ -705,10 +706,10 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     }
 }
 
-/// Is this call a load site? Either it NAMES a load — `autoload :Base,
-/// 'rack/protection/base'` defers one until the constant is touched,
-/// and the file is a dependency either way — or it is handed a
+/// Is this call a load site? Either it NAMES a load, or it is handed a
 /// `#{__dir__}`-rooted path, which nothing but a load is written with.
+/// `autoload :Base, 'rack/protection/base'` defers its load until the
+/// constant is touched, and the file is a dependency either way.
 ///
 /// A RECEIVER disqualifies both: `require` and `load` are Kernel methods
 /// called bare, `config.load(path)` is somebody's own method that
@@ -727,7 +728,7 @@ fn requires(call: Node, src: &[u8]) -> bool {
 /// before loading all 102 of its extensions through the alias. Reading
 /// it is the same standard as reading a manifest; GUESSING it is not an
 /// option, since a suffix rule on `require` would take `requires`,
-/// `required` and `require_valid_table` — 300 calls across the gold
+/// `required` and `require_valid_table`: 300 calls across the gold
 /// corpus that load nothing.
 fn names_a_load(call: Node, src: &[u8]) -> bool {
     let Some(name) = callee_text(call, src) else {
@@ -769,7 +770,7 @@ fn aliases_a_load(call: Node, src: &[u8], name: &str) -> bool {
 
 /// Blocks given to the iteration methods. The list is deliberately
 /// short: these are the ones that mean "again for each element", and a
-/// block given to `File.open` or `synchronize` genuinely is not a loop.
+/// block given to `File.open` or `synchronize` is not a loop.
 fn iterates(block: Node, src: &[u8]) -> bool {
     let Some(call) = block.parent().filter(|p| p.kind() == "call") else {
         return false;
@@ -837,7 +838,7 @@ mod tests {
     fn both_spellings_of_the_test_directory_are_test_code() {
         // tigerbeetle's Ruby client files its suite as
         // `src/clients/ruby/tests/{unit,integration}/test_*.rb`, eleven
-        // files, and the pack read only the singular.
+        // files the singular spelling never reaches.
         let is_test = Lang::Ruby.pack().test_path;
         for p in [
             "tigerbeetle/src/clients/ruby/tests/unit/test_id.rb",
@@ -861,10 +862,9 @@ mod tests {
         // `register(name, path)` as `autoload(name, path, :register)`
         // and `helpers` beside it identically; contrib.rb names all
         // eleven extensions through them and nothing else names any of
-        // the files they reach. Requiring a CONSTANT symbol is what
-        // separates a load from `column :name, "text"`: 1077 lines in
-        // gold pair a verb with a symbol and a string, and 785 of them
-        // name a constant.
+        // the files they reach. A CONSTANT symbol separates a load from
+        // `column :name, "text"`: 1077 lines in gold pair a verb with a
+        // symbol and a string, and 785 of them name a constant.
         let got = imports_of(concat!(
             "register :ConfigFile, 'sinatra/config_file'\n",
             "helpers :ContentFor, 'sinatra/content_for'\n",
@@ -887,7 +887,7 @@ mod tests {
         // sequel/lib/sequel/database/connecting.rb:84 is the require
         // and :76, six lines above it, is the assignment; the doc at
         // :70 says ":subdir :: The subdirectory of sequel/adapters to
-        // look in". Reading the hole as one component reached none of
+        // look in". Reading the hole as one component reaches none of
         // the eleven jdbc or three odbc adapters. The `else file =
         // scheme` branch binds a name rather than a string and is
         // skipped, so a hole nothing assigns keeps its single star.
@@ -915,8 +915,8 @@ mod tests {
     fn a_dir_rooted_literal_is_a_path_from_this_file_whatever_call_holds_it() {
         // rubocop names 609 cop files with `register_cop` and 86 mixins
         // with `autoload`, both over a `#{__dir__}` literal. Its three
-        // other uses of the same shape carry a receiver, and that is
-        // what keeps a gemspec check and a glob out of the graph.
+        // other uses of the same shape carry a receiver, and the
+        // receiver keeps a gemspec check and a glob out of the graph.
         let got = imports_of(concat!(
             "register_cop :Alias, \"#{__dir__}/style/alias\"\n",
             "autoload :Alignment, \"#{__dir__}/mixin/alignment\"\n",
@@ -968,14 +968,14 @@ mod tests {
     #[test]
     fn a_require_assembled_at_run_time_still_names_what_it_can() {
         // roda's `plugin` method, rodauth's feature loader and four of
-        // sequel's -- six lines holding 417 of gold Ruby's 490 orphans.
+        // sequel's: six lines holding 417 of gold Ruby's 490 orphans.
         // What the interpolation builds cannot be read; everything
         // around it can, and `*` stands for exactly one component.
         //
         // Every literal has to meet the run-time value at a `/`, which
-        // is what rejects the shapes with nothing to read: `"#{engine}"`
-        // puts the ROOT of the path at run time, and reading past it
-        // reported a dependency literally called `/schema`.
+        // rejects the shapes with nothing to read: `"#{engine}"` puts
+        // the ROOT of the path at run time, and reading past it reports
+        // a dependency literally called `/schema`.
         let got = imports_of(concat!(
             "require \"roda/plugins/#{name}\"\n",
             "require_relative \"connection_pool/#{pc}\"\n",

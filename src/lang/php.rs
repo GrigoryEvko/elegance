@@ -3,15 +3,14 @@
 //! Almost alone here it can be read at two ages at once. The same
 //! codebase may hold an untyped array-shaped function from 2009 and a
 //! `final readonly class` with union types and `match` from last year,
-//! and both are ordinary PHP. That makes the type-hygiene family unusually
-//! informative — `untyped params` is measuring a migration rather than a
-//! habit — and it is why the modern corpus here is deliberately code that
+//! and both are ordinary PHP. That gives the type-hygiene family a
+//! second reading: `untyped params` measures a migration rather than a
+//! habit, and it is why the modern corpus here is deliberately code that
 //! made the move: Composer, PHPStan, PHP-Parser.
 //!
-//! One structural caveat. A `.php` file may hold HTML with islands of
-//! code, and the grammar reads both. Text outside `<?php` is `text` and
-//! contributes no units, so a template-heavy file measures as small
-//! rather than as wrong.
+//! A `.php` file may hold HTML with islands of code, and the grammar
+//! reads both. Text outside `<?php` is `text` and contributes no units,
+//! so a template-heavy file measures as small rather than as wrong.
 
 use tree_sitter::Node;
 
@@ -39,7 +38,7 @@ const KINDS: &[(&str, Sem)] = &[
     ("match_expression", Sem::Match),
     ("case_statement", Sem::CaseArm),
     // The catch-all arm is its own kind here, and leaving it unmapped
-    // left every `switch` looking exhaustive to the wildcard check.
+    // leaves every `switch` looking exhaustive to the wildcard check.
     ("default_statement", Sem::CaseArm),
     ("match_conditional_expression", Sem::CaseArm),
     ("match_default_expression", Sem::CaseArm),
@@ -55,9 +54,9 @@ const KINDS: &[(&str, Sem)] = &[
     ("comment", Sem::Comment),
     ("namespace_use_declaration", Sem::Import),
     // PHP's OTHER module system. `use` names a class for the autoloader;
-    // `include`/`require` name a FILE, and all four spellings of it were
-    // missing from this table entirely, so the pack read none of the
-    // corpus's 66 include statements. See `included_file`.
+    // `include`/`require` name a FILE. Without all four spellings here
+    // the pack reads none of the corpus's 66 include statements. See
+    // `included_file`.
     ("include_expression", Sem::Import),
     ("include_once_expression", Sem::Import),
     ("require_expression", Sem::Import),
@@ -87,9 +86,9 @@ const DEF_SITES: &[(&str, &str)] = &[
     ("interface_declaration", "name"),
     ("trait_declaration", "name"),
     // A variable is BORN at its first assignment: there is no `var`.
-    // Without this the live map held no definition row for any local,
-    // so the repurposing check had nothing to compare a rewrite
-    // against and every span read zero.
+    // Without this the live map holds no definition row for any local,
+    // so the repurposing check has nothing to compare a rewrite
+    // against and every span reads zero.
     ("assignment_expression", "left"),
 ];
 
@@ -136,8 +135,8 @@ pub fn pack() -> Pack {
         param_info,
         is_self_call,
         is_doc,
-        // The docblock is the language's whole documentation culture,
-        // and static analysers read its annotations as types.
+        // The docblock is the language's documentation culture, and
+        // static analysers read its annotations as types.
         doc_markers: &["/**"],
         is_public,
         doc_span,
@@ -192,18 +191,17 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     }
 }
 
-/// `require __DIR__ . '/compatibility_tokens.php'` — the other half of
+/// `require __DIR__ . '/compatibility_tokens.php'`: the other half of
 /// PHP's module story, and the half the autoloader never sees.
 ///
-/// PHP-Parser's Lexer.php:5 is that line, and compatibility_tokens.php
-/// read as depended on by nothing; flysystem's phpunit.php:4-5 pulls in
-/// AdapterTestUtilities/test-functions.php and mocked-functions.php the
-/// same way, and phpunit.xml.dist:2 names phpunit.php as the suite
-/// bootstrap. 66 include/require statements exist in the gold corpus and
-/// the pack read zero of them, because all four node kinds were absent
-/// from the KINDS table.
+/// PHP-Parser's Lexer.php:5 is that line, and unread it leaves
+/// compatibility_tokens.php depended on by nothing; flysystem's
+/// phpunit.php:4-5 pulls in AdapterTestUtilities/test-functions.php and
+/// mocked-functions.php the same way, and phpunit.xml.dist:2 names
+/// phpunit.php as the suite bootstrap. The gold corpus holds 66
+/// include/require statements.
 ///
-/// `__DIR__` is REQUIRED, and it is what makes the rest readable. Without
+/// `__DIR__` is REQUIRED, and it makes the rest readable. Without
 /// it the specifier is relative to the process's working directory or is
 /// built from a variable, and neither can be known without running the
 /// program. With it the base is the including file's own directory, so
@@ -233,7 +231,7 @@ fn included_file(node: Node, src: &[u8]) -> Option<super::ImportInfo> {
         path.push_str(&piece);
     }
     // A relative path always holds a separator and a namespace never
-    // does, which is what tells the two apart at the resolver.
+    // does, which tells the two apart at the resolver.
     (here && path.contains('/')).then(|| super::ImportInfo {
         target: path.into(),
         names: Vec::new(),
@@ -260,8 +258,9 @@ const CLASS_SITES: &[&str] = &[
 /// file's own namespace is named bare and imports nothing, and a class
 /// in a namespace below it is written out: PHP-Parser spells
 /// `Comment\Doc`, `Lexer\Emulative` and `Builder\Class_` that way and
-/// imports none of them, which is why 181 of its 274 modules read as
-/// orphans while only 4 are never named by another production file.
+/// imports none of them, so a reader of `use` statements alone calls
+/// 181 of its 274 modules orphans while only 4 are never named by
+/// another production file.
 ///
 /// A bare name that a `use` already bound is skipped: it names that
 /// import, which is recorded at the declaration, and recording it again
@@ -368,8 +367,8 @@ impl<'a> Classes<'a> {
         // `class RotatingFileHandler extends StreamHandler` and needs
         // no `use` for it, because both sit in `Monolog\Handler`. A
         // leading `\` is the one spelling that means the global
-        // namespace instead, and `qualified` has already dropped it —
-        // so the test is made on the text as written.
+        // namespace instead, and `qualified` has already dropped it, so
+        // the test is made on the text as written.
         let rooted = text.starts_with('\\');
         let own = read_against(&self.blocks, node.start_byte());
         let relative: String = own
@@ -390,7 +389,7 @@ impl<'a> Classes<'a> {
     }
 }
 
-/// The short names the file's own `use` statements bind — the alias when
+/// The short names the file's own `use` statements bind: the alias when
 /// one is written, the last segment otherwise.
 fn bound_names<'a>(root: Node, src: &'a [u8]) -> std::collections::HashSet<&'a str> {
     let mut names = std::collections::HashSet::new();
@@ -423,7 +422,7 @@ fn bound_names<'a>(root: Node, src: &'a [u8]) -> std::collections::HashSet<&'a s
 
 /// `use Foo\Bar;`, `use Foo\Bar as Baz;`, and the grouped
 /// `use Foo\{Bar, Baz};` whose clauses hang off a `namespace_use_group`
-/// and were invisible to a search of the declaration's own children.
+/// and are invisible to a search of the declaration's own children.
 fn namespace_uses(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let blocks = namespace_blocks(node, src);
     let own = read_against(&blocks, node.start_byte()).to_vec();
@@ -466,15 +465,15 @@ fn namespace_uses(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 ///
 /// PSR-4 maps a namespace ROOT onto a source directory and the two need
 /// not be spelled alike — composer.json says `GuzzleHttp\` is `src/`
-/// and `League\Flysystem\` is `src` — so the pack used to drop the
-/// prefix the importer's own namespace shared with the target and let
-/// the resolver suffix-match what was left. That works until two
-/// projects share a leaf name, and then it takes the WRONG one:
+/// and `League\Flysystem\` is `src` — so a name could be cut down to
+/// the part the importer's own namespace does not share and left to the
+/// resolver to suffix-match. That works until two projects share a leaf
+/// name, and then it takes the WRONG one:
 /// composer/src/Composer/Util/Url.php:15 writes `use Composer\Config;`,
-/// one of 46 files that do, and the stripped tail `Config` matched
-/// flysystem/src/Config.php in an unrelated repository, so
-/// composer's own Config.php read as depended on by nothing. Utils.php,
-/// StreamHandler.php and ErrorHandler.php collided the same way.
+/// one of 46 files that do, and the stripped tail `Config` matches
+/// flysystem/src/Config.php in an unrelated repository, leaving
+/// composer's own Config.php depended on by nothing. Utils.php,
+/// StreamHandler.php and ErrorHandler.php collide the same way.
 ///
 /// Keeping the whole name costs nothing and lets `Index::php` resolve
 /// it the way PHP does: through the PSR-4 root a manifest declares.
@@ -501,13 +500,13 @@ fn qualified(text: &str, own: &[&str]) -> super::ImportInfo {
 }
 
 /// The namespace blocks the file declares, by the byte at which each
-/// opens — the only statement in the source about where PSR-4 has
+/// opens: the only statement in the source about where PSR-4 has
 /// rooted it.
 ///
 /// A file may declare more than one. monolog's
 /// tests/Monolog/Processor/IntrospectionProcessorTest.php opens
 /// `namespace Acme;` at line 12 and `namespace Monolog\Processor;` at
-/// line 27, and reading the first for the whole file made every name
+/// line 27, and reading the first for the whole file makes every name
 /// below line 27 an `Acme\` name. Eight files in gold do this, two of
 /// them composer production code.
 fn namespace_blocks<'a>(node: Node, src: &'a [u8]) -> Vec<(usize, Vec<&'a str>)> {
@@ -539,8 +538,8 @@ fn read_against<'a, 'b>(blocks: &'b [(usize, Vec<&'a str>)], at: usize) -> &'b [
         .map_or(&[][..], |(_, segs)| segs.as_slice())
 }
 
-/// A parameter carries a declared type or it does not, and that is the
-/// single most informative bit about a PHP codebase's age.
+/// A parameter carries a declared type or it does not, and that bit
+/// dates a PHP codebase.
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     if !matches!(
         node.kind(),
@@ -613,7 +612,7 @@ fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     // Emptiness is the wider sin and is asked first. It is answered
     // here rather than through `swallows_error`, which the core
     // consults on `if` nodes for the languages where an error is a
-    // value — a catch clause never reaches it.
+    // value: a catch clause never reaches it.
     if swallows_error(node, src) {
         return Some(super::CatchSin::Swallowed);
     }
@@ -648,7 +647,7 @@ fn loses_context(node: Node, src: &[u8]) -> bool {
     super::rethrows_without_cause(body, "throw_expression", bound.trim_start_matches('$'), src)
 }
 
-/// A catch whose body is empty silences the error entirely.
+/// A catch whose body is empty silences the error.
 fn swallows_error(node: Node, src: &[u8]) -> bool {
     if node.kind() != "catch_clause" {
         return false;
@@ -658,8 +657,8 @@ fn swallows_error(node: Node, src: &[u8]) -> bool {
         .is_some_and(|t| t.trim().trim_matches(['{', '}']).trim().is_empty())
 }
 
-/// PHPUnit: a test is a method named `test*` or one carrying the
-/// `#[Test]` attribute or `@test` annotation.
+/// PHPUnit: a test is a method whose name begins with `test`. The
+/// `#[Test]` attribute and the `@test` annotation are not read.
 fn declares_test(node: Node, src: &[u8]) -> bool {
     if node.kind() != "method_declaration" {
         return false;
@@ -677,15 +676,16 @@ fn skips_test(node: Node, src: &[u8]) -> bool {
 }
 
 /// A declared return type of `array` says a list comes back but not how
-/// wide, so only a tuple-shaped docblock could answer it — and that is
-/// an annotation, not the language. Nothing to read.
+/// wide. Only a tuple-shaped docblock could answer that, and a docblock
+/// is an annotation rather than the language, so there is nothing here
+/// to read.
 fn return_arity(_node: Node, _src: &[u8]) -> u16 {
     0
 }
 
-/// An interface's width is its declared method count — the one place
+/// An interface's width is its declared method count: the one place
 /// here where the contract is written down separately from any
-/// implementation, which is exactly what the metric wants to measure.
+/// implementation, which is the thing the metric measures.
 fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
     if node.kind() != "interface_declaration" {
         return Vec::new();
@@ -744,9 +744,9 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     }
 }
 
-/// An array literal with string keys is PHP's record, and the shape it
-/// declares is nothing at all — the idiom the language spent a decade
-/// replacing with typed properties.
+/// An array literal with string keys is PHP's record, and it declares
+/// no shape: the idiom the language spent a decade replacing with typed
+/// properties.
 fn record_keys(node: Node, src: &[u8]) -> Option<Vec<Box<str>>> {
     if node.kind() != "array_creation_expression" {
         return None;
@@ -814,7 +814,7 @@ mod tests {
     fn a_php_suite_directory_is_named_freely() {
         // flysystem writes `test_files/`, PHP-Parser `test_old/`, and
         // monolog ships its harness base class as `src/Monolog/Test/`.
-        // The old exact `/test/` and `/tests/` match saw none of them.
+        // An exact `/test/` or `/tests/` match sees none of them.
         let is_test = super::pack().test_path;
         for p in [
             "flysystem/test_files/adapter.php",
@@ -836,9 +836,9 @@ mod tests {
     #[test]
     fn a_dir_relative_include_names_a_file_and_a_variable_one_names_nothing() {
         // PHP-Parser's Lexer.php:5 and flysystem's phpunit.php:4-5 are
-        // production includes of files nothing else reaches. All four
-        // node kinds were absent from KINDS, so the pack read none of
-        // the corpus's 66 include statements.
+        // production includes of files nothing else reaches. Without all
+        // four node kinds in KINDS the pack reads none of the corpus's
+        // 66 include statements.
         let got = targets(
             "<?php\n\
              require __DIR__ . '/compatibility_tokens.php';\n\

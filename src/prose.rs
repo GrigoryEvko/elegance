@@ -5,14 +5,12 @@
 //! the code taken away. That reduction is language-agnostic and belongs
 //! here, once, rather than in twenty-two packs.
 //!
-//! Two decisions carry the module.
-//!
 //! CODE IS NOT PROSE. A doc comment's fenced block is an EXAMPLE, and
-//! counting it as writing is how the doc:body-ratio metric died: gold
-//! Rust appeared to out-document FX 2336 to 1751 per mille, because
-//! ripgrep and regex carry twenty-to-eighty-line builder docs that are
-//! almost entirely `let` bindings. Strip the fences and the two are
-//! comparable. Everything downstream depends on this step.
+//! counting it as writing is what killed the doc:body-ratio metric:
+//! gold Rust appeared to out-document FX 2336 to 1751 per mille,
+//! because ripgrep and regex carry twenty-to-eighty-line builder docs
+//! that are almost entirely `let` bindings. Strip the fences and the
+//! two are comparable.
 //!
 //! COUNTS, NOT STRINGS. A 6.39M-line scan holds ~640k comments; keeping
 //! each stripped body as a `Box<str>` costs ~38MB of live heap for text
@@ -24,9 +22,9 @@ pub struct Prose {
     /// Tokens carrying at least one letter. Saturates: a 65k-word
     /// comment and a 66k-word comment are the same finding.
     pub words: u16,
-    /// Phrases asserting a REASON — why this code is as it is.
+    /// Phrases asserting a REASON: why this code is as it is.
     pub grounds: u8,
-    /// Phrases asserting a PURPOSE — what the code is for. Counted
+    /// Phrases asserting a PURPOSE: what the code is for. Counted
     /// apart from grounds and never added to them.
     pub purposes: u8,
     /// Sentence terminators, floored at one when anything was written.
@@ -37,7 +35,7 @@ pub struct Prose {
 /// as it is, which is the thing a reader cannot recover from the code
 /// itself.
 ///
-/// Measured human:machine ratios over the paired corpus — thus 193x,
+/// Measured human:machine ratios over the paired corpus: thus 193x,
 /// so that 11.3x, since 8.1x, otherwise 7.1x, because 4.6x. Written as
 /// phrases and matched a token at a time, so `so that` is one ground
 /// and `so` alone is none.
@@ -59,16 +57,16 @@ const GROUNDS: &[&str] = &[
 /// a reason. See `causal_since`.
 const SINCE: &str = "since";
 
-/// Phrases that state a PURPOSE — what the code is FOR, or what it
+/// Phrases that state a PURPOSE: what the code is FOR, or what it
 /// stops from happening. Counted separately and NEVER credited as
 /// grounds.
 ///
-/// This split is the finding. Pooled as one "subordinator density" the
-/// signal measured 0.97 within-repo and died, because the two halves
-/// move in OPPOSITE directions: grounds run 4.6x to 193x human, while
-/// purposes run at or below parity — to avoid 0.7x, prevents 0.3x. A
-/// machine says what a line is for at human rates and says why the
-/// obvious alternative fails at a fifth of them.
+/// Pooled as one "subordinator density" the signal measured 0.97
+/// within-repo and died, because the two halves move in OPPOSITE
+/// directions. Grounds run 4.6x to 193x human; purposes run at or
+/// below parity, `to avoid` at 0.7x and `prevents` at 0.3x. A machine
+/// says what a line is for at human rates and says why the obvious
+/// alternative fails at a fifth of them.
 const PURPOSES: &[&str] = &[
     "to avoid",
     "to prevent",
@@ -95,10 +93,10 @@ const UNIVERSAL: &[&str] = &[
 const CODE_INDENT: usize = 4;
 
 /// Share of a comment's LETTERS that may come from a script which does
-/// not put spaces between words before the comment is refused. Above
-/// this, `words` would count line fragments rather than words, and a
-/// count that means something different per language is worse than no
-/// count at all.
+/// not put spaces between words. Above this the comment is refused:
+/// `words` would count line fragments rather than words, and a count
+/// that means something different per language is worse than no count
+/// at all.
 const MAX_UNSPACED: f32 = 0.30;
 
 /// A tab's width in columns, for the indentation test.
@@ -142,7 +140,7 @@ pub fn measure(text: &str, markers: &[&str]) -> Option<Prose> {
 }
 
 /// A comment run with its syntax taken off and its block indentation
-/// removed — what is left is text the WRITER laid out.
+/// removed. What is left is text the WRITER laid out.
 ///
 /// The step short of `measure`, and the only one a convention parser
 /// wants: `crate::docparam` reads a `Args:` block by its indentation and
@@ -154,9 +152,9 @@ pub fn body(text: &str, markers: &[&str]) -> String {
 }
 
 /// Does any of these phrases start here? A phrase is spelled with
-/// spaces and matched a TOKEN at a time, which is what makes `because`
-/// inside `because_of` fail — the underscore is part of the token, and
-/// a backticked code span was dropped before any of this.
+/// spaces and matched a TOKEN at a time, which is why `because` inside
+/// `because_of` fails: the underscore is part of the token. A
+/// backticked code span was dropped before any of this.
 fn opens(tokens: &[&str], phrases: &[&str]) -> bool {
     phrases.iter().any(|phrase| {
         phrase
@@ -247,14 +245,14 @@ fn longest_marker(rest: &str, markers: &[&str]) -> Option<usize> {
 }
 
 /// Take the block's own indentation away, so that what is left is
-/// indentation the WRITER chose — which is the evidence that a line is
-/// an example rather than a paragraph.
+/// indentation the WRITER chose, the evidence that a line is an
+/// example rather than a paragraph.
 ///
 /// Where the first line lost its indentation to an opening quote it
 /// cannot speak for the block, and PEP 257's rule applies: the common
 /// indent comes from the later lines, and the summary line is left
 /// alone. Where every line carried a marker the pad is uniform and the
-/// first line counts like any other — otherwise a `///` run whose only
+/// first line counts like any other. Otherwise a `///` run whose only
 /// later lines are an indented example would be dedented by the
 /// example's own indentation, and the example would read as prose.
 fn dedent(text: &str, every_line: bool) -> String {
@@ -305,7 +303,7 @@ fn width(c: char) -> usize {
 /// Everything that is code rather than writing: fenced blocks, indented
 /// blocks, inline spans, and URLs.
 ///
-/// An unclosed fence swallows the rest of the comment on purpose — a
+/// An unclosed fence swallows the rest of the comment on purpose: a
 /// run whose fence never closes is a truncated example, and guessing
 /// where it ended would count identifiers as words.
 fn drop_code(text: &str) -> String {
@@ -348,7 +346,7 @@ fn drop_spans(line: &str, out: &mut String) {
 }
 
 /// Sentence terminators, floored at one when anything was written at
-/// all — an undotted line is still one statement. A period closing a
+/// all. An undotted line is still one statement. A period closing a
 /// one-letter token does not terminate anything: `e.g.` and `i.e.` are
 /// the abbreviations that appear in every corpus.
 fn sentences(text: &str) -> u8 {
@@ -379,7 +377,7 @@ fn sentences(text: &str) -> u8 {
 /// words by something other than a space.
 ///
 /// Cyrillic, Greek and Hangul are deliberately absent: they space their
-/// words, so counting them works exactly as it does for English. The
+/// words, so counting them works as it does for English. The
 /// scripts here — Han, kana, Thai, Lao, Khmer, Myanmar — do not, and a
 /// whitespace word count over them measures line breaks.
 fn unspaced_share(text: &str) -> f32 {
@@ -440,8 +438,8 @@ mod tests {
     #[test]
     fn a_builder_doc_measures_as_its_prose_only() {
         // The finding that killed doc:body-ratio. A Rust builder's doc
-        // is four words of writing and thirty lines of example; before
-        // the fences were stripped it read as thirty-four.
+        // is four words of writing and thirty lines of example; with
+        // the fences left in it reads as thirty-four.
         let mut doc = String::from("/// Sets the case sensitivity.\n///\n/// ```\n");
         for n in 0..30 {
             doc.push_str(&format!(

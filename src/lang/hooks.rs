@@ -1,21 +1,20 @@
 //! Hook reachability: proof that the core ASKS what a pack answers.
 //!
-//! Nine detectors died at once and all nine died the same way — a pack
-//! answered a question the core never put to it. `swallows_error` was
+//! A hook that is never consulted and a hook that correctly finds
+//! nothing produce the same zero, so a pack can answer a question the
+//! core never put to it and everything still compiles, passes and ships
+//! silent. Nine detectors died that way at once. `swallows_error` was
 //! written for catch clauses and consulted on `if`; `loses_context` was
 //! written against `throw`, a jump the core never hands to a pack;
-//! `spooky` was asked of calls and typedefs only, so
-//! Solidity's `assembly` and Perl's `eval "..."` went unseen. Every one
-//! compiled, passed and shipped silent, because a hook that is never
-//! consulted and a hook that correctly finds nothing produce the same
-//! zero.
+//! `spooky` was asked of calls and typedefs only, so Solidity's
+//! `assembly` and Perl's `eval "..."` went unseen.
 //!
-//! So the two are separated here. Every hook the core owns is asked
-//! through a method on [`Pack`], and each method records that the
-//! question was PUT and whether it was ANSWERED — a `true`, a `Some`, a
+//! The ledger separates the two zeros. Every hook the core owns is
+//! asked through a method on [`Pack`], and each method records that the
+//! question was PUT and whether it was ANSWERED: a `true`, a `Some`, a
 //! non-empty list, a non-zero width. The pack fields themselves are
-//! private, so there is no route to a hook that skips the ledger: a
-//! `called` of zero is proof of unreachability rather than evidence of
+//! private, so there is no route to a hook that skips the ledger. An
+//! `asked` of zero is proof of unreachability rather than evidence of
 //! it, whatever else the process did.
 //!
 //! Counting is live under `debug_assertions` and compiled out otherwise,
@@ -64,7 +63,7 @@ impl Answered for u16 {
 
 /// Declare the hooks once: the variant, the name, and the asking method
 /// all come from this list, so none of the three can drift against
-/// another. `refine` is spelled out below rather than generated — its
+/// another. `refine` is spelled out below rather than generated: its
 /// answer is a CHANGE to the table's verdict, which no return value
 /// alone can report.
 macro_rules! hooks {
@@ -185,13 +184,13 @@ pub fn table() -> String {
 mod reachable {
     //! The parity matrix, one level down. `every_detector_is_seeded_alive_
     //! or_declared_dead` proves a METRIC fires; these prove the core
-    //! reaches the HOOK the metric's liveness rests on, which is the
-    //! layer the nine silent deaths happened at.
+    //! reaches the HOOK the metric's liveness rests on, the layer the
+    //! nine silent detectors failed at.
     //!
-    //! Every assertion here is `> 0`, and that is deliberate: tests share
-    //! a process and a counter, so another test's extraction can only
-    //! ever ADD to a tally. A "must be reached" claim is safe under that;
-    //! a "must stay silent" claim would be decided by the scheduler.
+    //! Every assertion here is `> 0`. Tests share a process and a
+    //! counter, so another test's extraction can only ever ADD to a
+    //! tally: a "must be reached" claim is safe under that, while a
+    //! "must stay silent" claim would be decided by the scheduler.
 
     use super::{HOOKS, Hook, tally};
     use crate::facts::extract;
@@ -224,19 +223,19 @@ mod reachable {
     ];
 
     /// Hooks every one of the 22 packs implements for real, against a
-    /// construct every one of the 22 languages has — so per-PACK
-    /// reachability is a claim worth making rather than a fixture
+    /// construct every one of the 22 languages has. Per-PACK
+    /// reachability is then a claim worth making rather than a fixture
     /// accident. Everywhere else the honest statement is the corpus-wide
     /// one above, because most hooks are a deliberate stub in most packs
     /// and most fixtures are too small to carry every node kind.
     ///
-    /// The list is short and earned it. Lua's and Ruby's `imports` were
-    /// written against `require`, which is a CALL in both languages,
-    /// while the core asks about imports at `Sem::Import` nodes: over
-    /// the whole gold corpus the two hooks were asked exactly zero
-    /// times, and neither language had a module graph at all. Nothing
-    /// else in the suite could see that, because a pack that answers
-    /// nothing and a pack nobody asks look identical from outside.
+    /// Lua's and Ruby's `imports` were written against `require`, which
+    /// is a CALL in both languages, while the core asks about imports at
+    /// `Sem::Import` nodes: over the whole gold corpus the two hooks
+    /// were asked exactly zero times, and neither language had a module
+    /// graph. Nothing else in the suite could see that, because a pack
+    /// that answers nothing and a pack nobody asks look identical from
+    /// outside.
     const ASKED_OF_EVERY_PACK: &[Hook] = &[Hook::imports];
 
     /// Run every recall fixture through the core, which is the only
@@ -267,10 +266,9 @@ mod reachable {
     #[test]
     fn every_hook_is_asked_and_answered_somewhere() {
         // A hook nothing ever asks is written against a node the core
-        // does not consult — the whole bug class, in one line. A hook
-        // asked everywhere and answered nowhere is the same bug seen
-        // from the other side: the question reaches the pack, but never
-        // carrying the node the pack was written for.
+        // does not consult. A hook asked everywhere and answered nowhere
+        // is the same bug from the other side: the question reaches the
+        // pack, but never carrying the node the pack was written for.
         ask_everything();
         let (mut unasked, mut mute) = (Vec::new(), Vec::new());
         for hook in HOOKS {
@@ -319,8 +317,8 @@ mod reachable {
         // The per-language half. A detector the parity matrix does not
         // declare dead must have evidence to read, and for these it is
         // the hook alone: `spooky` was asked of Solidity's calls and
-        // never of its `assembly` block, so the pack answered and the
-        // core never heard it.
+        // never of its `assembly` block, so what the pack could say
+        // about `assembly` was never asked for.
         ask_everything();
         let mut broken = Vec::new();
         for lang in LANGS {

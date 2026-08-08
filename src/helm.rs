@@ -8,21 +8,21 @@
 //! through `index .root.Values .svc`, `.Values.depth.enabled` appears
 //! only inside a comment, and `.Values.ingress.albName` is guarded by
 //! `| default`. Helm is a template language with aliasing, computed
-//! access and helper indirection — the same "the text stops predicting
+//! access and helper indirection: the same "the text stops predicting
 //! the run" property `Sem::Spooky` names in code.
 //!
-//! So this tier reports only what needs no template evaluation at all:
+//! So this tier reports only what needs no template evaluation:
 //!
 //! - OVERLAY DRIFT: which keys each environment sets, by set
 //!   comparison. A key set in one region and not the others is a fact,
-//!   whether or not the fallback was intentional — which is exactly
-//!   why it reports and never gates.
-//! - SECRETS in YAML scalars, where a credential actually leaks: a
-//!   ConfigMap or an env block, not a template expression.
+//!   whether or not the fallback was intentional, so it reports and
+//!   never gates.
+//! - SECRETS in YAML scalars, where a credential leaks: a ConfigMap or
+//!   an env block, not a template expression.
 //!
-//! What a template RENDERS to is measured separately, by `--render`,
-//! which runs helm and reads the output — the same call the C pack
-//! makes about macros: measure what you can actually read.
+//! `--render` measures what a template RENDERS to: it runs helm and
+//! reads the output. That is the same call the C pack makes about
+//! macros: measure what you can read.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -202,7 +202,7 @@ fn render_chart(chart: &Chart, out: &mut String) {
     );
 }
 
-/// Credentials in YAML scalars — a ConfigMap's data, an env block's
+/// Credentials in YAML scalars: a ConfigMap's data, an env block's
 /// value. Scanned textually rather than through the parser: `key:
 /// value` on one line carries its own line number, which is what a
 /// finding needs, and the entropy rules are the extractor's own.
@@ -273,7 +273,7 @@ mod tests {
             "image:\n  tag: latest\nreplicas: 1\nresources:\n  limits:\n    cpu: 1\n",
         )
         .unwrap();
-        // east sets resources; west does not — the asymmetry IS the
+        // east sets resources; west does not. The asymmetry IS the
         // finding, whether or not the fallback was intended.
         std::fs::write(
             chart.join("values-prod-east.yaml"),
@@ -315,9 +315,9 @@ mod tests {
         assert_eq!(leaked_key("  api_key: \"\""), None);
         assert_eq!(leaked_key("  passwordField: password"), None);
         assert_eq!(leaked_key("  image: nginx:1.25"), None);
-        // Vendor formats need no credential-shaped key at all. Built at
-        // run time so no source line carries a complete provider-shaped
-        // token — same reasoning as the extractor's own fixtures.
+        // Vendor formats need no credential-shaped key. Built at run
+        // time so no source line carries a complete provider-shaped
+        // token, the same reasoning as the extractor's own fixtures.
         let line = format!(
             "  token: {}{}",
             "ghp_", "16C7e42F292c6912E7710c838347Ae178B4a"

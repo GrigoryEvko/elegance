@@ -1,8 +1,8 @@
-//! Module-graph facts and import resolution — the dependency tier's
+//! Module-graph facts and import resolution, the dependency tier's
 //! foundation. Imports resolve against the scanned file set only:
 //! internal edges become graph material, external ones are dependency
 //! surface, and internal-looking targets that resolve to nothing are
-//! reported as unresolved — the honesty bucket.
+//! reported as unresolved (the honesty bucket).
 //!
 //! Module identity is language-true where it diverges from files:
 //! `pkg/__init__.py` answers to `pkg`, `foo/mod.rs` to `foo`,
@@ -31,7 +31,7 @@ pub struct GraphFacts {
     /// Members reached through a receiver rather than through a type
     /// name. See `FileFacts::receiver_units`.
     pub receiver_units: Vec<Box<str>>,
-    /// Named-node mass — the volume a module hides behind its surface.
+    /// Named-node mass: the volume a module hides behind its surface.
     pub mass: u32,
     /// Ousterhout surface cost: Σ over exported units of
     /// 1 + params + 2×flag params (exported types cost 1).
@@ -91,8 +91,8 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
         // A require assembled at run time still states the DIRECTORY it
         // looks in, and every file under that directory is a candidate
         // the source cannot narrow further. The first stands in the
-        // import's own row and the rest ride PAST it -- every reader
-        // zips against `imports` and stops there -- so they add edges
+        // import's own row and the rest ride PAST it. Every reader zips
+        // against `imports` and stops there, so the extras add edges
         // without disturbing the alignment.
         let mut extra: Vec<Option<usize>> = Vec::new();
         for imp in &f.imports {
@@ -104,7 +104,7 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
             let mut named = index.named_modules(f, imp).into_iter();
             // A prefix that names modules of this project is not a
             // third-party dependency, whatever the rest of its name
-            // turns out to be at run time.
+            // becomes at run time.
             let class = named
                 .next()
                 .map_or_else(|| index.classify(i, f, imp), Class::Internal);
@@ -131,26 +131,26 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
 /// A namespace glob is ONE claim about the corpus, filed once.
 ///
 /// `Plack::Middleware` is loaded by name, so the modules under it are
-/// reached — but that is a fact about the namespace, not a fact about
-/// each file that happens to write the string. Emitting it once per
-/// mentioning file gave `PPI::Token` 750 edges out of 30 unrelated
-/// files, none of which depends on all 25 of its modules; it takes the
-/// perl corpus to 2438 edges where filing the claim once takes it to
-/// 1356. Measured both ways over all 22 corpora: the orphan count is
-/// IDENTICAL, because orphanhood needs one incoming edge and no more,
-/// so the other 1082 edges buy nothing and are pure fabrication.
+/// reached. That is a fact about the namespace, not about each file
+/// that writes the string. Emitting it once per mentioning file gave
+/// `PPI::Token` 750 edges out of 30 unrelated files, none of which
+/// depends on all 25 of its modules; it takes the perl corpus to 2438
+/// edges where filing the claim once takes it to 1356. Measured both
+/// ways over all 22 corpora: the orphan count is IDENTICAL, because
+/// orphanhood needs one incoming edge and no more, so the other 1082
+/// edges buy nothing and are fabrication.
 ///
 /// The owner is the first mentioning file in path order. Any one of
-/// them would do — they are all loaders, and Plack's are literally
-/// `Builder.pm`, `Runner.pm` and `Loader.pm` — but the choice must not
+/// them would do, since they are all loaders and Plack's are
+/// `Builder.pm`, `Runner.pm` and `Loader.pm`. The choice must not
 /// depend on the order the tree was walked in, or the report would not
 /// reproduce.
 ///
 /// Deliberately NOT the namespace's own root module, which reads
 /// better and is false: `Plack/Middleware.pm` is the BASE CLASS its
 /// subclasses inherit from, and it loads none of them. Filing the
-/// claim there manufactures a cycle per subclass — measured, cycle
-/// mass +22.4pp against +14.8pp for the loader.
+/// claim there manufactures a cycle per subclass, and cycle mass rises
+/// +22.4pp against +14.8pp for the loader.
 fn claim<'a>(
     claimed: &mut std::collections::BTreeMap<&'a str, (usize, &'a crate::facts::ImportFact)>,
     files: &[GraphFacts],
@@ -216,12 +216,12 @@ struct Index {
     /// suffix index (`attr.validators` matches [..,"attr","validators"]).
     modules: HashMap<Vec<Box<str>>, usize>,
     by_last: HashMap<Box<str>, Vec<CompEntry>>,
-    /// Every file's module components, by file index — what a `crate::`
+    /// Every file's module components, by file index: what a `crate::`
     /// path has to be anchored against.
     file_comps: Vec<Vec<Box<str>>>,
     /// Directory component vectors (Go packages; representative file).
     dirs: HashMap<Box<str>, Vec<CompEntry>>,
-    /// Every file's path components, keyed by file name — what a
+    /// Every file's path components, keyed by file name: what a
     /// path-shaped specifier (`cutlass/gemm/gemm.h`) matches against.
     basenames: HashMap<Box<str>, Vec<CompEntry>>,
     /// Rust crate roots (lib.rs/main.rs) by their directory components.
@@ -249,7 +249,7 @@ struct Index {
     members: HashMap<Box<str>, Vec<usize>>,
 
     /// `compilerOptions.paths`, keyed by the directory of the
-    /// `tsconfig.json` that declares it — the tree the alias governs.
+    /// `tsconfig.json` that declares it (the tree the alias governs).
     aliases: HashMap<PathBuf, Vec<Alias>>,
     /// Each file's language. A module name binds a file of the language
     /// that named it: the OCaml corpus ships util.h, config.h and
@@ -260,14 +260,14 @@ struct Index {
     dune: DuneScopes,
     /// PHP's autoload map: a namespace ROOT, as its own composer.json
     /// spells it, and every directory that manifest sends it to. A root
-    /// may have several — flysystem declares `League\Flysystem\` at the
+    /// may have several: flysystem declares `League\Flysystem\` at the
     /// repository root and fifteen subsplit manifests under src/ narrow
     /// it further.
     psr4: HashMap<Box<str>, Vec<PathBuf>>,
 }
 
-/// A dune library is a directory, and two stanzas say it is more than
-/// that.
+/// A dune library is a directory, which two stanzas in its `dune` file
+/// widen.
 ///
 /// `(include_subdirs unqualified)` folds every SUBDIRECTORY of the
 /// library into one flat module namespace, so `dune_rules/gen_rules.ml`
@@ -409,24 +409,24 @@ impl Index {
         let target = &*imp.target;
         Some(match from.lang {
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => self.web(from, imp),
-            // An import names a FILE, and the generic arm dropped the
+            // An import names a FILE, and the generic arm drops the
             // extension on one side of the comparison only.
             Lang::Solidity => self.solidity(from, imp),
             Lang::Zig => self.zig(from, target),
-            // C++ includes resolve exactly as C's do: a quoted path is
+            // C++ includes resolve as C's do: a quoted path is
             // relative to the including file, an angled one is a
             // system header and definitionally external.
             Lang::C | Lang::Cpp | Lang::Cuda => self.c(from, target),
-            // A sourced path is relative to the script — or assembled
-            // at run time from a variable, which resolves to nothing
-            // and lands in the honesty bucket where it belongs.
+            // A sourced path is relative to the script, or assembled at
+            // run time from a variable. An assembled one resolves to
+            // nothing and lands in the honesty bucket.
             Lang::Shell => self.shell(from, target),
             // `require __DIR__ . '/x.php'` names a FILE where `use`
             // names a class, and the two never collide: a namespace
             // holds no separator, so the presence of one settles which
             // of PHP's two module systems wrote this target. `__DIR__`
             // is the including file's own directory, so the base is
-            // known — see `php::included_file`.
+            // known. See `php::included_file`.
             Lang::Php if target.contains('/') => self.php_file(from, target),
             // A class name, resolved the way the autoloader resolves it.
             Lang::Php => self.php(imp),
@@ -437,14 +437,14 @@ impl Index {
             Lang::Ruby if imp.reach == crate::lang::Reach::Project => {
                 self.ruby_relative(from, target)
             }
+            // `dofile('pm.lua')` is a path from the calling script, the
+            // way `require_relative` is in Ruby: a miss is a miss.
             // Resolving a preloaded name by basename bound 37 edges into
-            // lua-language-server/meta/template/*.lua — LuaCATS
-            // declaration stubs for those very libraries — 25 of them
+            // lua-language-server/meta/template/*.lua (LuaCATS
+            // declaration stubs for those same libraries), 25 of them
             // from `require 'ffi'` in kong, and made
             // meta/template/debug.lua the corpus's 4th most load-bearing
             // module at 316 dependents.
-            // `dofile('pm.lua')` is a path from the calling script, the
-            // way `require_relative` is in Ruby: a miss is a miss.
             Lang::Lua if imp.reach == crate::lang::Reach::Project => self.lua_beside(from, target),
             Lang::Lua if crate::lang::preloaded(target) => Class::External,
             _ => return None,
@@ -481,14 +481,14 @@ impl Index {
             Lang::Go => self.go(target),
             Lang::Swift => self.swift(target),
             // A module name is CamelCase and its path is snake_case,
-            // and nothing bridged the two.
+            // which no generic component match bridges.
             Lang::Elixir => self.elixir(from, target),
             // A module IS a file, and the file is not capitalised.
             Lang::OCaml => self.ocaml(i, target),
             // The packs cut a JVM import back to the TYPE, whose file it
-            // is. What is left uncut names a PACKAGE — `import a.b.*`,
-            // `import cats.data.{X, Y}` — and a package is a directory
-            // exactly as a Go package is.
+            // is. An uncut import names a PACKAGE (`import a.b.*`,
+            // `import cats.data.{X, Y}`), and a package is a directory
+            // as a Go package is.
             Lang::Java | Lang::Scala => self.jvm(target),
             _ => return None,
         })
@@ -598,9 +598,9 @@ impl Index {
             "super" | "self" => self.rust_relative(from, first, rest),
             // The standard library is never this project. The bare-root
             // arm drops the leaf and suffix-matches what is left, so
-            // `use core::cmp` asked for a module called `core` — which
-            // ripgrep's crates/core answers to, giving it 37 dependents
-            // in rayon and regex that no Cargo.toml declares.
+            // `use core::cmp` asks for a module called `core`, which
+            // ripgrep's crates/core answers to: 37 dependents in rayon
+            // and regex that no Cargo.toml declares.
             "std" | "core" | "alloc" => Class::External,
             // Bare roots: a sibling top-level module (2015-style) or an
             // external crate.
@@ -614,17 +614,17 @@ impl Index {
         }
     }
 
-    /// `crate::...`: the leaf may be a symbol, not a module — try both;
-    /// a bare symbol resolves to the module that DEFINES it (never the
-    /// re-exporting root, which would manufacture hub cycles), then to
-    /// the crate root.
+    /// `crate::...`: the leaf may be a symbol rather than a module, so
+    /// both are tried. A bare symbol resolves to the module that
+    /// DEFINES it (never the re-exporting root, which would manufacture
+    /// hub cycles), then to the crate root.
     fn rust_crate(&self, i: usize, rest: &[&str]) -> Class {
         // `crate::a::b` names exactly <crate root>/a/b. Suffix matching
         // it instead picks whichever file happens to end in the same
-        // segment, and this repository holds two called `metrics` —
-        // src/metrics/mod.rs and src/graph/metrics.rs — so every
-        // `crate::metrics::` edge landed on the wrong one and the real
-        // module read as an orphan.
+        // segment, and this repository holds two called `metrics`
+        // (src/metrics/mod.rs and src/graph/metrics.rs), so every
+        // `crate::metrics::` edge lands on the wrong one and the real
+        // module reads as an orphan.
         if let Some(root) = self.file_crate_root[i]
             && let Some(root_comps) = self.file_comps.get(root)
         {
@@ -715,25 +715,25 @@ impl Index {
         {
             return Class::Internal(*i);
         }
-        // A RELATIVE specifier states where it lives, and the join
-        // above is the whole answer. Falling through to the suffix
-        // match sent `require.resolve('./sidebars.js')` in trpc's
-        // docusaurus config into immer's website — a different
-        // repository — because the global match ignores the importing
-        // file's directory entirely.
+        // A RELATIVE specifier states where it lives, so the join above
+        // answers it or nothing does. Falling through to the suffix
+        // match sends `require.resolve('./sidebars.js')` in trpc's
+        // docusaurus config into immer's website (a different
+        // repository), because the global match ignores the importing
+        // file's directory.
         Class::Unresolved
     }
 
     /// The one file whose path ends with these components, the
     /// extension supplied by us because the string leaves it off or
     /// spells the compiled one. Ambiguity resolves to nothing:
-    /// `path_suffix` answers only when a single file matches.
+    /// `path_suffix_within` answers only when a single file matches.
     ///
     /// Bounded to the importer's OWN repository, the nearest ancestor
     /// holding a `.git`. Without it a unique match is unique across
     /// everything scanned at once, and gold scans a hundred
     /// repositories side by side: vscode's `normalizePath('src/
-    /// components/Button.tsx')` — a path normaliser's unit-test DATA —
+    /// components/Button.tsx')`, a path normaliser's unit-test DATA,
     /// resolved into trpc's website.
     ///
     /// Only a WEB extension is stripped, because stripping any dotted
@@ -777,7 +777,7 @@ impl Index {
 
     fn go(&self, target: &str) -> Class {
         // Module paths are domain-qualified (github.com/...); a bare
-        // first segment is the standard library — `import "runtime"`
+        // first segment is the standard library, and `import "runtime"`
         // must never suffix-match an internal/runtime directory.
         if !target.split('/').next().unwrap_or("").contains('.') {
             return Class::External;
@@ -818,17 +818,17 @@ impl Index {
 
     /// A Swift module is a TARGET DIRECTORY (`Sources/NIOCore/`) and
     /// never a file, so it resolves the way a Go package does. Matching
-    /// a file STEM sent vapor's `import HTTPTypes` — Apple's
-    /// swift-http-types, declared in vapor's own Package.swift — to
+    /// a file STEM sent vapor's `import HTTPTypes` (Apple's
+    /// swift-http-types, declared in vapor's own Package.swift) to
     /// swift-nio's Sources/NIOHTTP1/HTTPTypes.swift in another
     /// repository, and put its 84 fabricated dependents at the top of
     /// the report. 140 of the 170 stem matches were wrong that way.
     fn swift(&self, target: &str) -> Class {
         // A `path:` in Package.swift beats the convention. Alamofire
         // puts its target in `Source/`, so the only directory named
-        // Alamofire is the REPOSITORY ROOT -- and resolving there made
-        // every one of its 43 files inherit a dependent from one bogus
-        // edge, whitewashing the repository wholesale.
+        // Alamofire is the REPOSITORY ROOT. Resolving there makes every
+        // one of its 43 files inherit a dependent from one bogus edge,
+        // whitewashing the repository.
         if let Some(dir) = self.workspaces.get(target) {
             return self.first_under(dir);
         }
@@ -866,12 +866,13 @@ impl Index {
         }
     }
 
-    /// A target is a path from the importing file — except in the build
+    /// A target is a path from the importing file, except in the build
     /// DSL, where it is a path from the BUILD ROOT: the directory
     /// holding the `build.zig` that owns this file. ghostty spells every
     /// one of its executables that way from `src/build/Ghostty*.zig`,
     /// three directories below its root, and 42 of the corpus's 113
     /// `b.path` targets miss on the file-relative reading alone.
+    ///
     /// A C header is routed to C's own resolver, because that is what
     /// `@cInclude` names and the include roots `addIncludePath` puts
     /// there are the ones a quoted include already searches. ghostty's
@@ -880,15 +881,15 @@ impl Index {
     ///
     /// The routing keys on the TARGET's extension and not on the node,
     /// so the seven `b.path("….h")` sites in ghostty's build files go
-    /// the same way — which is what reaches `include/ghostty.h`, not the
-    /// `include/` exemption.
+    /// the same way. That routing reaches `include/ghostty.h`; the
+    /// `include/` exemption does not.
     ///
     /// A miss is EXTERNAL, never unresolved. Zig has no angled spelling
     /// to mark a system header with, and 22 of the corpus's 25
     /// `@cInclude` sites name one (`unistd.h`, `errno.h`, `stdlib.h`);
     /// routing a miss through C's quoted arm instead put all 22 into the
     /// honesty bucket, taking the zig corpus from 57 unresolved to 79
-    /// for no gain at all.
+    /// for no gain.
     fn zig(&self, from: &GraphFacts, target: &str) -> Class {
         if crate::lang::c_header(target) {
             return match self.c(from, target) {
@@ -913,9 +914,9 @@ impl Index {
     }
 
     /// A quoted include is a path from the including file. An angled
-    /// one names a system header — except that a header-only library
-    /// includes its OWN headers that way, and flux spells every
-    /// internal one `<flux/adaptor/filter.hpp>`.
+    /// one names a system header, except that a header-only library
+    /// includes its OWN headers that way: flux spells every internal
+    /// one `<flux/adaptor/filter.hpp>`.
     ///
     /// An angled include must name two components before it may match
     /// the tree. At one, `<cuda_runtime.h>` binds to transformer-engine's
@@ -952,15 +953,15 @@ impl Index {
     /// musl's Makefile compiles with `-Iarch/$(ARCH)`, so
     /// `#include <bits/fcntl.h>` means one of eleven real files and the
     /// source cannot say which. 456 of musl's 655 headers had no
-    /// includer for that reason -- a claim about the build system
-    /// stated as a claim about the code, since every one of them IS
-    /// depended on, each in its own configuration.
+    /// includer for that reason, a claim about the build system stated
+    /// as a claim about the code: every one of them IS depended on,
+    /// each in its own configuration.
     ///
     /// So the nearest candidate answers where there IS one: 295 musl
     /// sources write `#include "syscall.h"` and mean the
     /// `src/internal/syscall.h` beside them, not the public
-    /// `include/sys/syscall.h`. Where several tie -- every arch is
-    /// equally far from `include/fcntl.h` -- they are all candidates,
+    /// `include/sys/syscall.h`. Where several tie (every arch is
+    /// equally far from `include/fcntl.h`) they are all candidates,
     /// which manufactures no external dependency because only real
     /// files are ever named. Picking one of a tie would be arbitrary,
     /// and `arch/or1k/crt_arch.h` is what arbitrary looks like.
@@ -997,7 +998,7 @@ impl Index {
     }
 
     /// `path_suffix`, narrowed to a file sitting DIRECTLY in a directory
-    /// named `include` — C's convention for "this is on the -I path",
+    /// named `include`: C's convention for "this is on the -I path",
     /// and the only evidence in the tree that a bare `<name.h>` could
     /// mean a file of this project. 84 musl sources write
     /// `#include <stdio.h>` and musl/include/stdio.h is right there.
@@ -1005,24 +1006,24 @@ impl Index {
     /// Across c, cpp and cuda the anchor adds 732 edges over 52 targets
     /// and every one is right: musl's 48 public headers and the umbrella
     /// headers of ctre, flux and immer. Dropping the anchor and admitting
-    /// any one-component match makes 131 of them wrong -- transformer-
+    /// any one-component match makes 131 of them wrong: transformer-
     /// engine's `<cuda_runtime.h>`, `<math.h>` and `<cudnn.h>` bind to
     /// its own util/ headers, llm.c's `<unistd.h>` to a Windows shim.
     ///
     /// The anchor is applied BEFORE the uniqueness test, not after it.
-    /// Testing uniqueness first let one homonym anywhere in the tree veto
-    /// the bind: musl ships `arch/generic/bits/dirent.h` beside
-    /// `include/dirent.h`, and `#include <dirent.h>` -- which can only
-    /// mean the second, since the first is spelled `<bits/dirent.h>` --
-    /// resolved to nothing at all. Run over musl ALONE, so this is no
-    /// cross-repository artefact, filtering first takes it from 72
-    /// orphans to 59 and from 4218 edges to 4671. Across the corpus it
-    /// adds 611 c-corpus edges and drops `imports_external` from 1745 to
-    /// 1120; twelve musl headers and git's `compat/vcbuild/include/
-    /// utime.h` stop being orphans by being DEPENDED ON rather than by
-    /// being exempted. It shares the exemption's known weakness -- that
-    /// last edge binds git's `<utime.h>` to an MSVC shim, the same shape
-    /// as llm.c's `<unistd.h>` above.
+    /// Testing uniqueness first lets one homonym anywhere in the tree
+    /// veto the bind: musl ships `arch/generic/bits/dirent.h` beside
+    /// `include/dirent.h`, and `#include <dirent.h>` (which can only
+    /// mean the second, since the first is spelled `<bits/dirent.h>`)
+    /// resolves to nothing. Run over musl ALONE, filtering first takes
+    /// it from 72 orphans to 59 and from 4218 edges to 4671, so this is
+    /// no cross-repository artefact. Across the corpus it adds 611
+    /// c-corpus edges and drops `imports_external` from 1745 to 1120;
+    /// twelve musl headers and git's `compat/vcbuild/include/utime.h`
+    /// stop being orphans by being DEPENDED ON rather than by being
+    /// exempted. It shares the exemption's known weakness: that last
+    /// edge binds git's `<utime.h>` to an MSVC shim, the same shape as
+    /// llm.c's `<unistd.h>` above.
     fn include_root_suffix(&self, segs: &[&str]) -> Option<usize> {
         let rooted = |c: &[Box<str>]| c.len() >= 2 && &*c[c.len() - 2] == "include";
         let mut hits = self
@@ -1042,6 +1043,7 @@ impl Index {
     /// missed all 2740 module references in the corpus, so Elixir
     /// reported 31 internal edges and every one of them was JavaScript
     /// under phoenix/assets/js.
+    ///
     /// A module name is not a path, and Elixir says so oftener than the
     /// convention holds. `plug/lib/plug/exceptions.ex` declares
     /// `Plug.BadRequestError` and `Plug.TimeoutError` and answers to
@@ -1053,12 +1055,12 @@ impl Index {
     ///
     /// Only a name exactly one file declares. Taking every declarer
     /// instead scored the same orphan count and added 1266 edges, all of
-    /// them among duplicate test fixtures — gold declares `Schema` forty
-    /// times and `DemoWeb.Router` seven — so an ambiguous name falls
+    /// them among duplicate test fixtures (gold declares `Schema` forty
+    /// times and `DemoWeb.Router` seven), so an ambiguous name falls
     /// through to the path matcher, which at least prefers the
     /// shallowest.
     ///
-    /// One component never reaches the path matcher at all. `Mix`,
+    /// One component never reaches the path matcher. `Mix`,
     /// `Config` and `Repo` are how the language spells its own, and a
     /// one-component suffix match lands on whatever file bears the name:
     /// of 165 such names that resolved this way, 9 pointed at a file
@@ -1098,16 +1100,16 @@ impl Index {
     }
 
     /// `alias Phoenix.Socket.{V1, V2, Transport}` and then, five lines
-    /// down, `V1.JSONSerializer` — the head is the alias's short name
+    /// down, `V1.JSONSerializer`. The head is the alias's short name,
     /// and only the file's own import list says what it stands for.
     /// `phoenix/lib/phoenix/transports/websocket.ex:24` and `:29` are
     /// that pair, and `long_poll.ex:20` writes it again; the two
     /// serializer modules they name have no other reference in the
     /// corpus.
     ///
-    /// Self-validating: the expanded name has to be one exactly one
-    /// file declares, so a wrong guess resolves to nothing rather than
-    /// to somebody else.
+    /// Self-validating: the expanded name has to be one that exactly
+    /// one file declares, so a wrong guess resolves to nothing rather
+    /// than to somebody else.
     fn shortened(&self, from: &GraphFacts, target: &str) -> Option<usize> {
         let (head, rest) = target.split_once('.')?;
         let full = from
@@ -1122,10 +1124,10 @@ impl Index {
     /// An OCaml module IS a compilation unit, and its name is the file
     /// stem with the first letter capitalised: module `Path` is
     /// `path.ml`, module `CCParse` is `CCParse.ml`. The generic arm
-    /// compared `Stdune` against the path component `stdune` and could
-    /// not match either spelling — all 2444 OCaml files in the corpus
-    /// produced 8 internal edges, and base on its own produced none at
-    /// all, so its report carried no architecture section.
+    /// compares `Stdune` against the path component `stdune` and can
+    /// match neither spelling: all 2444 OCaml files in the corpus
+    /// produced 8 internal edges, and base on its own produced none, so
+    /// its report carried no architecture section.
     ///
     /// Only the HEAD of a dotted path names a unit: `Memo.O` is the
     /// submodule O inside memo.ml, and `Stdune.Path` reaches stdune's
@@ -1135,14 +1137,14 @@ impl Index {
     ///
     /// Which `list.ml` a bare `List.map` means is settled by the dune
     /// library the importing file belongs to, and a dune library is a
-    /// directory — so the candidate sharing the longest path prefix
+    /// directory, so the candidate sharing the longest path prefix
     /// with the importer wins. Taking the shallowest instead sent all
     /// 398 of containers' `List` references to base/src/list.ml, a
     /// different repository.
     fn ocaml(&self, i: usize, target: &str) -> Class {
         // A functor application names its functor (`F(X).t`), and a
-        // wrapped-library alias names the module after the separator —
-        // both are the build system's spelling, not the language's.
+        // wrapped-library alias names the module after the separator.
+        // Both are the build system's spelling, not the language's.
         let head = target
             .split('.')
             .next()
@@ -1177,7 +1179,7 @@ impl Index {
     /// A Solidity import names a FILE. `./x.sol` and `../utils/x.sol`
     /// are paths from the importing file, so a miss there is a miss. A
     /// bare specifier is a remapping, and openzeppelin-contracts remaps
-    /// `@openzeppelin/contracts/...` onto itself — the table that says
+    /// `@openzeppelin/contracts/...` onto itself. The table that says
     /// so lives in foundry.toml, so the longest tail naming exactly one
     /// file is taken instead, never below two components.
     fn solidity(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Class {
@@ -1207,13 +1209,13 @@ impl Index {
     /// directory plus the rest of the name plus `.php` IS the file.
     ///
     /// A project declaring no root falls back to the longest tail
-    /// naming exactly one file — and that ladder stops at TWO
+    /// naming exactly one file, and that ladder stops at TWO
     /// components, never one. At one it fabricates: monolog's
     /// Logger.php:149 writes `protected Closure|null`, and `Closure` is
     /// a BUILT-IN type, but the only Closure.php in the corpus is
     /// PHP-Parser's Node/Expr/Closure.php, so a one-component tail
     /// bound the two repositories together. Flooring at two removed 33
-    /// such edges and restored two correct findings —
+    /// such edges and restored two correct findings:
     /// composer's ClassMapGenerator.php and MetadataMinifier.php are
     /// `@deprecated` shims for packages composer extracted, reached
     /// only because AutoloadGenerator.php:16 and
@@ -1266,7 +1268,7 @@ impl Index {
 
     /// A dotted JVM name: the file it names, or the package directory it
     /// names when no file answers to it. 770 Java and 1018 Scala targets
-    /// in the gold corpus name a package and no file — an on-demand
+    /// in the gold corpus name a package and no file: an on-demand
     /// import and a selector list both state one.
     fn jvm(&self, target: &str) -> Class {
         let parts: Vec<&str> = target.split('.').filter(|p| !p.is_empty()).collect();
@@ -1293,8 +1295,8 @@ impl Index {
     ///
     /// The extension is APPENDED, not substituted. `with_extension`
     /// replaces whatever follows the last dot, so
-    /// `./authentication.contribution` asked for `authentication.ts` --
-    /// a file nobody has -- and vscode's 86 contribution modules read as
+    /// `./authentication.contribution` asked for `authentication.ts`
+    /// (a file nobody has) and vscode's 86 contribution modules read as
     /// depended on by nothing while being imported by name. At least 500
     /// specifiers across the corpus carry a dotted stem: `.gen` 353,
     /// `.test` 54, `.contribution` 14, and `.constants`, `.util`,
@@ -1338,11 +1340,11 @@ impl Index {
     /// tsconfig extends another, so a package that states its own `~/*`
     /// has stated the whole map for the files under it. Reading every
     /// ancestor instead and taking the longest head measures the same
-    /// in all 22 corpora — no gold map is strictly extended by an
-    /// ancestor's — so the narrower claim is the one taken.
+    /// in all 22 corpora (no gold map is strictly extended by an
+    /// ancestor's), so the narrower claim is the one taken.
     ///
-    /// Within that one map the longest head wins, which is what tsc
-    /// does: excalidraw declares both `@excalidraw/element` and
+    /// Within that one map the longest head wins, as tsc resolves it:
+    /// excalidraw declares both `@excalidraw/element` and
     /// `@excalidraw/element/*`.
     fn aliased(&self, from: &GraphFacts, target: &str) -> Class {
         let Some(entries) = from
@@ -1377,8 +1379,8 @@ impl Index {
 
     /// A bare specifier naming a package this repository declares.
     /// ariakit writes 1500+ `@ariakit/*` and excalidraw 567
-    /// `@excalidraw/element`; all of them read as third-party because a
-    /// specifier that is not a path was External by definition.
+    /// `@excalidraw/element`. Treating every specifier that is not a
+    /// path as External by definition reads all of them as third-party.
     ///
     /// The probe is `<dir>/src/<sub>` then `<dir>/<sub>`, and the
     /// `exports` map is deliberately not read: the plain probe finds
@@ -1402,10 +1404,10 @@ impl Index {
     /// The submodules an import's bound names denote. `from . import
     /// errors, themes` binds two MODULES, not two symbols, and the
     /// dependency that matters is on themes.py rather than on the
-    /// package's __init__.py -- rich's console.py:36 is that line and
+    /// package's __init__.py: rich's console.py:36 is that line, and
     /// themes.py had no other importer in the corpus. attrs names five
-    /// submodules in one statement, which is why the first name alone
-    /// is not enough.
+    /// submodules in one statement, so the first name alone is not
+    /// enough.
     fn submodules(
         &self,
         resolved: Option<usize>,
@@ -1445,8 +1447,6 @@ impl Index {
             Lang::Elixir => self.glob_modules(from, imp),
             Lang::C | Lang::Cpp | Lang::Cuda => self.nearest_includes(from, &imp.target),
             // A member name answers from the extension-method index
-            // alone; see `Reach::Member`.
-            // A member name answers from the extension-method index
             // alone; see `Reach::Member`. Deliberately WITHOUT the
             // proximity tie-break `nearest_declarers` makes for a type:
             // C# spreads one extension method's overloads across sibling
@@ -1473,29 +1473,28 @@ impl Index {
     }
 
     /// Of the files declaring one name, the ones NEAREST the file that
-    /// wrote it — the tie-break `nearest_includes` already makes for a
+    /// wrote it. `nearest_includes` already makes this tie-break for a
     /// C header, for the same reason.
     ///
     /// A C# type reference is scoped to an ASSEMBLY, and a scan of the
     /// gold corpus is six unrelated assemblies in one directory. Ten of
     /// its non-test file stems are declared in more than one repository
-    /// — `Extensions` in AutoMapper, Dapper, FluentValidation and
+    /// (`Extensions` in AutoMapper, Dapper, FluentValidation and
     /// Newtonsoft.Json, `Program`, `TypeExtensions`,
     /// `ServiceCollectionExtensions` and four of the .NET polyfill
-    /// attributes — and with no tie-break the bare word edged to all of
+    /// attributes), and with no tie-break the bare word edged to all of
     /// them. That is 558 of 7823 C# edges, 7.1%, every one naming a
-    /// project the referencing file cannot even link against.
+    /// project the referencing file cannot link against.
     ///
     /// Three files stop being reachable when the fabricated edges go,
-    /// and two are then reached TRULY by rules in the same commit:
-    /// Dapper's `Extensions.cs` through the generic `CastResult<...>()`
-    /// that `called_member` now unwraps, and Newtonsoft's
-    /// `VersionConverter.cs` once a test's own nested copy stops
-    /// answering. The third is a real finding: Polly's
-    /// `DynamicallyAccessedMembersAttribute.cs` was held up entirely by
-    /// Newtonsoft.Json, because Polly writes all seven of its own
-    /// `[DynamicallyAccessedMembers]` uses on a TYPE PARAMETER and
-    /// `sealed()` does not enter a `type_parameter_list`.
+    /// and two are reached TRULY by other rules: Dapper's
+    /// `Extensions.cs` through the generic `CastResult<...>()` that
+    /// `called_member` unwraps, and Newtonsoft's `VersionConverter.cs`
+    /// once a test's own nested copy stops answering. The third is a
+    /// real finding: Polly's `DynamicallyAccessedMembersAttribute.cs`
+    /// was held up only by Newtonsoft.Json, because Polly writes all
+    /// seven of its own `[DynamicallyAccessedMembers]` uses on a TYPE
+    /// PARAMETER and `sealed()` does not enter a `type_parameter_list`.
     fn nearest_declarers(&self, from: &GraphFacts, hits: Vec<usize>) -> Vec<usize> {
         if from.lang != Lang::CSharp || hits.len() < 2 {
             return hits;
@@ -1517,10 +1516,10 @@ impl Index {
     /// one place a word written as data can mean anything is where it
     /// was written, and kong ships `000_base.lua` in twelve
     /// directories. A DOTTED name is a module path and says more, so it
-    /// is asked of the load root first — `kong.db.migrations.core` from
-    /// `subsystems.lua`, `luarocks.cmd.init` from the `luarocks` script
-    /// — and only then of the listing file's own directory, which is
-    /// how `kong/pdk/init.lua` reaches `service.request` beside it.
+    /// is asked of the load root first (`kong.db.migrations.core` from
+    /// `subsystems.lua`, `luarocks.cmd.init` from the `luarocks`
+    /// script) and only then of the listing file's own directory, which
+    /// is how `kong/pdk/init.lua` reaches `service.request` beside it.
     fn listed(&self, from: &GraphFacts, name: &str) -> Vec<usize> {
         let segs = segments(name);
         if segs.len() > 1
@@ -1547,16 +1546,16 @@ impl Index {
     ///
     /// `kong/db/schema/plugin_loader.lua:17` writes
     /// `require("kong.plugins." .. plugin .. ".schema")`, and roda
-    /// writes the same thing as `require "roda/plugins/#{name}"`. What
-    /// the name builds cannot be read from the source, but everything
-    /// around it can, so the pack hands over `kong.plugins.*.schema`
-    /// and `*` matches exactly one component.
+    /// writes the same thing as `require "roda/plugins/#{name}"`. The
+    /// source cannot say what the name builds, but it does say
+    /// everything around it, so the pack hands over
+    /// `kong.plugins.*.schema` and `*` matches exactly one component.
     ///
-    /// The part AFTER the star is what makes the Lua case work at all:
-    /// nothing sits directly under `kong/plugins`, because each of its
-    /// 150 plugins is a directory, so the prefix alone reaches nothing
-    /// while `kong.plugins.*.handler` names 35 real files. 417 of gold
-    /// Ruby's 490 orphans and 276 of Lua's 342 sit under one of these.
+    /// The part AFTER the star decides the Lua case: nothing sits
+    /// directly under `kong/plugins`, because each of its 150 plugins is
+    /// a directory, so the prefix alone reaches nothing while
+    /// `kong.plugins.*.handler` names 35 real files. 417 of gold Ruby's
+    /// 490 orphans and 276 of Lua's 342 sit under one of these.
     /// Only real files are ever named, so unlike completing the literal
     /// this manufactures no external dependency.
     fn glob_modules(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Vec<usize> {
@@ -1567,8 +1566,8 @@ impl Index {
             return Vec::new();
         }
         // An Elixir module name is CamelCase and its path is the same
-        // name underscored, which is the bridge `elixir` already builds
-        // — and `underscore("*")` is `"*"`, so the hole survives it.
+        // name underscored, the bridge `elixir` already builds, and
+        // `underscore("*")` is `"*"`, so the hole survives it.
         let owned: Vec<String> = imp
             .target
             .split(component_separators(from.lang))
@@ -1588,7 +1587,7 @@ impl Index {
         }
         let rooted = self.glob_root(from, imp, before);
         // The prefix ends at a known offset from the end, because every
-        // hole stands for exactly one component — a star AFTER the first
+        // hole stands for exactly one component: a star AFTER the first
         // matches one component the same way the first does.
         // `kong.db.strategies.%s.%s` needs the second, and so does
         // sequel's `sequel/adapters/#{subdir}/#{scheme}`.
@@ -1616,12 +1615,12 @@ impl Index {
     /// Lua's `package.path` holds whole path templates, so a prefix is
     /// matched wherever it appears. Rubygems puts exactly one directory
     /// of a gem on `$LOAD_PATH`, `lib`, so a `require` prefix names a
-    /// directory sitting directly under one -- and that is what tells
-    /// sequel's own `lib/sequel/adapters/jdbc` apart from what
-    /// `require "jdbc/#{name}"` actually loads, which its own line
-    /// calls "the necessary JDBC support via a gem". A
-    /// `require_relative` prefix is a directory beside the requiring
-    /// file, and is not on the load path at all.
+    /// directory sitting directly under one. That tells sequel's own
+    /// `lib/sequel/adapters/jdbc` apart from what
+    /// `require "jdbc/#{name}"` loads, which its own line calls "the
+    /// necessary JDBC support via a gem". A `require_relative` prefix
+    /// is a directory beside the requiring file, and is not on the load
+    /// path at all.
     fn glob_root<'a>(
         &self,
         from: &GraphFacts,
@@ -1659,7 +1658,7 @@ impl Index {
     }
 
     /// Every file whose path ends with these segments, with its own
-    /// path components — what says how near it is to the includer.
+    /// path components, which say how near it is to the includer.
     fn suffix_matches<'a>(&'a self, segs: &'a [&str]) -> impl Iterator<Item = &'a CompEntry> + 'a {
         segs.last()
             .and_then(|last| self.basenames.get(*last))
@@ -1681,7 +1680,7 @@ impl Index {
     }
 }
 
-/// Which files declare each exported symbol, for the two languages
+/// Which files declare each exported symbol, for the three languages
 /// that resolve a name by its declaration rather than by where it sits.
 fn declaring_files(files: &[GraphFacts]) -> HashMap<(Lang, Box<str>), Vec<usize>> {
     let mut out: HashMap<(Lang, Box<str>), Vec<usize>> = HashMap::new();
@@ -1697,11 +1696,10 @@ fn declaring_files(files: &[GraphFacts]) -> HashMap<(Lang, Box<str>), Vec<usize>
     // `test/Polly.Specs/Helpers` and `internal static class Constants`
     // in `src/Polly.Core/Utils`.
     //
-    // Load-bearing only once `nearest_declarers` is in: while every
-    // declarer answered, the production one answered too and the filter
-    // was worth nothing. With the proximity tie-break a test's copy can
-    // WIN — it is 12 orphans and 7276 C# edges with this filter and 13
-    // and 7265 without.
+    // The proximity tie-break in `nearest_declarers` makes the filter
+    // load-bearing: a test's copy can WIN, where letting every declarer
+    // answer let the production one answer too. It is 12 orphans and
+    // 7276 C# edges with this filter and 13 and 7265 without.
     for (i, f) in files
         .iter()
         .enumerate()
@@ -1731,8 +1729,8 @@ fn receiver_members(files: &[GraphFacts]) -> HashMap<Box<str>, Vec<usize>> {
 /// The type a C# file's NAME declares, which its exports need not.
 ///
 /// `internal` is assembly-wide, so an internal type is referenced from
-/// other files exactly as a public one is — and `exports` holds the
-/// public surface, by design, so nothing in the index answered for
+/// other files as a public one is. `exports` holds the public surface,
+/// by design, so nothing in the index answered for
 /// `Polly.Utils.Constants` or `Newtonsoft.Json.Utilities.
 /// DynamicallyAccessedMemberTypes`. The file name is the statement that
 /// survives the accessibility modifier, and it is the rule the pack's
@@ -1752,7 +1750,7 @@ fn csharp_stem(f: &GraphFacts) -> Option<Box<str>> {
     stem.starts_with(char::is_uppercase).then(|| stem.into())
 }
 
-/// Leading components two files share — how near one is to the other.
+/// Leading components two files share: how near one is to the other.
 fn shared(a: &[Box<str>], b: &[Box<str>]) -> usize {
     a.iter().zip(b).take_while(|(x, y)| x == y).count()
 }
@@ -1768,15 +1766,15 @@ impl DuneScopes {
     /// module. otherlibs/dyn/dyn.ml says `Float.to_string` and means
     /// Stdlib's; binding it to otherlibs/stdune/src/float.ml put 697 of
     /// dune's 886 modules into a single cycle, and OCaml has no such
-    /// thing — a cycle between compilation units does not compile, and
+    /// thing: a cycle between compilation units does not compile, and
     /// dune refuses to build one.
     ///
     /// The two stanzas widen exactly that, and only where the build file
     /// says so. A flat library is ONE directory spelled over several:
     /// 19 orphans and 627 edges, and the file-level cycle mass and
-    /// largest cycle do not move at all — the directory cycle it does
-    /// create has all six members inside `dune/src/dune_rules`, which is
-    /// the single library `(include_subdirs unqualified)` flattens. An
+    /// largest cycle do not move. The directory cycle it does create
+    /// has all six members inside `dune/src/dune_rules`, the single
+    /// library `(include_subdirs unqualified)` flattens. An
     /// unwrapped library publishes every module under its own bare name:
     /// no orphan moves for it, but it earns 64 edges and reclassifies
     /// 1050 imports from external to internal, and every unwrapped
@@ -1827,7 +1825,7 @@ fn dune_scopes(files: &[GraphFacts]) -> DuneScopes {
 
 /// Go writes a major version into the module path from v2 on, so `v1`
 /// and `v0` are never spelled and a `v1` element is an ordinary
-/// directory — chi has three of them under `_examples/versions/`.
+/// directory: chi has three of them under `_examples/versions/`.
 fn major_version(seg: &str) -> bool {
     seg.strip_prefix('v')
         .and_then(|n| n.parse::<u32>().ok())
@@ -1850,7 +1848,7 @@ fn module_components(f: &GraphFacts) -> Vec<Box<str>> {
         Lang::Python => "__init__",
         Lang::Rust => "mod",
         Lang::TypeScript | Lang::Tsx | Lang::JavaScript => "index",
-        // Penlight writes the rule down at run.lua:37 —
+        // Penlight writes the rule down at run.lua:37:
         // `package.path = "lua/?.lua;lua/?/init.lua"`.
         Lang::Lua => "init",
         _ => "",
@@ -1883,7 +1881,7 @@ fn nearest_crate_roots(
 /// `@scope/name/sub/path` -> ("@scope/name", ["sub", "path"]); an
 /// unscoped `name/sub` -> ("name", ["sub"]).
 fn split_package(target: &str) -> (&str, Vec<&str>) {
-    // A scoped package spends two segments on its name, an unscoped one.
+    // A scoped package's name is two segments, an unscoped one's is one.
     let take = if target.starts_with('@') { 2 } else { 1 };
     let mut cut = target.len();
     let mut seen = 0;
@@ -2066,10 +2064,10 @@ fn path_aliases(files: &[GraphFacts]) -> HashMap<PathBuf, Vec<Alias>> {
                 .iter()
                 .filter_map(|(pattern, targets)| {
                     let first = targets.as_array()?.first()?.as_str()?;
-                    // One `*` at most, and tsc puts it last. What
-                    // precedes it in the pattern is the prefix a
-                    // specifier must carry; what precedes it in the
-                    // target is the directory it lands in.
+                    // One `*` at most, and tsc puts it last. In the
+                    // pattern, everything before it is the prefix a
+                    // specifier must carry; in the target, everything
+                    // before it is the directory it lands in.
                     let (head, star) = match pattern.strip_suffix('*') {
                         Some(head) => (head, true),
                         None => (pattern.as_str(), false),
@@ -2088,7 +2086,7 @@ fn path_aliases(files: &[GraphFacts]) -> HashMap<PathBuf, Vec<Alias>> {
     out
 }
 
-/// The cursor `strip_jsonc` shares with the four things it does.
+/// The cursor `strip_jsonc` hands to its three scanning helpers.
 type Chars<'a> = std::iter::Peekable<std::str::CharIndices<'a>>;
 
 /// JSON with comments and trailing commas, cut back to JSON. String
@@ -2150,8 +2148,8 @@ fn closes_after(text: &str, at: usize) -> bool {
 
 /// Node's own private-name mechanism: a `package.json` may map `#app/*`
 /// onto `./src/*`, and a specifier starting `#` is resolvable ONLY
-/// through that map. ariakit writes 313 of them, every one of which
-/// read as a third-party package.
+/// through that map. ariakit writes 313 of them, and without the map
+/// every one reads as a third-party package.
 ///
 /// The name and the directory are exactly what a workspace package
 /// contributes, so a subpath entry joins the same map: `#app` is a
@@ -2186,8 +2184,8 @@ fn components(path: &Path) -> Vec<Box<str>> {
 }
 
 /// The repository a file belongs to, as path components: the nearest
-/// ancestor holding a `.git`. A scan is not a repository — gold puts a
-/// hundred of them side by side — and a rule that matches a path by its
+/// ancestor holding a `.git`. A scan is not a repository (gold puts a
+/// hundred of them side by side), and a rule that matches a path by its
 /// tail has to say which tree it is matching in.
 ///
 /// Cached, because a `.git` probe is a syscall per ancestor and one
@@ -2311,10 +2309,10 @@ mod tests {
 
     #[test]
     fn a_specifier_that_named_this_project_reports_a_miss_as_a_miss() {
-        // A corpus that resolved NOTHING used to report itself 100%
-        // resolved: the generic arm could only answer Internal or
-        // External, so every in-repo `require_relative` that failed to
-        // land read as a third-party dependency. roda showed 41
+        // Without an unresolved class a corpus that resolves NOTHING
+        // reports itself 100% resolved: an arm that can answer only
+        // Internal or External reads every in-repo `require_relative`
+        // that fails to land as a third-party dependency. roda showed 41
         // internal / 296 external / 0 unresolved while 161 of those 296
         // named files inside itself.
         use crate::facts::ImportFact;
@@ -2344,12 +2342,12 @@ mod tests {
 
     #[test]
     fn a_crate_path_lands_on_the_module_it_names_not_a_namesake() {
-        // Two modules can share a last segment — this repository holds
-        // src/metrics/mod.rs and src/graph/metrics.rs — and matching a
-        // `crate::` path by its last segment picked whichever was
-        // scanned first. Every `crate::metrics::` edge went to the
-        // wrong file, and the real module read as an orphan with no
-        // importers at all.
+        // Two modules can share a last segment: this repository holds
+        // src/metrics/mod.rs and src/graph/metrics.rs. Matching a
+        // `crate::` path by its last segment picks whichever was
+        // scanned first, so every `crate::metrics::` edge goes to the
+        // wrong file and the real module reads as an orphan with no
+        // importers.
         let files = [
             file(Lang::Rust, "src/main.rs", &["self::metrics", "self::graph"]),
             file(Lang::Rust, "src/metrics/mod.rs", &[]),
@@ -2374,8 +2372,8 @@ mod tests {
     fn an_include_lands_on_the_header_its_path_names() {
         // cutlass holds seven files called gemm.h. Matching an include
         // by its last segment sent `cutlass/gemm/gemm.h` to whichever
-        // came first in path order — the one under device/ — so the
-        // header the include actually names had no fan-in at all.
+        // came first in path order (the one under device/), so the
+        // header the include names had no fan-in.
         let files = [
             file(Lang::Cuda, "include/cutlass/gemm/device/gemm.h", &[]),
             file(Lang::Cuda, "include/cutlass/gemm/gemm.h", &[]),
@@ -2413,10 +2411,10 @@ mod tests {
     fn a_swift_import_names_a_target_directory_not_a_file() {
         // vapor's `import HTTPTypes` is Apple's swift-http-types, which
         // vapor's own Package.swift declares. Matching a file STEM sent
-        // it to swift-nio's Sources/NIOHTTP1/HTTPTypes.swift — another
-        // repository entirely — and made those 84 fabricated dependents
-        // the top line of the Swift report. 140 of the 170 stem matches
-        // were wrong the same way.
+        // it to swift-nio's Sources/NIOHTTP1/HTTPTypes.swift (another
+        // repository) and made those 84 fabricated dependents the top
+        // line of the Swift report. 140 of the 170 stem matches were
+        // wrong the same way.
         let files = [
             file(Lang::Swift, "swift-nio/Sources/NIOCore/Channel.swift", &[]),
             file(
@@ -2449,7 +2447,7 @@ mod tests {
         //
         // One component has to stay external. `<cuda_runtime.h>` is the
         // toolkit header 109 times over, and admitting it would bind to
-        // transformer-engine's own util/cuda_runtime.h — a different
+        // transformer-engine's own util/cuda_runtime.h, a different
         // file that happens to share a name.
         let files = [
             file(
@@ -2473,10 +2471,10 @@ mod tests {
     fn an_include_several_headers_answer_to_names_the_nearest_or_all_of_them() {
         // musl carries eighteen copies of syscall_arch.h, one per
         // architecture, and compiles with `-Iarch/$(ARCH)`. WHICH one a
-        // build sees is still nowhere in the source — but reporting
-        // that as a failure to resolve left 456 of musl's 655 headers
-        // with no includer, which states a fact about the build system
-        // as though it were one about the code. Every one of them IS
+        // build sees is still nowhere in the source. Reporting that as
+        // a failure to resolve left 456 of musl's 655 headers with no
+        // includer, which states a fact about the build system as
+        // though it were one about the code. Every one of them IS
         // depended on, each in its own configuration.
         //
         // So a tie names them all, and manufactures no external
@@ -2583,14 +2581,14 @@ mod tests {
     #[test]
     fn a_php_class_resolves_through_the_psr4_root_its_manifest_declares() {
         // composer.json says `{"Composer\\":"src/Composer/"}`. Url.php:15
-        // writes `use Composer\Config;` — one of 46 files that do — and
-        // the old shallowest-suffix match on the stripped tail `Config`
-        // took flysystem's Config.php in another repository, so
-        // composer's own read as depended on by nothing.
+        // writes `use Composer\Config;` (one of 46 files that do), and a
+        // shallowest-suffix match on the stripped tail `Config` takes
+        // flysystem's Config.php in another repository, so composer's
+        // own reads as depended on by nothing.
         //
         // `League\Flysystem\` maps to `src`, so those two segments
         // appear nowhere in the path and NO tail of the name
-        // suffix-matches the file — that one is readable only from the
+        // suffix-matches the file. That one is readable only from the
         // manifest.
         use crate::lang::Reach;
         let (dir, at) = psr4_tree("root");
@@ -2617,10 +2615,10 @@ mod tests {
     #[test]
     fn a_php_tail_of_one_component_names_nothing() {
         // monolog's Logger.php:149 writes `protected Closure|null`, and
-        // `Closure` is a PHP built-in — but the only Closure.php in the
+        // `Closure` is a PHP built-in. The only Closure.php in the
         // corpus is PHP-Parser's, so a one-component tail bound two
-        // unrelated repositories together. 33 such edges disappeared
-        // when the ladder was floored at two.
+        // unrelated repositories together. Flooring the ladder at two
+        // removed 33 such edges.
         use crate::lang::Reach;
         let (dir, at) = psr4_tree("tail");
         let files = [
@@ -2782,7 +2780,7 @@ mod tests {
         //
         // Only a name exactly one file declares. Taking every declarer
         // instead scored the same orphan count and added 1266 edges,
-        // all among duplicate test fixtures — gold declares `Schema`
+        // all among duplicate test fixtures: gold declares `Schema`
         // forty times.
         let mut exceptions = file(Lang::Elixir, "lib/plug/exceptions.ex", &[]);
         exceptions.exports = vec!["Plug.BadRequestError".into(), "Plug.TimeoutError".into()];
@@ -2838,9 +2836,9 @@ mod tests {
         );
     }
 
-    /// Two repositories side by side, as a scan holds them — a
-    /// hundred of them in the gold corpus — each marked by its own
-    /// `.git`. Returns the pair; the scratch root is their parent.
+    /// Two repositories side by side, as a scan holds them (a hundred
+    /// of them in the gold corpus), each marked by its own `.git`.
+    /// Returns the pair; the scratch root is their parent.
     fn two_repositories(tag: &str) -> (PathBuf, PathBuf) {
         let root = std::env::temp_dir().join(format!("elegance-{tag}-{}", std::process::id()));
         let (app, other) = (root.join("app"), root.join("other"));
@@ -2909,12 +2907,12 @@ mod tests {
 
     #[test]
     fn a_bare_angled_include_is_anchored_before_it_is_counted() {
-        // The `include/` anchor used to be applied AFTER the uniqueness
-        // test, so one homonym anywhere in the tree vetoed the bind.
-        // musl ships arch/generic/bits/dirent.h beside include/dirent.h,
-        // and `#include <dirent.h>` — which can only mean the second,
-        // since the first is spelled `<bits/dirent.h>` — resolved to
-        // nothing at all. Twelve musl headers and one of git's read as
+        // Applying the `include/` anchor AFTER the uniqueness test lets
+        // one homonym anywhere in the tree veto the bind. musl ships
+        // arch/generic/bits/dirent.h beside include/dirent.h, and
+        // `#include <dirent.h>` (which can only mean the second, since
+        // the first is spelled `<bits/dirent.h>`) then resolves to
+        // nothing. Twelve musl headers and one of git's read as
         // included by nobody for that reason; run over musl alone the
         // filter-first order is 4218 edges to 4671.
         let files = [
@@ -2944,7 +2942,7 @@ mod tests {
         // binding module is where it names the header beside it:
         // ghostty's pkg/freetype/c.zig:2 says
         // `@cInclude("freetype-zig.h")`. A MISS is external and never
-        // unresolved — Zig has no angled spelling to mark a system
+        // unresolved: Zig has no angled spelling to mark a system
         // header with, and 22 of the corpus's 25 @cInclude sites name
         // one, so routing a miss through C's quoted arm put all 22 into
         // the honesty bucket for no gain.
@@ -2972,8 +2970,8 @@ mod tests {
         // library into one flat namespace, so dune_rules/gen_rules.ml
         // writing `Cram_rules.rules` means dune_rules/cram/cram_rules.ml.
         // `(wrapped false)` publishes each module under its own bare
-        // name, which is why containers/tests/data/t_bv.ml can say
-        // `open CCBV` with no qualification at all. 49 orphans and 691
+        // name, so containers/tests/data/t_bv.ml can say `open CCBV`
+        // with no qualification at all. 49 orphans and 691
         // edges between them, and the file-level cycle mass does not
         // move: an illegal compilation-unit cycle is the failure mode
         // `visible` exists to prevent.
@@ -3006,7 +3004,7 @@ mod tests {
         // `defmodule Plug.Conn` lives at lib/plug/conn.ex. Comparing
         // the CamelCase name against snake_case path components missed
         // all 2740 module references in the corpus, which reported 31
-        // internal edges — every one of them JavaScript under
+        // internal edges: every one of them JavaScript under
         // phoenix/assets/js.
         //
         // Absinthe holds KnownDirectives twice, under document and
@@ -3047,12 +3045,12 @@ mod tests {
 
     #[test]
     fn a_solidity_import_names_a_file_extension_and_all() {
-        // The generic arm split "../utils/Context.sol" into segments
-        // and matched them against module components, which have the
-        // extension stripped — present on one side, absent on the
-        // other, and `..` folded on neither. A guaranteed miss:
+        // The generic arm splits "../utils/Context.sol" into segments
+        // and matches them against module components, which have the
+        // extension stripped: present on one side, absent on the other,
+        // and `..` folded on neither. That miss is guaranteed, and
         // openzeppelin's 367 contracts produced zero internal edges and
-        // no architecture section at all.
+        // no architecture section.
         use crate::facts::ImportFact;
         use crate::lang::Reach;
         let imp = |target: &str, reach| ImportFact {
@@ -3088,11 +3086,10 @@ mod tests {
 
     #[test]
     fn a_ruby_relative_require_is_a_path_from_the_requiring_file() {
-        // `require_relative` was suffix-matched on '/', so `..` — never
-        // a component of a namespace — could not resolve at all, and a
-        // bare sibling landed on a namesake: sequel's lib/sequel/core.rb
-        // reached lib/sequel/dataset/sql.rb where Ruby loads
-        // lib/sequel/sql.rb.
+        // Suffix-matching `require_relative` on '/' cannot resolve `..`
+        // (never a component of a namespace), and a bare sibling lands
+        // on a namesake: sequel's lib/sequel/core.rb reached
+        // lib/sequel/dataset/sql.rb where Ruby loads lib/sequel/sql.rb.
         use crate::facts::ImportFact;
         use crate::lang::Reach;
         let rel = |target: &str| ImportFact {
@@ -3125,8 +3122,8 @@ mod tests {
         // `use` covers only the classes of ANOTHER namespace. One in the
         // file's own namespace is named bare, and one BELOW it is
         // written out: PHP-Parser spells `Comment\Doc`, `Lexer\Emulative`
-        // and `Builder\Class_` that way and imports none of them, which
-        // is why 181 of its 274 modules read as orphans while only 4 are
+        // and `Builder\Class_` that way and imports none of them, so
+        // 181 of its 274 modules read as orphans while only 4 are
         // never named by another production file.
         use crate::facts::ImportFact;
         use crate::lang::Reach;
@@ -3153,7 +3150,7 @@ mod tests {
         // Only the `use` statement is a dependency the file declares.
         // The name it merely writes down is neither internal nor
         // external, and the one naming nothing here is not a failure to
-        // resolve — an inline name is not a promise that the file is
+        // resolve: an inline name is not a promise that the file is
         // present.
         assert_eq!((res.internal, res.external, res.unresolved), (1, 0, 0));
     }
@@ -3162,14 +3159,13 @@ mod tests {
     fn a_csharp_type_reference_reaches_what_declares_it_and_states_no_dependency() {
         // A `using` opens a namespace and binds no file: it makes short
         // names visible and nothing more, and a type in the file's own
-        // namespace needs none at all. The corpus's 7032 directives
-        // resolved 23 edges, and 2025 of 2032 modules read as orphans.
+        // namespace needs none. The corpus's 7032 directives resolved
+        // 23 edges, and 2025 of 2032 modules read as orphans.
         //
-        // The TYPE is what names another file, and where it lives is
-        // said by the declaration and by nothing else — a `partial`
-        // class is spread over `SqlMapper.cs`, `SqlMapper.TypeHandler.cs`
-        // and eleven more, and 87 of the corpus's 102 dotted-stem files
-        // are one.
+        // The TYPE names another file, and only the declaration says
+        // where it lives: a `partial` class is spread over
+        // `SqlMapper.cs`, `SqlMapper.TypeHandler.cs` and eleven more,
+        // and 87 of the corpus's 102 dotted-stem files are one.
         use crate::facts::ImportFact;
         use crate::lang::Reach;
         let imp = |target: &str, reach| ImportFact {
@@ -3205,7 +3201,7 @@ mod tests {
 
     #[test]
     fn an_extension_method_is_reached_through_the_value_it_is_called_on() {
-        // `policyBuilder.CircuitBreaker(n, t)` names no type at all: the
+        // `policyBuilder.CircuitBreaker(n, t)` names no type: the
         // declaring class is spelled nowhere in the call, and the member
         // is the only handle on the file. 40 of gold C#'s 86 orphans
         // declare nothing but extension methods, all eight of Polly's
@@ -3252,8 +3248,8 @@ mod tests {
     #[test]
     fn a_csharp_file_name_declares_a_type_and_the_nearest_assembly_answers() {
         // `internal` is assembly-wide, so an internal type is referenced
-        // by name exactly as a public one is — and `exports` is the
-        // PUBLIC surface by design, so nothing answered for
+        // by name as a public one is, and `exports` is the PUBLIC
+        // surface by design, so nothing answered for
         // `Polly.Utils.Constants` or `Newtonsoft.Json.Utilities.
         // DynamicallyAccessedMemberTypes`. The file NAME is the
         // statement that survives the accessibility modifier: 907 of the
@@ -3261,7 +3257,7 @@ mod tests {
         // type they declare.
         //
         // A scan is several assemblies, and 13 of the corpus's stems are
-        // declared in more than one repository — `Extensions` in
+        // declared in more than one repository: `Extensions` in
         // AutoMapper, Dapper, FluentValidation and Newtonsoft.Json alike.
         // With no tie-break the bare word edged to all four, 661 of 7823
         // C# edges naming a project the caller cannot link against.
@@ -3291,7 +3287,7 @@ mod tests {
         // documentation sample, under `Src/Newtonsoft.Json.Tests/`.
         // `VersionConverterTests.cs` sits beside the second, so the
         // proximity tie-break hands it the sample and the production
-        // converter keeps its zero — 12 orphans with this filter and 13
+        // converter keeps its zero: 12 orphans with this filter and 13
         // without.
         let mut suite = file(
             Lang::CSharp,
@@ -3392,9 +3388,9 @@ mod tests {
     fn a_built_module_name_is_read_on_both_sides_of_what_it_cannot_read() {
         // kong writes `local plugin_handler = "kong.plugins." .. plugin
         // .. ".handler"` and requires the local three lines later. The
-        // prefix alone reaches NOTHING — each of kong's 150 plugins is
-        // a directory, so no file sits directly under kong/plugins —
-        // while the suffix names one real file per plugin. 174 of gold
+        // prefix alone reaches NOTHING (each of kong's 150 plugins is a
+        // directory, so no file sits directly under kong/plugins) while
+        // the suffix names one real file per plugin. 174 of gold
         // Lua's 342 orphans are inside that directory.
         use crate::facts::ImportFact;
         use crate::lang::Reach;
@@ -3424,8 +3420,8 @@ mod tests {
             "the suffix is what tells the files of a plugin apart"
         );
         // The bare prefix names a plugin DIRECTORY and no file is
-        // directly inside one, so it resolves to nothing — and the
-        // built name that did resolve is not tallied, because writing a
+        // directly inside one, so it resolves to nothing. The built
+        // name that did resolve is not tallied, because writing a
         // string is not stating a dependency.
         assert_eq!((res.internal, res.external, res.unresolved), (0, 1, 0));
     }
@@ -3434,10 +3430,10 @@ mod tests {
     fn a_ruby_directory_prefix_is_anchored_at_a_load_path_root() {
         // `require "roda/plugins/#{name}"` names a directory the way
         // Lua's concatenated require does, and 417 of gold Ruby's 490
-        // orphans sat under six such prefixes. What tells a real prefix
-        // from a gem is the load path: rubygems puts `lib` on it and
-        // nothing else, so sequel's own lib/sequel/adapters/jdbc is not
-        // what `require "jdbc/#{name}"` reaches — that line loads "the
+        // orphans sat under six such prefixes. The load path tells a
+        // real prefix from a gem: rubygems puts `lib` on it and nothing
+        // else, so sequel's own lib/sequel/adapters/jdbc is not what
+        // `require "jdbc/#{name}"` reaches. That line loads "the
         // necessary JDBC support via a gem", as its own comment says.
         use crate::facts::ImportFact;
         use crate::lang::Reach;

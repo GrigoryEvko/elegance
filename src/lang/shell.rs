@@ -1,12 +1,12 @@
 //! Shell: the language that provisions the cluster.
 //!
 //! Deployment scripts are where a mistake costs the most and review
-//! reaches least — one k8s repository here holds 22.6k lines of it,
-//! including a 3,287-line registry provisioner — so the gap between
-//! "we measure nine languages" and "we measure the code that runs
-//! production" was this pack.
+//! reaches least. One k8s repository here holds 22.6k lines of shell,
+//! including a 3,287-line registry provisioner. This pack closes the
+//! gap between "we measure nine languages" and "we measure the code
+//! that runs production".
 //!
-//! Honest caveats, by decision:
+//! Limits taken deliberately:
 //! - A shell function declares NO parameters: `$1` and `$2` are read
 //!   from the caller's frame. Every interface metric is therefore
 //!   structurally silent, which is a fact about the language rather
@@ -14,20 +14,20 @@
 //! - `.sh`/`.bash` only. An extensionless script with a shebang is
 //!   real and common, but `Lang::from_path` is a pure path predicate
 //!   that several modes call during the walk, and sniffing every
-//!   extensionless file would change what a walk costs. Deferred, not
-//!   denied — and the deferral has a measured price: the shell gold
-//!   corpus holds 29 extensionless scripts carrying a shell shebang,
-//!   among them the eleven `bats-core/libexec/bats-core/bats-*` files
-//!   that source that project's ENTIRE library. They hold 28 sourcing
-//!   statements, 24 of which resolve on sight, and they give five of
+//!   extensionless file would change what a walk costs. The deferral
+//!   has a measured price: the shell gold corpus holds 29
+//!   extensionless scripts carrying a shell shebang, among them the
+//!   eleven `bats-core/libexec/bats-core/bats-*` files that source
+//!   that project's ENTIRE library. Those hold 28 sourcing statements,
+//!   24 of which resolve on sight, and they give five of
 //!   `lib/bats-core/`'s libraries their first importer.
 //! - A library is written at its INSTALLED name, which has lost the
 //!   extension the file still carries: git spells `. git-sh-setup` and
 //!   ships `git-sh-setup.sh`. 15 of the corpus's 68 sourcing statements
 //!   are that shape and none of them resolve, because the basename
 //!   index is keyed by the file name including its extension.
-//! - `cmd || true` is EXPLICIT silencing — the Zen's own exemption —
-//!   so it is not counted as a swallowed error.
+//! - `cmd || true` is EXPLICIT silencing, which the Zen exempts, so it
+//!   is not counted as a swallowed error.
 
 use tree_sitter::Node;
 
@@ -45,11 +45,10 @@ const KINDS: &[(&str, Sem)] = &[
     ("while_statement", Sem::Loop),
     ("case_statement", Sem::Match),
     ("case_item", Sem::CaseArm),
-    // `&&`/`||` and ONLY those — `;` sequencing produces no node of
-    // its own and `|` is a pipeline, so this needs no refinement. A
-    // chain nests (`a && b && c` is list(list(a,b),c)), which is what
-    // makes the cognitive sequence-dedup work without an operator
-    // field to compare.
+    // `&&`/`||` and ONLY those: `;` sequencing produces no node of its
+    // own and `|` is a pipeline, so this needs no refinement. A chain
+    // nests (`a && b && c` is list(list(a,b),c)), so the cognitive
+    // sequence-dedup works without an operator field to compare.
     ("list", Sem::BoolOp),
     ("command", Sem::Call),
     ("comment", Sem::Comment),
@@ -101,8 +100,8 @@ pub fn pack() -> Pack {
         name_node: |_| None,
         composed_name: |_, _| None,
         imports,
-        // A shell function's parameters are `$1`, `$2` — read from the
-        // caller's frame, declared nowhere.
+        // A shell function's parameters are `$1`, `$2`, read from the
+        // caller's frame and declared nowhere.
         param_info: |_, _| None,
         is_self_call,
         is_doc: |_| false,
@@ -130,10 +129,10 @@ pub fn pack() -> Pack {
         // Shell has NO test-declaration form. bats and shunit2 assert
         // with the `[` builtin, which is indistinguishable from
         // ordinary control flow, so a `test_`-named function reads as
-        // assertionless whatever it does — the corpus said so at
-        // 100%. A shell test is recognized by its FILE and exempted
-        // from production metrics; it is never judged as a declared
-        // test, because nothing here can tell a real one from a helper.
+        // assertionless whatever it does. The corpus agrees at 100%. A
+        // shell test is recognized by its FILE and exempted from
+        // production metrics; it is never judged as a declared test,
+        // because nothing here can tell a real one from a helper.
         names_test: |_, _| false,
         is_test_code: |_, _| false,
         test_path,
@@ -149,7 +148,7 @@ pub fn pack() -> Pack {
         // command of that name; nothing declares a test to begin with.
         skips_test: |_, _| false,
         magic_exempt: &[
-            // `>&2` — a file descriptor is not an unnamed constant.
+            // `>&2`: a file descriptor is not an unnamed constant.
             "file_redirect",
             "case_item",
             "subscript",
@@ -175,8 +174,8 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         Sem::Call if command_name(node, src).is_some_and(|n| SOURCING.contains(&n)) => Sem::Import,
         // A bare word being ASSIGNED is a value, not a name. Shell has
         // no scalar but the string, and quoting is optional, so
-        // `API_KEY=abc123` is the same literal as `API_KEY="abc123"` —
-        // it just parses as a `word`. Without this the credential
+        // `API_KEY=abc123` is the same literal as `API_KEY="abc123"`.
+        // It just parses as a `word`. Without this the credential
         // detector could only see the quoted half of the language.
         Sem::Ident if node.kind() == "word" && is_assigned_value(node) => Sem::StrLit,
         _ => sem,
@@ -199,11 +198,10 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     else {
         return Vec::new();
     };
-    // `source <(grep ... file)` sources a PROCESS, not a path — the
-    // corpus spells it once, at bats-core/contrib/release.sh:23, and
-    // the file name inside the substitution is an argument to grep
-    // rather than the thing being sourced. Nothing here can resolve and
-    // nothing should: it is not an import.
+    // `source <(grep ... file)` sources a PROCESS, not a path. The file
+    // name inside the substitution is an argument to grep rather than
+    // the thing being sourced, so there is nothing here to resolve. The
+    // corpus spells it once, at bats-core/contrib/release.sh:23.
     if target.starts_with("<(") || target.starts_with(">(") {
         return Vec::new();
     }
@@ -242,16 +240,16 @@ fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
     super::doc_run(node, &["comment"], &[], src)
 }
 
-/// A test DIRECTORY, and the file's own name is not one of them:
-/// `bats` names the runner's entry script as well as the directory a
-/// project vendors it into, and matching the last segment filed
-/// bats-core's own bin/bats and libexec/bats-core/bats — the two
-/// scripts that source its whole library — as tests, dropping every
-/// edge they carry out of the production graph. `bats` therefore stays
-/// an EXACT segment; only the "test" family widens.
+/// A test DIRECTORY, never the file's own name: `bats` names the
+/// runner's entry script as well as the directory a project vendors it
+/// into. Matching the last segment would file bats-core's own bin/bats
+/// and libexec/bats-core/bats as tests, and those two scripts source
+/// its whole library, so every edge they carry would leave the
+/// production graph. `bats` therefore stays an EXACT segment; only the
+/// "test" family widens.
 ///
-/// `test.sh` is the other spelling, and it is a whole FILENAME rather
-/// than a stem — a rule about `test.sh` says nothing about
+/// `test.sh` is the other spelling, matched as a whole FILENAME rather
+/// than a stem, so a rule about `test.sh` says nothing about
 /// `unittest.sh`. All 24 files so named in gold are the entry script of
 /// a suite: 19 transformer-engine CI stages, curl's cmake harness,
 /// redis's and vscode's `scripts/test.sh`, phoenix's integration
@@ -281,8 +279,8 @@ mod tests {
         // bats-core/bin/bats and bats-core/libexec/bats-core/bats are
         // the only two files in the shell gold corpus whose OWN NAME is
         // the sole "test" segment; the second is the script that sources
-        // the whole library, so filing it as a test deleted its edges
-        // from the production graph.
+        // the whole library, so filing it as a test would delete its
+        // edges from the production graph.
         let is_test = super::pack().test_path;
         for p in [
             "bats-core/test/bats.bash",

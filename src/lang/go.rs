@@ -23,7 +23,8 @@ const KINDS: &[(&str, Sem)] = &[
     ("break_statement", Sem::Jump),
     ("continue_statement", Sem::Jump),
     // Not Jump: break/continue are free within their loop, but a goto
-    // sends the reader hunting for a label — the flat +1 Sem::Goto is for.
+    // sends the reader hunting for a label, which is what Sem::Goto's
+    // flat +1 charges for.
     ("goto_statement", Sem::Goto),
     ("call_expression", Sem::Call),
     ("type_assertion_expression", Sem::Cast),
@@ -99,22 +100,24 @@ pub fn pack() -> Pack {
         // No exceptions, so no chain to break.
         loses_context: |_, _| false,
         panicky,
-        // No async in this language; goroutines and threads are not it.
-        // Recognising `defer f.Close()` needs the defer, not the open; unimplemented rather than wrong.
-        // Composite literals carry their type; a map[string]any is a map, not a record.
+        // Recognising `defer f.Close()` needs the defer, not the open;
+        // unimplemented rather than wrong.
+        // Composite literals carry their type; a map[string]any is a
+        // map, not a record.
         record_keys: |_, _| None,
+        // No async in this language; goroutines and threads are not it.
         is_async: |_, _| false,
         declares_test: |_, _| false,
         names_test,
         is_test_code: |_, _| false,
         // cmd/go excludes every path element beginning with `_`, so the
         // 20 .go files under `chi/_examples/` and `toml/_example/`
-        // belong to no package. Claiming them anyway costs more than it
-        // pays: their imports are the only production evidence in the
-        // repository that `chi/middleware` is used at all, and dropping
-        // them turned all 30 of its files into orphans against 2
-        // recovered. Example programs are consumers, and the graph reads
-        // them as such.
+        // belong to no package. Honouring that exclusion costs more
+        // than it pays: their imports are the only production evidence
+        // in the repository that `chi/middleware` is used at all, and
+        // dropping them turns all 30 of its files into orphans against
+        // 2 recovered. Example programs are consumers, and the graph
+        // reads them as such.
         test_path: |p| p.ends_with("_test.go"),
         asserty,
         // Hooks are a JS/TS framework idea; no analogue here.
@@ -141,7 +144,7 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 /// Go's convention is names, and a name means "test" only in a
-/// _test.go file — a production TestConnection is a function.
+/// _test.go file: a production TestConnection is a function.
 fn names_test(node: Node, src: &[u8]) -> bool {
     node.child_by_field_name("name")
         .and_then(|n| n.utf8_text(src).ok())
@@ -149,7 +152,7 @@ fn names_test(node: Node, src: &[u8]) -> bool {
 }
 
 /// `t.Skip()` / `t.Skipf()` / `t.SkipNow()`. Guarded skips are the
-/// common and legitimate form, so the BRANCH context decides — the
+/// common and legitimate form, so the BRANCH context decides: the
 /// extractor counts only unbranched ones.
 fn skips_test(node: Node, src: &[u8]) -> bool {
     node.child_by_field_name("function")
@@ -159,7 +162,7 @@ fn skips_test(node: Node, src: &[u8]) -> bool {
         .is_some_and(|m| matches!(m, "Skip" | "Skipf" | "SkipNow"))
 }
 
-/// Every `interface` under one `type` declaration — a grouped
+/// Every `interface` under one `type` declaration; a grouped
 /// `type (...)` block declares several. Width counts `method_elem`
 /// only: an embedded interface (`io.Reader`) is composition, the cure
 /// for width, and must not be billed as the disease.
@@ -196,8 +199,8 @@ fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
     out
 }
 
-/// A result list's width: `(int, error)` is 2 and so is `(a, b int)` —
-/// grouped names share one declaration but each is a value the caller
+/// A result list's width: `(int, error)` is 2 and so is `(a, b int)`.
+/// Grouped names share one declaration, but each is a value the caller
 /// must place. A single bare type is 1.
 fn return_arity(node: Node, _src: &[u8]) -> u16 {
     let Some(result) = node.child_by_field_name("result") else {
@@ -221,7 +224,7 @@ fn return_arity(node: Node, _src: &[u8]) -> u16 {
         .sum()
 }
 
-/// `import ( alias "path/pkg" )` — the binding is the alias or the last
+/// `import ( alias "path/pkg" )`: the binding is the alias or the last
 /// path segment; `_` and `.` imports bind nothing usable.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let text = |n: Node| n.utf8_text(src).unwrap_or("");
@@ -258,8 +261,8 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 }
 
 /// Go has no `elif` kind: `else if` nests an if_statement in the else
-/// clause — same normalization as Rust and TS. `&&`/`||` disambiguated
-/// from the shared binary_expression kind.
+/// clause, the same normalization as Rust and TS. `&&`/`||` is
+/// disambiguated from the shared binary_expression kind.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
         Sem::If if node.parent().is_some_and(|p| p.kind() == "if_statement") => {
@@ -321,21 +324,21 @@ fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {
 /// `expectXxx` counts too: it is Go's dominant table-test convention
 /// (esbuild's tests are 4200 expectPrinted/expectParseError calls
 /// against 2 files using assert* directly). The capital is required, or
-/// a production `expectedValue()` would read as an assertion — the same
+/// a production `expectedValue()` would read as an assertion, the same
 /// rule the Zig pack uses.
 ///
-/// The sentence above about testify was FALSE for half of testify:
-/// `assertish` matches `assert` and nothing matches `require`, which is
-/// the stop-on-first-failure half and the more common one in the user's
-/// trees (224 calls against 0 in gold). It is accepted as a package
-/// name only — a bare `require(...)` is not a Go assertion.
+/// `require` is named on its own because `assertish` matches `assert`
+/// and nothing matches `require`, testify's stop-on-first-failure half
+/// and the more common one in the user's trees (224 calls against 0 in
+/// gold). It is accepted as a package name only; a bare `require(...)`
+/// is not a Go assertion.
 ///
-/// The stdlib assertion is `t.Errorf(...)` and it was invisible, so 458
+/// The stdlib assertion is `t.Errorf(...)`. Unrecognised, it leaves 458
 /// of gold's 527 Go tests — 86.9% — and 12,530 of the user's 12,640
-/// reported that they check nothing. It is not a name rule: the same
-/// verbs are `fmt.Errorf`, `err.Error()` and `log.Fatal` in production
-/// code, 66 times in gold's test files alone. What makes it an assertion
-/// is the RECEIVER, so the receiver is resolved: an identifier that some
+/// reporting that they check nothing. A name rule cannot find it: the
+/// same verbs are `fmt.Errorf`, `err.Error()` and `log.Fatal` in
+/// production code, 66 times in gold's test files alone. The RECEIVER
+/// decides, so the receiver is resolved: an identifier that some
 /// enclosing function declares with a `testing.T`/`B`/`TB`/`F` parameter
 /// type. That reads a subtest's own `func(t *testing.T)` correctly.
 const HANDLE_FAILS: &[&str] = &["Error", "Errorf", "Fatal", "Fatalf", "Fail", "FailNow"];
@@ -379,14 +382,14 @@ fn names_the_test_handle(call: Node, name: &str, src: &[u8]) -> bool {
 }
 
 /// `Some(true)` when this parameter list binds `name` to a testing type,
-/// `Some(false)` when it binds `name` to something else — a nearer
+/// `Some(false)` when it binds `name` to something else. A nearer
 /// binding wins, so a closure taking its own `t` is answered by that
 /// closure and the walk stops.
 fn handle_param(params: Node, name: &str, src: &[u8]) -> Option<bool> {
     let mut cursor = params.walk();
     let mut names = params.walk();
     for p in params.named_children(&mut cursor) {
-        // One declaration may bind several names — `func f(a, b *testing.T)`.
+        // One declaration may bind several names: `func f(a, b *testing.T)`.
         let binds = p
             .children_by_field_name("name", &mut names)
             .any(|n| n.utf8_text(src).unwrap_or("") == name);
@@ -414,8 +417,8 @@ fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
     super::doc_run(node, &["comment"], &[], src)
 }
 
-/// `if err != nil { }` — the error vanished. Go has no Catch node, so
-/// without this the whole error-discipline family read zero for the
+/// `if err != nil { }`: the error vanished. Go has no Catch node, so
+/// without this the error-discipline family reads zero for the
 /// language whose central discipline is error handling. A comment in
 /// the body is EXPLICIT silencing (Zen: "unless explicitly silenced")
 /// and does not count; neither does any non-nil comparison.
@@ -438,13 +441,12 @@ fn swallows_error(node: Node, src: &[u8]) -> bool {
             .is_some_and(|b| b.named_child_count() == 0)
 }
 
-/// Where Go stops predicting its own run. Two constructs, and both are
-/// the language admitting it: `unsafe.Pointer` and its neighbours
-/// convert a value to a shape the type system never checked — go-cmp's
-/// `reflect.NewAt(f.Type, unsafe.Pointer(uintptr(...)+f.Offset))` reads
-/// an unexported field, which is exactly Rust's `transmute` in a
-/// different alphabet — and `FieldByName`/`MethodByName` pick a member
-/// by a string.
+/// Where Go stops predicting its own run, in the language's own words:
+/// `unsafe.Pointer` and its neighbours convert a value to a shape the
+/// type system never checked, and `FieldByName`/`MethodByName` pick a
+/// member by a string. go-cmp reads an unexported field with
+/// `reflect.NewAt(f.Type, unsafe.Pointer(uintptr(...)+f.Offset))`,
+/// Rust's `transmute` in a different alphabet.
 ///
 /// The string decides the second one. `t.MethodByName("Equal")` names
 /// its member in the source and a reader can follow it; `t.FieldByName(

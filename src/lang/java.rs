@@ -1,11 +1,11 @@
 //! Java: everything is declared, so almost everything is measurable.
 //!
-//! The type-hygiene family reads at full strength here — parameters,
+//! The type-hygiene family reads at full strength here: parameters,
 //! returns and fields all carry types, and a cast is written down rather
-//! than inferred. What the language does not give is a free function: a
-//! unit is a method on a class, so `cohesion` and `interface width` are
-//! measuring the structure the language forces rather than a choice the
-//! author made, and both read that way.
+//! than inferred. The language has no free function, so a unit is a
+//! method on a class and `cohesion` and `interface width` measure the
+//! structure the language forces rather than a choice the author made.
+//! Both read that way.
 
 use tree_sitter::Node;
 
@@ -64,8 +64,8 @@ const KINDS: &[(&str, Sem)] = &[
 ];
 
 const DEF_SITES: &[(&str, &str)] = &[
-    // A local's declarator is its birth. Without it the live map held
-    // no definition row for any local, so the repurposing check had
+    // A local's declarator is its birth. Without it the live map holds
+    // no definition row for any local, and the repurposing check has
     // nothing to compare a rewrite against.
     ("variable_declarator", "name"),
     ("method_declaration", "name"),
@@ -79,8 +79,8 @@ const DEF_SITES: &[(&str, &str)] = &[
 const REASSIGNS: &[(&str, &str)] = &[("assignment_expression", "left")];
 const ATTR: (&str, &str) = ("field_access", "object");
 
-/// `Object` is the type that says nothing; a raw collection says it more
-/// politely, and both predate generics doing the work.
+/// `Object` is the type that says nothing, and `var` leaves the type
+/// unwritten for the reader to infer from the initializer.
 const LOOSE: &[&str] = &["Object", "var"];
 
 pub fn pack() -> Pack {
@@ -109,8 +109,8 @@ pub fn pack() -> Pack {
         // A record or a class declares the shape; there is no anonymous
         // map literal standing in for one.
         record_keys: |_, _| None,
-        // Concurrency is Executor, Future and virtual threads — library,
-        // never syntax.
+        // Concurrency is library here, never syntax: Executor, Future
+        // and virtual threads.
         is_async: |_, _| false,
         refine,
         name_node,
@@ -138,7 +138,7 @@ pub fn pack() -> Pack {
         asserty,
         is_hook: |_, _| false,
         // One return value, always. A method that wants to return three
-        // things declares a record, which is the point.
+        // things declares a record.
         return_arity: |_, _| 0,
         interfaces,
         skips_test,
@@ -165,8 +165,9 @@ pub(super) fn leaf(target: &str) -> Option<&str> {
 /// file is one segment shorter or more: `import static
 /// org.junit.jupiter.api.Assertions.assertEquals` is Assertions.java and
 /// `import com.github.benmanes.caffeine.cache.CacheSpec.CacheWeigher` is
-/// CacheSpec.java. 8361 static imports and 1240 nested types in the gold
-/// corpus named a file in the corpus and resolved to nothing.
+/// CacheSpec.java. Untrimmed, 8361 static imports and 1240 nested types
+/// in the gold corpus name a file the corpus holds and resolve to
+/// nothing.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let text = node.utf8_text(src).unwrap_or("");
     let target = text
@@ -183,23 +184,22 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     vec![super::ImportInfo {
         target: target.into(),
         // The leaf of a JVM import is BOTH the name the file binds and
-        // the name the target exports -- Java has no import aliasing --
-        // so the one field answers for the envy detector and for the
-        // surface question alike. Without it `fat_surfaces` reported
-        // exports_imported 0 for every Java and Scala module in gold,
-        // vacuously.
+        // the name the target exports, since Java has no import
+        // aliasing, so the one field answers for the envy detector and
+        // for the surface question alike. Without it `fat_surfaces`
+        // reports exports_imported 0 for every Java and Scala module in
+        // gold, vacuously.
         names: leaf(target).map(Into::into).into_iter().collect(),
         reach: super::Reach::Anywhere,
     }]
 }
 
 /// The prefix of a dotted name that ends at its first capitalized
-/// segment — the type whose file the name lives in. A package is lower
-/// case and a type is capitalized, and that convention is what decides
-/// where the file ends; cutting there moved no target that already
-/// resolved, across all 71978 Java and 12837 Scala imports of the gold
-/// corpus. A name with no capitalized segment is a package and is
-/// returned whole.
+/// segment: the type whose file the name lives in. A package is lower
+/// case and a type is capitalized, and that convention decides where
+/// the file ends. Cutting there moved no target that already resolved,
+/// across all 71978 Java and 12837 Scala imports of the gold corpus. A
+/// name with no capitalized segment is a package and is returned whole.
 pub(super) fn type_path(target: &str) -> &str {
     let mut end = 0;
     for seg in target.split('.') {
@@ -217,11 +217,11 @@ pub(super) fn type_path(target: &str) -> &str {
 /// while `src/test/java`, `src/testFixtures/java`, `src/jmh/java`,
 /// `src/javaPoet/java` and `src/compatibilityTest/java` are not.
 ///
-/// Reading the file NAME instead was wrong in both directions. junit5's
+/// Reading the file NAME instead is wrong in both directions. junit5's
 /// `junit-jupiter-api/src/main/java/org/junit/jupiter/api/Test.java`
 /// declares the `@Test` annotation, and it plus 62 more production types
-/// were dropped from the graph; 299 files under eighteen non-main source
-/// sets were judged as production modules in their place.
+/// drop out of the graph, while 299 files under eighteen non-main source
+/// sets pass as production modules in their place.
 fn test_path(p: &str) -> bool {
     if fixture_project(p) {
         return true;
@@ -237,12 +237,12 @@ fn test_path(p: &str) -> bool {
 /// under `platform-tooling-support-tests/projects/` to check that its
 /// own tooling can build them, and one of them is named
 /// `OtherwiseNotReferencedClass.java`. They carry no source-set layout,
-/// so the name check saw `projects` and called them production.
+/// so the name check reads `projects` as production.
 ///
-/// Both halves are load-bearing. A module ending in `-tests` alone
-/// covers 605 gold files against 9 orphans, so it would drop 596
-/// production modules to recover nine; inside a `projects` directory it
-/// is 25 files, and every one is a fixture.
+/// A module ending in `-tests` alone covers 605 gold files against 9
+/// orphans, so it would drop 596 production modules to recover nine;
+/// inside a `projects` directory it is 25 files, and every one is a
+/// fixture. Both halves are load-bearing.
 fn fixture_project(p: &str) -> bool {
     let comps: Vec<&str> = p.split('/').collect();
     let Some(at) = comps.iter().position(|c| *c == "projects") else {
@@ -322,12 +322,12 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 /// `catch (Exception e)` reaches every checked failure at once, and
-/// `Throwable` reaches the errors the JVM raises for itself. Which type
-/// that is, is decided by `catches_every_failure` — an EXACT root-type
-/// match, because `IOException e` contains the substring the first
-/// version tested for. Emptiness is the wider sin and is asked first —
-/// the core consults `swallows_error` on `if` nodes only, so a catch
-/// answers both here.
+/// `Throwable` reaches the errors the JVM raises for itself.
+/// `catches_every_failure` decides which type that is on an EXACT
+/// root-type match: `IOException e` carries `Exception` as a substring,
+/// so a substring test would read it as broad. Emptiness is the wider
+/// sin and is asked first. The core consults `swallows_error` on `if`
+/// nodes only, so a catch answers both sins here.
 fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "catch_clause" {
         return None;
@@ -341,7 +341,7 @@ fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
 }
 
 /// The `catch (Type e)` parameter. The grammar fields it under no name,
-/// so `child_by_field_name("parameter")` answered None for every catch
+/// so `child_by_field_name("parameter")` answers None for every catch
 /// in the language and both handler checks read zero.
 fn caught<'t>(clause: Node<'t>) -> Option<Node<'t>> {
     let mut cursor = clause.walk();
@@ -350,8 +350,8 @@ fn caught<'t>(clause: Node<'t>) -> Option<Node<'t>> {
         .find(|c| c.kind() == "catch_formal_parameter")
 }
 
-/// A catch whose body is empty, or whose only statement prints, silences
-/// the failure — `printStackTrace` is the canonical way to lose one.
+/// A catch whose body is empty silences the failure. A clause with no
+/// body node counts too: it caught and did nothing.
 fn swallows_error(node: Node, src: &[u8]) -> bool {
     if node.kind() != "catch_clause" {
         return false;
@@ -373,15 +373,15 @@ fn panicky(call: Node, src: &[u8]) -> bool {
             .is_ok_and(|t| t.starts_with("System.") || t.starts_with("Runtime"))
 }
 
-/// Rethrowing without the cause loses the stack that explains it. Asked
-/// of the CATCH, not of the throw: the core consults this hook on
-/// handler nodes, and a `throw` is a jump it never reaches — which left
-/// the check dead for the language it was written for.
+/// Rethrowing without the cause loses the stack that explains it. The
+/// check reads the CATCH rather than the throw: the core consults this
+/// hook on handler nodes and never on a `throw`, which it classifies as
+/// a jump, so a check written against the throw would never run.
 fn loses_context(node: Node, src: &[u8]) -> bool {
     if node.kind() != "catch_clause" {
         return false;
     }
-    // `catch (IOException e)` — the binding is the last word.
+    // `catch (IOException e)`: the binding is the last word.
     let Some(bound) = caught(node)
         .and_then(|p| p.utf8_text(src).ok())
         .and_then(|t| t.split_whitespace().last())
@@ -406,9 +406,9 @@ fn declares_test(node: Node, src: &[u8]) -> bool {
 /// `@Disabled` and `@Ignore` switch a test off; `@DisabledOnOs`,
 /// `@DisabledOnJre`, `@DisabledIfEnvironmentVariable` and the rest of
 /// the conditional family state a JUDGMENT about where the test applies,
-/// which is the same exemption a guarded `t.Skip()` already gets. A
-/// substring test cannot tell them apart — every conditional name BEGINS
-/// with `@Disabled` — so the annotation's own name is compared whole.
+/// which is the same exemption a guarded `t.Skip()` already gets. Every
+/// conditional name BEGINS with `@Disabled`, so a substring test cannot
+/// tell them apart and the annotation's own name is compared whole.
 fn skips_test(node: Node, src: &[u8]) -> bool {
     let Some(mods) = node
         .named_children(&mut node.walk())
@@ -440,7 +440,7 @@ fn asserty(call: Node, src: &[u8]) -> bool {
     callee_text(call, src).is_some_and(|t| super::assertish(t) || t.starts_with("verify"))
 }
 
-/// An interface's width is its declared method count — the contract
+/// An interface's width is its declared method count: the contract
 /// written down apart from any implementation.
 fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
     if node.kind() != "interface_declaration" {
@@ -504,8 +504,8 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     }
 }
 
-/// `@Override` on a method whose enclosing type is an ordinary class —
-/// the generic check only reaches members of an interface body.
+/// `@Override` in a declaration's modifiers. The generic check reaches
+/// members of an interface body only, so a class method needs this.
 fn is_override(node: Node, src: &[u8]) -> bool {
     modifiers_text(node, src).is_some_and(|m| m.contains("@Override"))
 }
@@ -518,12 +518,12 @@ mod tests {
         // `platform-tooling-support-tests/projects/` to check its own
         // tooling can build them; one is named
         // `OtherwiseNotReferencedClass.java`. They carry no source-set
-        // layout, so the name check saw `projects` and said production.
+        // layout, so the name check reads `projects` as production.
         let p = "junit5/platform-tooling-support-tests/projects/jar-describe-module/src/Foo.java";
         assert!(super::test_path(p));
         // Both halves are load-bearing: a `-tests` module alone covers
-        // 605 gold files against 9 orphans, so the `projects` directory
-        // is what keeps 596 production modules in.
+        // 605 gold files against 9 orphans, so the `projects` component
+        // keeps 596 production modules in.
         assert!(!super::test_path(
             "junit5/platform-tooling-support-tests/src/main/java/A.java"
         ));

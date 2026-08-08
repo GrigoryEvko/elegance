@@ -1,6 +1,6 @@
-//! Zig: the TigerStyle language. No exceptions, no hidden control flow —
-//! errors are values, `catch` is an expression, and assertion culture is
-//! the point (std.debug.assert feeds the asserts metric).
+//! Zig: the TigerStyle language. No exceptions and no hidden control
+//! flow: errors are values, `catch` is an expression, and assertion
+//! culture is the point (std.debug.assert feeds the asserts metric).
 
 use tree_sitter::Node;
 
@@ -55,7 +55,7 @@ const DEF_SITES: &[(&str, &str)] = &[("variable_declaration", ""), ("payload", "
 // The SAME kind, because this grammar spells a fresh binding and a
 // reassignment identically: `x = 3` also parses as a
 // variable_declaration. Nothing in the node distinguishes them, and
-// nothing has to — the repurposing check requires a STRICTLY EARLIER
+// nothing has to: the repurposing check requires a STRICTLY EARLIER
 // definition of the name, which a fresh binding never has.
 const REASSIGNS: &[(&str, &str)] = &[("variable_declaration", "")];
 const ATTR: (&str, &str) = ("field_expression", "object");
@@ -108,10 +108,10 @@ pub fn pack() -> Pack {
         // No exceptions, so no chain to break.
         loses_context: |_, _| false,
         panicky,
-        // No async in this language; goroutines and threads are not it.
         // Same as Go: the guard is a `defer` elsewhere in the block.
         // Anonymous struct literals are inferred against a declared type.
         record_keys: |_, _| None,
+        // No async in this language; threads are not it.
         is_async: |_, _| false,
         declares_test: |node, _| node.kind() == "test_declaration",
         names_test: |_, _| false,
@@ -129,7 +129,7 @@ pub fn pack() -> Pack {
         },
         // Hooks are a JS/TS framework idea; no analogue here.
         is_hook: |_, _| false,
-        // Multiple values come back as a named struct — the remedy the
+        // Multiple values come back as a named struct: the remedy the
         // metric would recommend, already applied by the language.
         return_arity: |_, _| 0,
         // An interface is a comptime convention (a struct of function
@@ -144,7 +144,7 @@ pub fn pack() -> Pack {
             "index_expression",
             "array_type",
         ],
-        // `const password = "..."` — the secrets anchor. The grammar
+        // `const password = "..."`: the secrets anchor. The grammar
         // fields nothing here; bound_name and assigns_to fall back to
         // the identifier child and the last named child.
         assign_kinds: &["variable_declaration"],
@@ -156,9 +156,9 @@ pub fn pack() -> Pack {
 /// module states its root. Nothing else reaches those files, so
 /// reading only `@import` left ghostty's five `main_*.zig`,
 /// tigerbeetle's seven client-binding generators and river's two
-/// `common/` modules with no dependent at all.
+/// `common/` modules with no dependent.
 ///
-/// A `.zig` argument is a module reference and a C HEADER is one too —
+/// A `.zig` argument is a module reference and a C HEADER is one too:
 /// `Index::zig` hands the second to C's own resolver, keyed on the
 /// target's extension so that this and `@cInclude` share one path. Not a
 /// `.c`: a translation unit is linked rather than included. Not an asset
@@ -191,16 +191,14 @@ fn build_path<'a>(node: Node, src: &'a [u8]) -> Option<&'a str> {
     // and ghostty installs `pnglibconf.h`, `libintl.h`,
     // `freetype-zig.h` and `include/ghostty.h` the same way.
     //
-    // `Index::zig` already hands a C-header target to C's own resolver —
-    // the routing keys on the extension rather than on the node, exactly
-    // so that this and `@cInclude` share one path. Filtering to `.zig`
-    // here is what stopped it: no `.h` was ever emitted, so that arm was
-    // reachable only from `@cInclude` and `c_header`'s own doc-comment
-    // described behaviour that did not happen.
+    // `Index::zig` already hands a C-header target to C's own resolver:
+    // the routing keys on the extension rather than on the node, so that
+    // this and `@cInclude` share one path. Without a `.h` emitted here
+    // that arm would be reachable from `@cInclude` alone.
     (target.ends_with(".zig") || crate::lang::c_header(target)).then_some(target)
 }
 
-/// `const std = @import("std");` — refine reclassifies the call; the
+/// `const std = @import("std");`: refine reclassifies the call, and the
 /// binding is the declaration's leading identifier.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     if let Some(target) = build_path(node, src) {
@@ -286,8 +284,8 @@ fn builtin_name<'a>(node: Node, src: &'a [u8]) -> Option<&'a str> {
         .ok()
 }
 
-/// `@intCast`, `@ptrCast`, `@bitCast`, `@enumFromInt`, ... — Zig spells
-/// each conversion out, which is exactly why they are countable.
+/// `@intCast`, `@ptrCast`, `@bitCast`, `@enumFromInt`, and the rest.
+/// Zig spells each conversion out, which is why they are countable.
 fn is_cast_builtin(name: &str) -> bool {
     name.ends_with("Cast") || name.contains("FromInt") || name.contains("FromPtr")
 }
@@ -328,7 +326,7 @@ fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {
         == Some(unit_name)
 }
 
-/// Zig: `pub fn` — a leading `pub` keyword on the declaration.
+/// Zig: `pub fn`, a leading `pub` keyword on the declaration.
 fn is_public(node: Node, src: &[u8]) -> bool {
     node.utf8_text(src)
         .is_ok_and(|t| t.starts_with("pub ") || t.starts_with("pub\n"))
@@ -346,20 +344,12 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     bang.then(|| node.child_by_field_name("argument"))?
 }
 
-/// Inline assembly, and nothing else. It is the one place a Zig file
-/// stops being Zig: the operands are a string the compiler hands
-/// through, so no reader and no tool can follow what runs.
-///
-/// Everything else the language calls unsafe is already judged
-/// elsewhere or is a convention rather than a gap. `@ptrCast` and the
-/// `FromInt`/`FromPtr` family are casts, and `refine` says so.
-/// `@field(x, name)` looks like the computed attribute access this
-/// metric was written for, but it is how Zig iterates a struct at
-/// Both spellings of the plural. zls files its whole suite under
-/// `tests/` — 58 .zig files, rooted at `tests/tests.zig`, which
-/// build.zig:235 hands to `b.addTest` — and tigerbeetle names its four
-/// test roots `unit_tests.zig`, `integration_tests.zig`,
-/// `fuzz_tests.zig`, `state_machine_tests.zig`.
+/// The suffix and the directory, in both spellings of the plural. zls
+/// files its whole suite under `tests/` — 58 .zig files, rooted at
+/// `tests/tests.zig`, which build.zig:235 hands to `b.addTest` — and
+/// tigerbeetle names its four test roots `unit_tests.zig`,
+/// `integration_tests.zig`, `fuzz_tests.zig`,
+/// `state_machine_tests.zig`.
 ///
 /// Both rules capture only test code: of the 63 files they add, the
 /// ones a non-captured non-test file imports are zls/build.zig reaching
@@ -375,6 +365,15 @@ fn test_path(p: &str) -> bool {
         || p.contains("/tests/")
 }
 
+/// Inline assembly, and nothing else. It is the one place a Zig file
+/// stops being Zig: the operands are a string the compiler hands
+/// through, so no reader and no tool can follow what runs.
+///
+/// Everything else the language calls unsafe is already judged
+/// elsewhere or is a convention rather than a gap. `@ptrCast` and the
+/// `FromInt`/`FromPtr` family are casts, and `refine` says so.
+/// `@field(x, name)` looks like the computed attribute access this
+/// metric was written for, but it is how Zig iterates a struct at
 /// comptime: 444 of the 454 uses in the gold corpus take a computed
 /// name, across 123 of 1,138 files. Counting those would measure the
 /// idiom, not a defect.
@@ -447,9 +446,9 @@ mod tests {
             stack.extend(node.named_children(&mut cursor));
         }
         // A `.zig` module and a C header, which `Index::zig` hands to
-        // C's own resolver. Not a `.c` — a translation unit is linked,
-        // not included — and not a document. The walk is a stack, so
-        // the later statements come out first.
+        // C's own resolver. Not a `.c` (a translation unit is linked
+        // rather than included) and not a document. The walk is a
+        // stack, so the later statements come out first.
         assert_eq!(
             found,
             ["include/ghostty.h", "river/c.h", "src/main_bench.zig"]

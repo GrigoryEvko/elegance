@@ -5,17 +5,15 @@
 //! touches a handful. Re-parsing the whole tree on every commit is the
 //! cost of that; this pays it once.
 //!
-//! Scope is deliberately narrow: only per-file METRIC VALUES are cached,
-//! and only the distribution scan reads them. Clone hashes, the module
-//! graph and the recurrence detectors are cross-file facts that a
-//! per-file cache cannot reconstruct, so the full report never uses this
-//! — a cache that silently degrades a report would cost more than the
-//! parsing it saves.
+//! Only per-file METRIC VALUES are cached, and only the distribution
+//! scan reads them. Clone hashes, the module graph and the recurrence
+//! detectors are cross-file facts that a per-file cache cannot
+//! reconstruct, so the full report never uses this. A cache that
+//! silently degrades a report would cost more than the parsing it saves.
 //!
-//! Staleness is structural, not hoped for: entries are keyed by content
-//! hash, and the whole file is discarded when the tool's behavioural
-//! fingerprint (metric registry + grammar versions + version string)
-//! changes.
+//! Staleness is structural: entries are keyed by content hash, and the
+//! whole file is discarded when the tool's behavioural fingerprint
+//! (metric registry + grammar versions + version string) changes.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -41,7 +39,7 @@ pub struct Cache {
 #[derive(Serialize, Deserialize, Clone)]
 struct Entry {
     content: u64,
-    /// (metric index, value) — everything a distribution needs.
+    /// (metric index, value): everything a distribution needs.
     values: Vec<(u8, f32)>,
 }
 
@@ -94,9 +92,9 @@ impl Cache {
     }
 }
 
-/// FNV-1a over the file's bytes: a content address, not a security
-/// hash — a collision costs one stale measurement, not a wrong verdict
-/// elsewhere.
+/// FNV-1a over the file's bytes: a content address rather than a
+/// security hash. A collision costs one stale measurement, and no
+/// verdict elsewhere.
 pub fn content_hash(source: &str) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;

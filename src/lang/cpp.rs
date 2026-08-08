@@ -1,32 +1,29 @@
 //! C++: the language the other packs were rehearsing for.
 //!
-//! Everything C's pack says still holds — macros stay unexpanded,
-//! `#if` is a real branch, `goto` is the flat +1 — and C++ adds three
-//! things worth stating rather than discovering.
+//! Everything C's pack says still holds: macros stay unexpanded, `#if`
+//! is a real branch, `goto` is the flat +1.
 //!
 //! - Templates are measured AS WRITTEN. One template is one unit
 //!   however many instantiations the linker emits, which is the same
 //!   call the C pack makes about macros: measure what you can read.
-//! - A class is not an interface, but a class whose methods are ALL
-//!   pure virtual is exactly one, and that is what `interface width`
-//!   counts here.
+//! - A class whose methods are ALL pure virtual is an interface, and
+//!   that is what `interface width` counts here. A class with a
+//!   concrete method is not one.
 //!
 //! Names come from the declarator chain as in C, with one addition:
 //! `int Store::get(...)` carries its scope in a `qualified_identifier`,
-//! so a method defined out of line still reports as `Store::get`
-//! rather than as a free function called `get`.
+//! and the drill takes that node's `name` child, so an out-of-line
+//! definition is named `get` and the class stays in the declarator.
 //!
 //! Tests arrive as macros. `TEST(Pool, TakesASlot) { ... }` is the only
-//! declaration form the grammar can read — Catch2's
-//! `TEST_CASE("a pool takes a slot")` puts a STRING where a parameter
-//! belongs and parses as an error, so Catch2 files declare no tests
-//! here at all. That is a stated limit, not a silent one.
+//! declaration form the grammar can read. Catch2's `TEST_CASE("a pool
+//! takes a slot")` puts a STRING where a parameter belongs and parses
+//! as an error, so Catch2 files declare no tests here.
 //!
 //! CUDA rides this pack the way TSX rides TypeScript: a second grammar,
-//! the same tables, one extra entry. That is not a shortcut, it is the
-//! measurement — `__global__` and `__device__` are unnamed tokens the
-//! tree never shows, `__shared__` arrives as an ordinary
-//! `type_qualifier`, and `add<<<grid, block>>>(x)` is already a
+//! the same tables, one extra entry. `__global__` and `__device__` are
+//! unnamed tokens the tree never shows, `__shared__` arrives as an
+//! ordinary `type_qualifier`, and `add<<<grid, block>>>(x)` is already a
 //! `call_expression` with one extra child. CUDA adds exactly two named
 //! kinds to C++ and a kernel is an ordinary unit.
 
@@ -51,7 +48,7 @@ const KINDS: &[(&str, Sem)] = &[
     ("else_clause", Sem::Else),
     ("conditional_expression", Sem::Ternary),
     ("for_statement", Sem::Loop),
-    // `for (auto& x : xs)` — the range form is its own kind.
+    // `for (auto& x : xs)`: the range form is its own kind.
     ("for_range_loop", Sem::Loop),
     ("while_statement", Sem::Loop),
     ("do_statement", Sem::Loop),
@@ -69,9 +66,9 @@ const KINDS: &[(&str, Sem)] = &[
     ("goto_statement", Sem::Goto),
     ("call_expression", Sem::Call),
     ("new_expression", Sem::Call),
-    // The C-style `(T)x`. The named casts have no node of their own —
-    // `static_cast<T>(x)` parses as a call to a template function —
-    // so `refine` reclassifies those.
+    // The C-style `(T)x`. The named casts have no node of their own:
+    // `static_cast<T>(x)` parses as a call to a template function, so
+    // `refine` reclassifies those.
     ("cast_expression", Sem::Cast),
     ("comment", Sem::Comment),
     ("preproc_include", Sem::Import),
@@ -104,8 +101,8 @@ const DEF_SITES: &[(&str, &str)] = &[
 const REASSIGNS: &[(&str, &str)] = &[("assignment_expression", "left")];
 const ATTR: (&str, &str) = ("field_expression", "argument");
 
-/// `void *` remains the hatch; `auto` is inference, not evasion, and
-/// the compiler knows the type exactly.
+/// `void *` remains the hatch. `auto` is inference rather than evasion:
+/// the compiler knows the type.
 const LOOSE: &[&str] = &["void"];
 
 /// `add<<<grid, block>>>(x)` parses as a `call_expression` carrying an
@@ -115,8 +112,8 @@ const LOOSE: &[&str] = &["void"];
 /// rather than left out so that a grammar bump which renames or drops
 /// it fails the resolution test instead of silently changing nothing.
 ///
-/// `launch_bounds` is `__launch_bounds__(256, 4)` — a compiler hint on
-/// a declaration, which is configuration and not control flow.
+/// `launch_bounds` is `__launch_bounds__(256, 4)`: a compiler hint on a
+/// declaration, which is configuration rather than control flow.
 const CUDA_ONLY: &[(&str, Sem)] = &[
     ("kernel_call_syntax", Sem::None),
     ("launch_bounds", Sem::None),
@@ -216,7 +213,7 @@ pub fn pack(dialect: Dialect) -> Pack {
 }
 
 /// A class whose methods are ALL pure virtual is an interface in
-/// everything but keyword — the C++ spelling of the contract Go and
+/// everything but keyword: the C++ spelling of the contract Go and
 /// Rust declare outright. A class with one concrete method is a base
 /// class, which is a different thing, so it declares nothing here.
 fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
@@ -263,7 +260,7 @@ fn declares_a_method(field: Node) -> bool {
     false
 }
 
-/// `virtual int a() = 0;` — the grammar records the `= 0` as a default
+/// `virtual int a() = 0;`: the grammar records the `= 0` as a default
 /// value on the field.
 fn is_pure_virtual(field: Node) -> bool {
     field.child_by_field_name("default_value").is_some()
@@ -312,10 +309,11 @@ fn is_a_named_cast(call: Node, src: &[u8]) -> bool {
     )
 }
 
-/// The declarator chain, as in C, ending at an identifier — or at a
+/// The declarator chain, as in C, ending at an identifier or at a
 /// `qualified_identifier`, which is how an out-of-line definition
-/// carries its class: `int Store::get(...)` must report as a method of
-/// Store rather than as a free function named get.
+/// carries its class. `int Store::get(...)` is named through that
+/// node's `name` child, so the unit is `get` and the class stays in
+/// the declarator.
 fn name_node(node: Node) -> Option<Node> {
     if node.kind() != "function_definition" {
         return None;
@@ -340,12 +338,12 @@ fn name_node(node: Node) -> Option<Node> {
 
 /// A macro invocation followed by a block — `TEST(Pool, TakesASlot)
 /// { ... }` — which the grammar can only read as a function called
-/// TEST. The shape is unmistakable: a definition with NO return type
-/// whose "parameters" are bare type names carrying no declarator,
-/// because they are not parameters at all. Returns (macro, last
-/// argument), which is the name a human reads. Without this every
-/// gtest unit reports under the macro's own four letters, and every
-/// test-quality metric judges `TEST` instead of the case.
+/// TEST. A definition with NO return type whose "parameters" are bare
+/// type names carrying no declarator: they are not parameters at all.
+/// Returns (macro, last argument), which is the name a human reads.
+/// Without this every gtest unit reports under the macro's own four
+/// letters, and every test-quality metric judges `TEST` instead of the
+/// case.
 ///
 /// A constructor also has no return type, but its parameters are
 /// named; the only collision is a constructor whose every parameter is
@@ -381,12 +379,12 @@ fn macro_case_name(node: Node) -> Option<Node> {
 /// `TEST(args_test, basic)` names one test in two parts, and gtest
 /// itself prints them joined: `args_test.basic`. Judging `basic` alone
 /// judged half a name, and the C++ gold corpus read 61% lazily named
-/// against 16% for a corpus of notorious code — the metric was
-/// measuring the pack, not the tests. Joined, fmt's names say what they
+/// against 16% for a corpus of notorious code. The metric was measuring
+/// the pack rather than the tests. Joined, fmt's names say what they
 /// test and a genuinely lazy `TEST(foo, bar)` still reads as two words.
 fn composed_name(node: Node, src: &[u8]) -> Option<String> {
     // The gtest family only. Some other two-identifier macro still gets
-    // its last argument as a name — that is `name_node`'s answer — but
+    // its last argument as a name (that is `name_node`'s answer), but
     // nothing here claims to know that its first argument qualifies it.
     if !declares_test(node, src) {
         return None;
@@ -440,8 +438,8 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     }
     // Drill to the bound name. `&` and `&&` nest their identifier
     // WITHOUT a declarator field, unlike `*`, so the fall-back to the
-    // first named child is what makes `const std::string& k` a
-    // parameter named k rather than a parameter named nothing.
+    // first named child names `const std::string& k` as k rather than
+    // as nothing.
     let mut d = node.child_by_field_name("declarator");
     let mut pointered = d.is_some_and(|n| n.kind().contains("pointer"));
     while let Some(node) = d.filter(|n| !is_a_name(*n)) {
@@ -465,7 +463,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         typed: true,
         type_name: declared.into(),
         // A default argument makes the parameter optional at every
-        // call site, which is what the grammar's own kind says.
+        // call site, and the grammar's own kind says so.
         optional: node.kind() == "optional_parameter_declaration",
         loose: super::is_loose(declared, LOOSE) && pointered,
         ..Default::default()
@@ -522,7 +520,7 @@ fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
     super::doc_run(node, &["comment"], &[], src)
 }
 
-/// `catch (...)` catches everything and binds nothing — C++'s spelling
+/// `catch (...)` catches everything and binds nothing: C++'s spelling
 /// of the bare except. An EMPTY handler swallows.
 fn catch_sin(node: Node, src: &[u8]) -> Option<CatchSin> {
     let empty = node
@@ -539,10 +537,10 @@ fn catch_sin(node: Node, src: &[u8]) -> Option<CatchSin> {
     broad.then_some(CatchSin::Broad)
 }
 
-/// C++ spells one claim four ways. `ASSERT_*` is `assertish` already;
-/// `EXPECT_*` is gtest's non-fatal twin and asserts exactly as much;
-/// Catch2's `REQUIRE`/`CHECK` and glog's `CHECK` are the same sentence
-/// again. Requiring the underscore keeps ordinary names — `checked()`,
+/// C++ spells one claim four ways. `ASSERT_*` is `assertish` already.
+/// `EXPECT_*` is gtest's non-fatal twin and asserts as much. Catch2's
+/// `REQUIRE`/`CHECK` and glog's `CHECK` are the same sentence again.
+/// Requiring the underscore keeps ordinary names — `checked()`,
 /// `expected_value()` — out of it.
 fn is_an_assertion(name: &str) -> bool {
     super::assertish(name)
@@ -558,11 +556,11 @@ fn panicky(call: Node, src: &[u8]) -> bool {
     matches!(callee_name(call, src), Some("abort" | "terminate"))
 }
 
-/// The gtest family, which is the family that parses: every one of
-/// these takes two identifiers and a block. Catch2's string-argument
-/// macros are absent because the grammar rejects them, and
-/// google/benchmark's `BENCHMARK(BM_Foo);` is a statement naming a
-/// function defined elsewhere, not a declaration of anything.
+/// The gtest family, the one that parses: every one of these takes two
+/// identifiers and a block. Catch2's string-argument macros are absent
+/// because the grammar rejects them, and google/benchmark's
+/// `BENCHMARK(BM_Foo);` is a statement naming a function defined
+/// elsewhere, not a declaration of anything.
 fn declares_test(node: Node, src: &[u8]) -> bool {
     let Some(name) = test_macro(node).and_then(|(m, _)| m.utf8_text(src).ok()) else {
         return false;
@@ -575,8 +573,8 @@ fn declares_test(node: Node, src: &[u8]) -> bool {
 
 /// The `this` of dynamic dispatch is `dynamic_cast`, and the escape
 /// hatches are the same as C's plus `reinterpret_cast`, which the
-/// kinds table already prices as a Cast. What remains genuinely
-/// unpredictable is longjmp, as in C.
+/// kinds table already prices as a Cast. longjmp is the one
+/// unpredictable construct left, as in C.
 fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
     sem == Sem::Call
         && callee_name(node, src).is_some_and(|t| matches!(t, "longjmp" | "setjmp" | "siglongjmp"))
@@ -624,7 +622,7 @@ mod tests {
             "a kernel's guard is an ordinary branch"
         );
         // And the same source is unreadable to the plain C++ grammar,
-        // which is the whole reason the dialect exists.
+        // which is why the dialect exists.
         assert!(
             facts("void host(float* a, int n) {\n  add<<<grid, block>>>(a, n);\n}\n")
                 .low_confidence(),
@@ -634,8 +632,8 @@ mod tests {
 
     #[test]
     fn an_out_of_line_method_keeps_its_class() {
-        // `int Store::get(...)` is a method of Store, not a free
-        // function called get — the qualified declarator says so.
+        // `int Store::get(...)` carries its class in a qualified
+        // declarator, and the unit takes that node's `name` child.
         let f =
             facts("int Store::get(const std::string& k) const {\n    return items_.at(0);\n}\n");
         let unit = &f.units[1];
@@ -693,8 +691,8 @@ mod tests {
             [("PoolTest.TakesAKnownSlot", true, 1), ("take", false, 0)],
             "gtest prints suite.case, and EXPECT_ asserts as much as ASSERT_"
         );
-        // A constructor has no return type either; its parameters are
-        // what tell the two apart.
+        // A constructor has no return type either; its parameters tell
+        // the two apart.
         let ctor = facts("struct S {\n  S(int a, int b) { x = a + b; }\n};\n");
         assert_eq!(&*ctor.units[1].name, "S");
         assert!(!ctor.units[1].named_test);
@@ -713,7 +711,7 @@ mod tests {
         let targets: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
         assert_eq!(targets, ["<vector>", "local.hpp"]);
         // Inside a class body `#include` is not a declaration position,
-        // so the grammar yields `preproc_call` — the kind it also gives
+        // so the grammar yields `preproc_call`, the kind it also gives
         // `#pragma`. ctre's pcre_actions.hpp keeps 17 of its 22 includes
         // there and every one of those headers read as an orphan.
         let g = facts(

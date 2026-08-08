@@ -4,8 +4,8 @@
 //! The import graph shows dependencies someone declared. History shows
 //! the ones nobody did. Two files with no edge between them that change
 //! together in four commits out of five share a decision the code does
-//! not express — the coupling is real, it is just undeclared, and it is
-//! what makes a "small" change touch six packages.
+//! not express. That coupling is real and undeclared, and it turns a
+//! "small" change into one that touches six packages.
 //!
 //! Cross-directory pairs only. Files in one directory changing together
 //! is what a directory IS; the finding is coupling that crosses a
@@ -22,8 +22,8 @@ use crate::git;
 const SHOW: usize = 10;
 
 /// A commit touching more than this is a rename sweep, a reformat or a
-/// dependency bump — mechanical breadth, not a shared decision. It also
-/// bounds the pair count, which is quadratic in files per commit.
+/// dependency bump: mechanical breadth rather than a shared decision. It
+/// also bounds the pair count, which is quadratic in files per commit.
 const MAX_COMMIT_BREADTH: usize = 30;
 
 /// Below this many shared commits a pair is coincidence.
@@ -124,7 +124,7 @@ fn render_debt(root: &Path, now: u64, show: usize) -> String {
 
 /// Shared commits per unordered cross-directory pair.
 type Pairs<'a> = HashMap<(&'a str, &'a str), u32>;
-/// Each file's own commit count — the denominator for strength.
+/// Each file's own commit count, the denominator for strength.
 type Totals<'a> = HashMap<&'a str, u32>;
 
 /// Both, from one pass over the log.
@@ -200,9 +200,10 @@ fn render_pairs(commits: &[git::Commit], show: usize) -> String {
     out
 }
 
-/// Files one person has effectively written alone. Not a fault — someone
-/// has to write it first — but a fact worth knowing before they leave,
-/// and the reason to route the next change there through review.
+/// Files one person has effectively written alone. Someone has to write
+/// a file first, so this is a fact rather than a fault: worth knowing
+/// before they leave, and a reason to route the next change there
+/// through review.
 fn render_owners(commits: &[git::Commit], show: usize) -> String {
     let mut by_file: HashMap<&str, HashMap<&str, u32>> = HashMap::new();
     for c in commits {
@@ -291,7 +292,7 @@ mod tests {
     #[test]
     fn a_sweep_is_not_a_shared_decision() {
         // A reformat touching everything must not couple everything to
-        // everything — that is 435 pairs from one commit.
+        // everything: that is 435 pairs from one commit.
         let mut wide: Vec<Box<str>> = Vec::new();
         for i in 0..31 {
             let path = format!("p{i}/f.rs");

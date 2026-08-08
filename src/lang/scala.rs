@@ -56,8 +56,8 @@ const KINDS: &[(&str, Sem)] = &[
 
 const DEF_SITES: &[(&str, &str)] = &[
     // `val`/`var` is where a local is born. Without it the live map
-    // held no definition row for any local, so the repurposing check
-    // had nothing to compare a rewrite against.
+    // holds no definition row for any local, so the repurposing check
+    // has nothing to compare a rewrite against.
     ("val_definition", "pattern"),
     ("var_definition", "pattern"),
     ("function_definition", "name"),
@@ -99,8 +99,8 @@ pub fn pack() -> Pack {
         types_declared: true,
         // A case class declares the shape, and that is the idiom.
         record_keys: |_, _| None,
-        // Concurrency is Future, ZIO and cats-effect — library, and the
-        // library is the whole point.
+        // Concurrency comes from libraries (Future, ZIO, cats-effect),
+        // so there is no async keyword for the grammar to read.
         is_async: |_, _| false,
         refine,
         name_node,
@@ -143,12 +143,12 @@ fn name_node(node: Node) -> Option<Node> {
 /// An import states a PATH and then what it takes from it, and each name
 /// it takes is a separate dependency: `import cats.data.{NonEmptyList,
 /// Chain}` names two files, not the package they share. Reading only the
-/// text before the brace left 1380 selector lists in the gold corpus
+/// text before the brace leaves 1380 selector lists in the gold corpus
 /// pointing at a package that no module component vector can match.
 ///
 /// A wildcard — `._`, Scala 3's `.*`, `.given` — names the path itself.
-/// Only `._` was trimmed, so 949 Scala 3 wildcards carried a literal
-/// `.*` into the resolver.
+/// Trimming `._` alone carries a literal `.*` into the resolver for 949
+/// Scala 3 wildcards.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     if node.kind() == "compilation_unit" {
         return qualified_uses(node, src);
@@ -167,7 +167,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let mut walk = node.walk();
     for child in node.named_children(&mut walk) {
         match child.kind() {
-            // `import a.b._` / `.*` / `.given` — the path is the target.
+            // `import a.b._` / `.*` / `.given`: the path is the target.
             "namespace_wildcard" => targets.push(prefix.clone()),
             "as_renamed_identifier" => selector(&prefix, child, src, &mut targets),
             "namespace_selectors" => {
@@ -179,7 +179,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
             _ => {}
         }
     }
-    // `import a.b.C` — no selector list, so the path already names it.
+    // `import a.b.C`: no selector list, so the path already names it.
     if targets.is_empty() {
         targets.push(prefix);
     }
@@ -203,10 +203,9 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 /// import line to read. All nine files under `cats/compat` read as
 /// depended on by nothing.
 ///
-/// A `Mention`, never an import: the file states no dependency — it
-/// spells a name the compiler resolves against the whole classpath — so
-/// it supplies an edge and no tally entry, exactly as a C# type
-/// reference does.
+/// A `Mention`, never an import: the file states no dependency, only a
+/// name the compiler resolves against the whole classpath, so it
+/// supplies an edge and no tally entry, as a C# type reference does.
 ///
 /// The shape is a dotted chain that OPENS lower case and reaches a
 /// capitalized segment: a package path ending at a type. `foo.bar` is a
@@ -290,9 +289,9 @@ fn selector(prefix: &str, sel: Node, src: &[u8], out: &mut Vec<String>) {
 /// `zio/test/shared/src/main/scala` is ZIO's published test FRAMEWORK
 /// while `zio/core-tests/shared/src/test/scala` is a test.
 ///
-/// Reading the path for `/test/` instead dropped 188 production files —
-/// 175 of them because a `zio.test` source path carries the segment —
-/// and every edge into them with it.
+/// Reading the path for `/test/` instead drops 188 production files
+/// (175 of them because a `zio.test` source path carries the segment)
+/// and every edge into them with them.
 fn test_path(p: &str) -> bool {
     if scalafix_fixture(p) {
         return true;
@@ -337,8 +336,8 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         loose: LOOSE.contains(&type_text),
         boolish: type_text == "Boolean",
         optional: node.child_by_field_name("default_value").is_some(),
-        // `xs: Int*` — a repeated parameter takes as many arguments as
-        // the caller writes, and names none of them.
+        // `xs: Int*` is a repeated parameter: it takes as many arguments
+        // as the caller writes, and names none of them.
         splat: ty.is_some_and(|t| t.kind() == "repeated_parameter_type"),
         type_name: type_text.into(),
         ..Default::default()
@@ -367,15 +366,16 @@ fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
 
 /// `catch { case e: Exception => ... }`. The arms are where the width
 /// lives: a root type or a bare `_` reaches everything the runtime can
-/// raise. The root name is matched exactly, so `case e: ClassCastException`
-/// — which contains the substring the first version tested for — is narrow.
+/// raise. The root name is matched exactly, so `case e:
+/// ClassCastException` is narrow despite carrying a root name as a
+/// substring.
 ///
-/// EMPTINESS IS ASKED OF EVERY ARM, and the exact match is why. Silence
-/// is a sin the caught type does not excuse: `case _: SecurityException =>`
-/// with nothing after it loses the failure exactly as a wildcard would,
-/// and every other pack in the tree judges an empty handler without
-/// asking what it caught. This pack asked breadth first, so narrowing
-/// breadth would otherwise have taken two real gold findings with it.
+/// EMPTINESS IS ASKED OF EVERY ARM, whatever type that arm caught.
+/// Silence is a sin the caught type does not excuse: `case _:
+/// SecurityException =>` with nothing after it loses the failure as a
+/// wildcard would, and every other pack in the tree judges an empty
+/// handler without asking what it caught. Narrowing breadth alone would
+/// drop two real gold findings; the emptiness question keeps them.
 fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "catch_clause" {
         return None;
@@ -462,8 +462,8 @@ fn declares_test(node: Node, src: &[u8]) -> bool {
     ) && test_label(node).is_some()
 }
 
-/// A declared test's name is the string its first call carries — prose
-/// rather than an identifier, exactly as a Zig test label is.
+/// A declared test's name is the string its first call carries: prose
+/// rather than an identifier, as a Zig test label is.
 fn test_label(node: Node) -> Option<Node> {
     let args = node
         .child_by_field_name("function")?
@@ -528,7 +528,7 @@ fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
 /// sequence a condition are boolean.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
-        // `test("name") { ... }` — the block is the test body, and the
+        // In `test("name") { ... }` the block is the test body, and the
         // grammar gives it no node of its own, so the CALL becomes the
         // unit the test metrics judge.
         Sem::Call if declares_test(node, src) => Sem::FnDef,

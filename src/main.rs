@@ -99,7 +99,7 @@ struct Args {
     full: bool,
     /// Undeclared coupling and sole authorship, read from history.
     coupling: bool,
-    /// Look inside the dependencies — the code you did not write.
+    /// Look inside the dependencies: the code you did not write.
     deps: bool,
     /// Configuration: values-overlay drift and credentials in YAML.
     helm: bool,
@@ -128,8 +128,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Every mode that COUNTS across violations needs them all: 64 per
     // metric undercounts any aggregate read from them, by 789 files to
     // 55 on `flag params` and 1107 tensions to 249. Only the mode that
-    // actually renders decides — `--brief` beside `--json` no longer
-    // caps a report `--brief` is not going to print.
+    // actually renders decides, so `--brief` beside `--json` caps no
+    // report `--brief` is not going to print.
     let shape = shape(&args);
     let complete = shape != Shape::Brief;
     let layers = config::layers(&args.roots[0])?;
@@ -149,7 +149,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         eprint!("{}", lang::hooks::table());
     }
     // A contract is a question about the whole graph, so it is asked
-    // once the scan is done rather than per file — and only where the
+    // once the scan is done rather than per file, and only where the
     // graph was built at all.
     if wants.graph {
         agg.graph.read_mut().sort_by(|a, b| a.path.cmp(&b.path));
@@ -253,27 +253,20 @@ fn single_file_mode(args: &Args) -> Result<bool, Box<dyn Error>> {
 /// and this crate's mutually recursive `walk`/`scan`. A worker that
 /// steals while already deep in a split nests one split recursion inside
 /// another, so by the time extraction starts the budget left is not
-/// knowable from here — vscode crashed with the extractor only eighteen
-/// levels down. Buying room is the cheap half of the fix; the depth
-/// guard in `facts::extract` is the half that bounds the recursion.
+/// knowable from here. vscode crashed with the extractor only eighteen
+/// levels down. Buying room is the cheap half; the depth guard in
+/// `facts::extract` is the half that bounds the recursion.
 const WORKER_STACK: usize = 32 * 1024 * 1024;
 
-/// Which corpus-sized accumulators this invocation will read.
-///
-/// Everything here grows with the tree, and every mode reads only some
-/// of them — so the set is decided before the scan and the rest are
-/// never built. A mode that reads one it did not ask for panics in a
-/// debug build; `every_mode_asks_for_what_it_reads` runs them all to
-/// prove the sets are complete.
-/// The report a set of flags selects — and the whole of the precedence
-/// rule between them, in one place, because three parallel `else if`
-/// chains that must agree is how `--json --full` came to print the human
-/// report while `wants_for` sized the scan for JSON.
+/// The report a set of flags selects. `shape` holds the precedence rule
+/// between them in one function. Spread across three parallel `else if`
+/// chains that must agree, that rule drifts: `--json --full` prints the
+/// human report while `wants_for` sizes the scan for JSON.
 ///
 /// The order is: a mode that answers a DIFFERENT question, then the
 /// FORMAT, then the VERBOSITY. A format outranking a verbosity costs
-/// nothing — `--json` is already full, capping no list and omitting no
-/// section — and two formats at once is refused in `parse_args`.
+/// nothing, since `--json` is already full, capping no list and omitting
+/// no section; two formats at once is refused in `parse_args`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Shape {
     /// `--baseline`, `--history`, `--hotspots`: each decides its own
@@ -305,6 +298,13 @@ fn shape(args: &Args) -> Shape {
     }
 }
 
+/// Which corpus-sized accumulators this invocation will read.
+///
+/// Everything here grows with the tree, and every mode reads only some
+/// of them, so the set is decided before the scan and the rest are never
+/// built. A mode that reads one it did not ask for panics in a debug
+/// build; `every_mode_asks_for_what_it_reads` runs them all to prove the
+/// sets are complete.
 fn wants_for(shape: Shape) -> report::Wants {
     use report::Wants;
     match shape {
@@ -317,7 +317,7 @@ fn wants_for(shape: Shape) -> report::Wants {
             ..Wants::NONE
         },
         // SARIF carries violations plus the findings that are about a
-        // SET of sites — clone classes, near-clones, param clumps,
+        // SET of sites: clone classes, near-clones, param clumps,
         // repeated dispatch. It has no architecture section, no synonym
         // table and no untested-complexity join, so it asks for none of
         // their state. The graph it does need: the duplication split
@@ -349,7 +349,7 @@ fn wants_for(shape: Shape) -> report::Wants {
 /// Workers to scan with: PHYSICAL cores, not threads.
 ///
 /// Two hyperthreads share one core's execution units and its L1/L2, and
-/// this scan is memory-bandwidth bound long before it is ALU bound — so
+/// this scan is memory-bandwidth bound long before it is ALU bound, so
 /// the second thread on a core adds a full worker's memory for a
 /// fraction of a worker's throughput. Every worker holds its own
 /// tree-sitter parsers, and a parser keeps scratch sized to the largest
@@ -366,7 +366,7 @@ fn wants_for(shape: Shape) -> report::Wants {
 ///
 /// Taking every thread costs 285 MB over taking every core, and the last
 /// four threads buy nothing at all. The curve's shape is the machine's,
-/// not the corpus's — a builder with more cores pays the same 20 MB per
+/// not the corpus's: a builder with more cores pays the same 20 MB per
 /// worker for the same flattening return.
 ///
 /// RAYON_NUM_THREADS still wins: a caller who knows their machine
@@ -378,7 +378,7 @@ fn workers() -> usize {
     num_cpus::get_physical()
 }
 
-/// Parallel scan: parse, extract, measure, and merge — the whole pipeline.
+/// The scan pipeline end to end: parse, extract, measure, merge.
 fn scan(files: &[PathBuf], budgets: config::Layers, complete: bool, wants: report::Wants) -> Agg {
     in_pool(|| scan_in_pool(files, budgets, complete, wants))
 }
@@ -430,7 +430,7 @@ fn scan_in_pool(
 }
 
 /// The language a file should be measured as, and the source to
-/// measure — which is not always the file's own text. A `.vue`
+/// measure, which is not always the file's own text. A `.vue`
 /// container yields its `<script>` blocks with everything else blanked
 /// out, so the code is read as the TypeScript or JavaScript it is,
 /// at line numbers that are already true.
@@ -495,9 +495,9 @@ impl Parsers {
 ///
 /// `--version` exists because a released binary has to be able to say
 /// which one it is, and this one updates itself through the Claude Code
-/// plugin, so "which build is this" has a moving answer. Without it,
-/// `elegance --version` scanned the working directory and replied "no
-/// supported source files found" — a sentence, just not that one.
+/// plugin, so "which build is this" has a moving answer. Without an arm
+/// here a flag is not a flag: `parse_args` files anything it does not
+/// recognise as a path to scan.
 fn answers_and_exits(flag: &str) -> bool {
     match flag {
         "--help" | "-h" => println!("{USAGE}"),
@@ -507,7 +507,7 @@ fn answers_and_exits(flag: &str) -> bool {
     std::process::exit(0);
 }
 
-/// Every flag off and no roots — what `parse_args` starts from.
+/// Every flag off and no roots: what `parse_args` starts from.
 fn defaults() -> Args {
     Args {
         roots: Vec::new(),
@@ -566,7 +566,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
     }
     // Two formats is a request with no answer, and silently picking one
     // is how a pipeline ends up parsing the other. Verbosity flags beside
-    // a format are fine — the format simply wins.
+    // a format are fine; the format simply wins.
     if args.json && args.sarif {
         return Err("--json and --sarif are two formats; pass one".into());
     }
@@ -641,7 +641,7 @@ fn set_valued(args: &mut Args, flag: &str, value: &str) -> Result<(), Box<dyn Er
         "--errors" => args.errors = Some(PathBuf::from(value)),
         "--fail-on" => args.fail_on = value.parse()?,
         "--top" => args.top = value.parse()?,
-        // `file:line` where the suffix is digits, else a bare path — a
+        // `file:line` where the suffix is digits, else a bare path: a
         // Windows drive letter or a colon in a filename stays a path.
         "--explain" => {
             args.explain = Some(match value.rsplit_once(':') {
@@ -700,10 +700,11 @@ fn hook(root: &std::path::Path, install: bool, fail_on: u8) -> Result<(), Box<dy
 /// Print every parse ERROR/MISSING location with source context: the pack
 /// developer's view of what a grammar cannot digest.
 ///
-/// Reads the file the way the SCAN reads it — `measurable`, not the
-/// extension — or the tool debugs a parse the scan never ran: a C++
-/// header went through the C grammar here while the report counted its
-/// errors under C++, and a container was "unsupported" outright.
+/// Reads the file the way the SCAN reads it (`measurable`, not the
+/// extension), or the tool debugs a parse the scan never ran: read by
+/// extension, a C++ header goes through the C grammar here while the
+/// report counts its errors under C++, and a container is "unsupported"
+/// outright.
 fn debug_errors(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
     use std::io::Write;
     let raw = std::fs::read_to_string(path)?;
@@ -796,11 +797,10 @@ fn collect_files(roots: &[PathBuf], cfg: &config::Config) -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
-    /// A format flag must not lose to a verbosity flag. `--json --full`
-    /// returned the HUMAN report for as long as `present` tested
-    /// `--full` first, and a scan sized by `wants_for` for JSON went
-    /// with it — a wart no test could see while the rule lived in three
-    /// `else if` chains instead of one function.
+    /// A format flag must not lose to a verbosity flag. Were `--full`
+    /// tested first, `--json --full` would render the HUMAN report while
+    /// `wants_for` sized the scan for JSON. One function holds the rule,
+    /// so one test can see it.
     #[test]
     fn a_format_outranks_a_verbosity() {
         let with = |set: fn(&mut Args)| {
@@ -850,9 +850,9 @@ mod tests {
     }
 
     /// Only `--brief` may cap the offender lists, and only where it is
-    /// the mode that renders. `--json --brief` used to print the brief
-    /// human report; now it prints JSON, and that JSON must carry every
-    /// violation rather than the first 64 per metric.
+    /// the mode that renders. `--json --brief` prints JSON, and that
+    /// JSON must carry every violation rather than the first 64 per
+    /// metric.
     #[test]
     fn only_a_rendering_brief_caps_the_offenders() {
         let mut args = defaults();

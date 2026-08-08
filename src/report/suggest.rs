@@ -1,6 +1,6 @@
 //! From finding to edit. Every remedy here is a named refactoring from
-//! the literature, instantiated with facts we already hold — never
-//! invented advice. Metrics whose remedy depends on intent the tool
+//! the literature, instantiated with facts we already hold. Nothing here
+//! is invented advice. Metrics whose remedy depends on intent the tool
 //! cannot see (comment ratio, test assertions) get no suggestion at all:
 //! filler advice is worse than silence, because it trains readers to
 //! skip the line.
@@ -10,8 +10,8 @@ use crate::metrics;
 
 /// Remedies that depend only on WHICH metric fired. A table, not a
 /// match: a dispatch of twenty arms is a lookup wearing control flow.
-/// Metrics absent here are deliberately unsuggested — comment ratio,
-/// echo comments, spooky, test assertions all need intent we cannot
+/// Metrics absent here are deliberately unsuggested: comment ratio,
+/// echo comments, spooky and test assertions all need intent we cannot
 /// read, and filler advice trains readers to skip the line.
 #[rustfmt::skip]
 const REMEDIES: &[(usize, &str)] = &[

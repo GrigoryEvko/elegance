@@ -1,12 +1,12 @@
 //! Solidity: the one language here where a finding is directly
 //! financial, and the metrics are read accordingly.
 //!
-//! Two things are specific to it. Inline assembly (`assembly { ... }`,
-//! Yul) drops beneath the type system and the checked-arithmetic rules
-//! both, so it is `spooky` for the same reason `unsafe` and
-//! `transmute` are. And visibility is written on every function because
-//! the compiler demands it, which makes `public docs` a question about
-//! an interface the whole world can call rather than one a package can.
+//! Inline assembly (`assembly { ... }`, Yul) drops beneath the type
+//! system and the checked-arithmetic rules both, so it is `spooky` for
+//! the same reason `unsafe` and `transmute` are. Visibility is written
+//! on every function because the compiler demands it, which makes
+//! `public docs` a question about an interface the whole world can call
+//! rather than one a package can.
 
 use tree_sitter::Node;
 
@@ -125,7 +125,7 @@ pub fn pack() -> Pack {
         // Forge puts tests under /test/ or in *.t.sol; a PROPERTY FUZZER
         // puts them somewhere else entirely. Echidna and the rest of the
         // crytic toolchain read a harness contract whose `assert` IS the
-        // property under test — that assert failing is the finding the
+        // property under test. That assert failing is the finding the
         // fuzzer exists to produce, not a panic where an error belonged.
         // All five gold `unwraps` findings in Solidity were one such
         // directory, v3-core/audits/tob/contracts/crytic/echidna, and
@@ -172,7 +172,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let path = target.trim_matches(['"', '\'']);
     // `import {Context} from "..."` binds `Context`, and the grammar
     // labels it: 1478 of gold's 1619 imports are the braces form, so
-    // leaving the list empty told the surface metrics that no Solidity
+    // leaving the list empty tells the surface metrics that no Solidity
     // export is ever named by an importer.
     //
     // `import {A as B}` fields A under `import_name` and B under
@@ -204,7 +204,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     }
     let ty = node.child_by_field_name("type");
     let type_text = ty.and_then(|t| t.utf8_text(src).ok()).unwrap_or("");
-    // A parameter may be typed and unnamed — `function f(uint256)` is
+    // A parameter may be typed and unnamed: `function f(uint256)` is
     // legal and common in interfaces.
     let name = node
         .child_by_field_name("name")
@@ -255,7 +255,7 @@ fn negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 
 /// `revert` unwinds the transaction, and `require` is the guard that
 /// calls it. Both are the ordinary control flow of a contract rather
-/// than a failure, so neither is a panic — `assert` is, because it
+/// than a failure, so neither is a panic. `assert` is, because it
 /// signals an invariant the code believed could not break.
 fn panicky(call: Node, src: &[u8]) -> bool {
     matches!(callee_text(call, src), Some("assert"))
@@ -263,7 +263,7 @@ fn panicky(call: Node, src: &[u8]) -> bool {
 
 /// `catch { }` names no error and reaches every revert the callee can
 /// produce; `catch Error(string memory reason)` names one. Emptiness is
-/// the wider sin and is asked first — the core consults `swallows_error`
+/// the wider sin and is asked first: the core consults `swallows_error`
 /// on `if` nodes only, so a catch answers both here.
 fn catch_sin(node: Node, src: &[u8]) -> Option<super::CatchSin> {
     if node.kind() != "catch_clause" {
@@ -362,11 +362,11 @@ fn interfaces(node: Node, src: &[u8]) -> Vec<crate::facts::InterfaceFact> {
 /// inherited.
 ///
 /// On a declaration at file scope it forbids one, and asking for it
-/// anyway called every contract, interface and library private: gold's
-/// 681 .sol files declare 794 file-scope types and `exports` held none
-/// of them, which is the name 1478 braces imports bind. A declaration
-/// inside a contract body is that contract's member and is reached
-/// through it, so file scope is the line.
+/// anyway calls every contract, interface and library private: gold's
+/// 681 .sol files declare 794 file-scope types, `exports` then holds
+/// none of them, and those are the names 1478 braces imports bind. A
+/// declaration inside a contract body is that contract's member and is
+/// reached through it, so file scope is the line.
 fn is_public(node: Node, src: &[u8]) -> bool {
     // A contract, an interface and a library all carry `contract_body`,
     // so one kind answers for the three.
@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn a_file_scope_declaration_is_surface_and_a_member_is_not() {
         // The compiler forbids a visibility keyword on a contract, so
-        // reading one made every contract, interface and library
+        // reading one calls every contract, interface and library
         // private. gold declares 794 file-scope types.
         let f = facts(
             "library L { function a() public {} }\n\
@@ -470,7 +470,7 @@ mod tests {
         // openzeppelin files 108 mock contracts under contracts/mocks
         // and 20 harnesses under fv/harnesses; aave 21 and 8. They
         // exist for the suite and the prover, and counting them as
-        // production put 73% of the residual orphans there.
+        // production puts 73% of the residual orphans there.
         let is_test = super::pack().test_path;
         for p in [
             "openzeppelin-contracts/contracts/mocks/AccessManagerMock.sol",

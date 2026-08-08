@@ -2,7 +2,7 @@
 //! distributional REPORTS, never CI gates: they describe the shape of the
 //! dependency structure so a human can judge it.
 //!
-//! Parnas 1979: a correct uses-hierarchy is acyclic and subsettable —
+//! Parnas 1979: a correct uses-hierarchy is acyclic and subsettable, so
 //! cycle mass is the single best size-free architecture-health ratio.
 //! Deletability is the underrated half of evolvability: code you can
 //! delete never complected itself into its neighbors.
@@ -24,9 +24,9 @@ pub struct Architecture {
     /// Members of the largest cycle, capped for display.
     pub largest_cycle: Vec<String>,
     pub largest_cycle_size: u32,
-    /// Share of directories inside a directory-level cycle — the Parnas
-    /// violation proper: package layers that cannot be built, tested, or
-    /// understood independently.
+    /// Share of directories inside a directory-level cycle. This is the
+    /// Parnas violation proper: package layers that cannot be built,
+    /// tested, or understood independently.
     pub dir_cycle_mass_pct: f64,
     pub largest_dir_cycle: Vec<String>,
     pub largest_dir_cycle_size: u32,
@@ -35,16 +35,16 @@ pub struct Architecture {
     pub depth_p90: u32,
     pub depth_max: u32,
     /// Modules the two dependency questions below are asked of:
-    /// `modules` less the files whose fan-in the language fixes at
-    /// zero. See `Lang::is_sink`.
+    /// `modules` less the files whose fan-in the language or the build
+    /// fixes at zero. See `Lang::is_sink` and `judgeable`.
     pub judged_modules: u32,
     /// Share of JUDGED modules nothing depends on (safe to delete
     /// outright).
     pub deletable_pct: f64,
     /// Modules with the widest blast radius: (path, transitive dependents).
     pub load_bearing: Vec<(String, u32)>,
-    /// Non-test modules with no importers and no entry-point name:
-    /// total count and a capped sample.
+    /// Non-test modules with no importer, no test importer and no
+    /// entry-point name: total count and a capped sample.
     pub orphan_count: u32,
     pub orphans: Vec<String>,
     /// Judged modules no production file imports but a TEST does. Not
@@ -65,15 +65,16 @@ pub struct Architecture {
 /// a lot behind a little.
 pub struct Interfaces {
     /// Median mass-per-surface-unit over exporting modules. Depth alone
-    /// selects for god-modules with narrow facades — shallow listings
-    /// carry mass so a 5000-line two-export module reads as suspicious.
+    /// selects for god-modules with narrow facades, so the shallow
+    /// listings carry mass: a 5000-line two-export module reads as
+    /// suspicious.
     pub median_depth: u32,
     /// Wide-but-shallow modules: (label, depth, mass, surface cost).
     pub shallow: Vec<(String, u32, u32, u32)>,
     /// Fat, under-used surfaces: (label, exports ever imported, exports).
     /// Name-level approximation: bound import names, not call sites.
     pub fat: Vec<(String, u32, u32)>,
-    /// Underscore symbols imported across package boundaries — content
+    /// Underscore symbols imported across package boundaries: content
     /// coupling (Constantine), Python convention only for now.
     pub leak_count: u32,
     pub leaks: Vec<String>,
@@ -153,7 +154,7 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
 
 /// The production graph: tests are scaffolding, and (Go proves it) test
 /// files may legally close cycles production code cannot have. Returns
-/// None when there is nothing to analyze. The last element aligns a
+/// None when there is nothing to analyze. The fourth element aligns a
 /// resolved internal target with every import of every kept file.
 type ProdView<'a> = (
     Resolution,
@@ -162,8 +163,8 @@ type ProdView<'a> = (
     Vec<Vec<Option<usize>>>,
     // Last element: per kept file, how many TEST files import it. A
     // test importing production code is not production coupling, so it
-    // earns no edge — but it is not nothing either, and a file reached
-    // only that way is a different finding from one reached by nobody.
+    // earns no edge. It is not nothing either: a file reached only that
+    // way is a different finding from one reached by nobody.
     Vec<u32>,
 );
 
@@ -218,14 +219,15 @@ fn production_view(all: &[GraphFacts]) -> Option<ProdView<'_>> {
 /// writes `ethers.deployContract('$ERC20Burnable', [name, symbol],
 /// owner)`, and the `$` is hardhat-exposed's, required at
 /// hardhat.config.js:61 with its `exposed: { imports: true }` stanza at
-/// :109 — it generates a subclass per contract into `contracts-exposed/`,
-/// a directory the repository does not hold. aave says the same thing
-/// through typechain: hardhat.config.ts:42 declares
-/// `typechain: { outDir: 'types' }` and test-suites/helpers/make-suite.ts:35
-/// writes `import { AaveOracle, ACLManager, ... } from '../../types'`,
-/// against a directory typechain generates and the checkout does not
-/// have. 256 distinct lookup arguments appear across the three gold
-/// hardhat projects and every one of them is contract-shaped.
+/// :109. That plugin generates a subclass per contract into
+/// `contracts-exposed/`, a directory the repository does not hold.
+/// aave says the same thing through typechain: hardhat.config.ts:42
+/// declares `typechain: { outDir: 'types' }` and
+/// test-suites/helpers/make-suite.ts:35 writes
+/// `import { AaveOracle, ACLManager, ... } from '../../types'`, against
+/// a directory typechain generates and the checkout does not hold. 256
+/// distinct lookup arguments appear across the three gold hardhat
+/// projects and every one of them is contract-shaped.
 ///
 /// Credited to `from_tests` and NEVER to `fan_in`, so the claim made is
 /// exactly the one `tested_only` already makes: a contract its own
@@ -270,8 +272,8 @@ fn deployed_by_suite(all: &[GraphFacts], files: &[&GraphFacts], from_tests: &mut
             };
             // Two files declaring one name is a vendored copy beside an
             // original: aave ships its own SafeERC20 next to
-            // openzeppelin's. The nearer one is meant, exactly as a C
-            // include picks the header beside the source.
+            // openzeppelin's. The nearer one is meant, as a C include
+            // picks the header beside the source.
             let Some(&i) = cands
                 .iter()
                 .max_by_key(|&&i| shared_prefix(&files[i].path, &suite.path))
@@ -289,7 +291,7 @@ fn deployed_by_suite(all: &[GraphFacts], files: &[&GraphFacts], from_tests: &mut
 /// The DEEPEST config wins. Gold's three configs sit in sibling
 /// repositories so it never shows there, but a monorepo with a root
 /// config and per-package configs would otherwise read the wrong
-/// `outDir` — a first-match ancestor walk answers with whichever
+/// `outDir`, since a first-match ancestor walk answers with whichever
 /// happened to be shallowest.
 fn hardhat_roots(files: &[&GraphFacts]) -> Vec<(PathBuf, String)> {
     const CONFIGS: &[&str] = &[
@@ -355,7 +357,7 @@ fn quoted_after<'a>(text: &'a str, field: &str) -> Option<&'a str> {
     rest[1..].split(quote).next()
 }
 
-/// How many leading path components two files share — how near one is
+/// How many leading path components two files share: how near one is
 /// to the other.
 fn shared_prefix(a: &Path, b: &Path) -> usize {
     a.components()
@@ -415,8 +417,8 @@ impl CycleStats {
 }
 
 /// Directory-granularity graph. Ancestor-descendant edges are containment
-/// (a Rust crate's mod.rs and its children), not layering — only
-/// unrelated-directory edges count.
+/// (a Rust crate's mod.rs and its children) rather than layering, so
+/// only unrelated-directory edges count.
 fn dir_graph(files: &[&GraphFacts], edge_list: &[(u32, u32)]) -> (Vec<String>, Vec<Vec<u32>>) {
     let mut ids: HashMap<&Path, u32> = HashMap::new();
     let mut names: Vec<&Path> = Vec::new();
@@ -445,7 +447,7 @@ fn dir_graph(files: &[&GraphFacts], edge_list: &[(u32, u32)]) -> (Vec<String>, V
 }
 
 /// Component-level edges, deduplicated. Tarjan emits components in
-/// reverse topological order — successors always have lower ids.
+/// reverse topological order, so successors always have lower ids.
 fn condense(succ: &[Vec<u32>], sccs: &Sccs) -> Vec<Vec<u32>> {
     let mut comp_succ: Vec<Vec<u32>> = vec![Vec::new(); sccs.size.len()];
     let mut seen = HashSet::new();
@@ -491,12 +493,10 @@ const WORD: usize = 64;
 /// pushing its ancestor set plus itself onto its successors.
 ///
 /// Blocked 64 ancestors at a time. The whole ncomp x ncomp bit matrix is
-/// the obvious encoding and costs ncomp^2/8 bytes — 312 MB at 50k
-/// modules, which is what actually stood between this tool and the
-/// 10M-line codebases it claims to handle. One word per component per
-/// pass is the same algorithm at O(ncomp) memory, and iterating set bits
-/// rather than all 64 keeps the work proportional to the closure that
-/// actually exists.
+/// the obvious encoding and costs ncomp^2/8 bytes: 312 MB at 50k
+/// modules, which is what stands between this tool and the 10M-line
+/// codebases it claims to handle. One word per component per pass is the
+/// same algorithm at O(ncomp) memory.
 fn blast_radii(sccs: &Sccs, comp_succ: &[Vec<u32>], n: usize) -> Vec<u32> {
     let ncomp = comp_succ.len();
     let mut mass = vec![0u32; ncomp];
@@ -534,7 +534,7 @@ fn propagate(comp_succ: &[Vec<u32>], anc: &mut [u64], lo: usize) {
 
 /// Total module count behind the ancestors this block's bits name.
 /// Iterating set bits rather than all WORD of them keeps the work
-/// proportional to the closure that actually exists.
+/// proportional to the closure that exists.
 fn ancestor_mass(mut bits: u64, lo: usize, of: usize, sccs: &Sccs) -> u32 {
     let mut total = 0;
     while bits != 0 {
@@ -570,8 +570,8 @@ fn widest_first(a: &(String, u32), b: &(String, u32)) -> std::cmp::Ordering {
 const WIDE_SURFACE: u32 = 8;
 
 /// Interface metrics: depth (hidden mass per surface unit), utilization
-/// (share of exports anyone ever imports by name), and cross-package
-/// underscore leaks.
+/// (share of exports anyone ever imports by name), cross-package
+/// underscore leaks, and exports no other file mentions.
 fn interfaces(
     files: &[&GraphFacts],
     targets: &[Vec<Option<usize>>],
@@ -621,18 +621,19 @@ fn interfaces(
     }
 }
 
-/// Exports nothing outside their own file ever names. Import lists alone
-/// cannot answer this — Go and C never import names — so the evidence is
-/// how many FILES mention the identifier: one means only its definition.
+/// Exports nothing outside their own file ever names. Go and C never
+/// import names, so import lists alone cannot answer this. The evidence
+/// is how many FILES mention the identifier: one means only its
+/// definition.
 ///
 /// Deliberately a report, never a gate. A library's public API is
 /// legitimately unreferenced inside its own repository, which is why
-/// declared API surfaces (lib.rs, __init__.py, index.ts, mod.rs) are
-/// exempt outright. Names shared with an unrelated symbol elsewhere read
-/// as alive: the error runs toward silence, as it should.
+/// files with a declared API-surface stem (lib.rs, __init__.py,
+/// index.ts) are exempt outright. Names shared with an unrelated symbol
+/// elsewhere read as alive: the error runs toward silence, as it should.
 ///
 /// The rate is a property of the language as much as the codebase. Gold
-/// reads go 4.0%, rust 6.0%, ts 9.0%, zig 9.9%, py 18.4% — Python is
+/// reads go 4.0%, rust 6.0%, ts 9.0%, zig 9.9%, py 18.4%. Python is
 /// highest because it has no visibility modifier at all, so every helper
 /// without a leading underscore counts as surface. In an inferring
 /// language a named type can also flow through call sites that never
@@ -666,7 +667,7 @@ fn find_dead_exports(
     (count, dead)
 }
 
-/// Hidden mass per unit of surface — Ousterhout's deep-vs-shallow.
+/// Hidden mass per unit of surface: Ousterhout's deep-vs-shallow.
 fn depth(f: &GraphFacts) -> u32 {
     f.mass / f.surface_cost.max(1)
 }
@@ -710,9 +711,9 @@ fn surface_use<'a>(
     used
 }
 
-/// Underscore symbols imported from a DIFFERENT package — content
+/// Underscore symbols imported from a DIFFERENT package: content
 /// coupling. Same-package private sharing is idiomatic Python and
-/// exempt; dunders are protocol, not privacy.
+/// exempt; dunders are protocol rather than privacy.
 fn find_leaks(
     files: &[&GraphFacts],
     targets: &[Vec<Option<usize>>],
@@ -742,7 +743,7 @@ fn leak_names(imp: &crate::facts::ImportFact, from: &str, to: &str, leaks: &mut 
 }
 
 /// Swift and Go state a dependency on a MODULE, which is a directory,
-/// and the edge lands on a representative file of it — so every OTHER
+/// and the edge lands on a representative file of it, so every OTHER
 /// file of that module reads as depended on by nothing.
 ///
 /// There is no import to fix. Alamofire's Source/Core/AFError.swift
@@ -754,8 +755,8 @@ fn leak_names(imp: &crate::facts::ImportFact, from: &str, to: &str, leaks: &mut 
 ///
 /// So the answer is folded over the module: a file inherits whatever
 /// depends on the directory it belongs to, and a module nobody imports
-/// keeps its zero. What survives is the answer worth reading — example
-/// executables, benchmark targets, demo servers.
+/// keeps its zero. The files left over are the answer worth reading:
+/// example executables, benchmark targets, demo servers.
 ///
 /// A Go package is exactly its directory. A Swift target is an
 /// ancestor, since `Sources/NIOCore/Channel/` is still NIOCore, so the
@@ -785,8 +786,9 @@ fn fold_over_modules(
     // Swift executable target does the same, and none of them import
     // each other: chi's `_examples/todos-resource/` is main.go plus
     // todos.go and users.go, swift-nio's `Sources/NIOPerformanceTester/`
-    // is main.swift plus 23 more. 27 files in gold read as depended on
-    // by nothing because only the file literally named `main` was exempt.
+    // is main.swift plus 23 more. Exempting only the file literally
+    // named `main` leaves 27 gold files reading as depended on by
+    // nothing.
     let entries: HashSet<&Path> = files
         .iter()
         .filter(|f| folded(f) && entryish(&f.path))
@@ -809,13 +811,14 @@ fn fold_over_modules(
 /// The same fold, for the OTHER thing an import can credit.
 ///
 /// `fan_in` is folded over the module for every language whose imports
-/// name one, and `from_tests` never was — so a test importing a Go
-/// package credited only the file standing for it, and the package's
+/// name one. Without the same fold on `from_tests`, a test importing a
+/// Go package credits only the file standing for it, and the package's
 /// other files read as reached by nobody. Every one of go-cmp's
-/// `internal/teststructs/project1..4.go` is that: `compare_test.go`
-/// imports the package, and the four files the representative did not
-/// stand for were orphans. 11 of Go's 15 remaining orphans were this
-/// one gap, and it reached Java, Scala and Swift the same way.
+/// `internal/teststructs/project1..4.go` is that shape:
+/// `compare_test.go` imports the package, and the four files the
+/// representative does not stand for read as orphans. 11 of Go's 15
+/// remaining orphans were this one gap, and it reaches Java, Scala and
+/// Swift the same way.
 ///
 /// A zero is filled and a count is never overwritten: the question is
 /// only whether a test reaches the module at all.
@@ -833,7 +836,7 @@ fn fold_test_reach(files: &[&GraphFacts], all: &[GraphFacts], from_tests: &mut [
     // Go `_test.go` sits in the package it exercises. Fourteen of gold
     // Java's twenty remaining orphans, 58 of Scala's 83 and all three of
     // tigerbeetle's Go client files have a same-package test and no
-    // other reader — which is `tested_only`, a finding this metric
+    // other reader. That is `tested_only`, a finding this metric
     // already separates from being reached by nobody. All 75 change
     // BUCKET and none changes a judged count.
     reached.extend(all.iter().filter(|f| f.is_test).filter_map(module_key));
@@ -845,14 +848,14 @@ fn fold_test_reach(files: &[&GraphFacts], all: &[GraphFacts], from_tests: &mut [
 
 /// A Rust module its own parent declares behind `#[cfg(test)]`.
 ///
-/// The pack DECLINES to emit that declaration as an edge — `src/lang/
-/// rust.rs` requires `!preceding_attr_contains(node, src, "cfg(test")`
-/// — and it is right to: a module compiled only under `cfg(test)` is
-/// not production coupling. But refusing the edge left the file reached
-/// by nothing at all, which says something stronger and false. rayon
-/// writes `#[cfg(test)]` then `mod test;` five times and ripgrep's
-/// searcher once for `src/testutil.rs`, and all six read as orphans
-/// where `tested_only` is the bucket that describes them.
+/// The pack DECLINES to emit that declaration as an edge (`src/lang/
+/// rust.rs` requires `!preceding_attr_contains(node, src, "cfg(test")`),
+/// and it is right to: a module compiled only under `cfg(test)` is not
+/// production coupling. Refusing the edge alone would leave the file
+/// reached by nothing at all, which says something stronger and false.
+/// rayon writes `#[cfg(test)]` then `mod test;` five times and
+/// ripgrep's searcher once for `src/testutil.rs`, and all six read as
+/// orphans where `tested_only` is the bucket that describes them.
 ///
 /// Routed to `from_tests` rather than to `fan_in`, so the tool still
 /// says nothing in production depends on the file. Read from disk only
@@ -907,8 +910,8 @@ fn module_key(f: &GraphFacts) -> Option<(usize, String)> {
     Some((f.lang as usize, name))
 }
 
-/// A Java or Scala PACKAGE is the unit of visibility — package-private
-/// is Java's default access — and a reference between two files of one
+/// A Java or Scala PACKAGE is the unit of visibility (package-private
+/// is Java's default access), and a reference between two files of one
 /// package needs no import at all. Nobody writes the redundant one: 11
 /// of the gold corpus's 71978 Java imports name the importer's own
 /// package, and 1961 of Java's 2939 orphans are named by a same-package
@@ -964,17 +967,17 @@ fn fold_over_packages(
 ///
 /// Read from the file's own declared surface rather than from its path.
 /// 94 of the gold Java corpus's non-test files write `static void main`
-/// and not ONE of them is named `Main.java` — netty writes
+/// and not ONE of them is named `Main.java`: netty writes
 /// `AutobahnServer`, `Http2Server` and `DnsNativeClient`, gson writes
-/// `ParseBenchmark`, junit5 writes `ConsoleLauncher` — so the
-/// path-based `ENTRY_STEMS` could never see them.
+/// `ParseBenchmark`, junit5 writes `ConsoleLauncher`. The path-based
+/// `ENTRY_STEMS` could never see them.
 ///
 /// Worth 19 of gold Java's 65 orphans and one more in the zig corpus's
 /// java client, every one a netty `testsuite-*` demo server or the
 /// handler and initializer sitting in its package. It raises `judged`
 /// by 154 as well, but circularly: those are files the zero-fan-in
-/// gates had dropped and that this rule itself makes unorphanable, so
-/// the denominator growth is not extra coverage.
+/// gates drop and that this rule itself makes unorphanable, so the
+/// denominator growth is not extra coverage.
 fn jvm_entry(f: &GraphFacts) -> bool {
     entryish(&f.path) || f.exports.iter().any(|e| &**e == "main")
 }
@@ -985,13 +988,13 @@ fn jvm_entry(f: &GraphFacts) -> bool {
 /// A package is not a directory. sbt cross-building spreads one over
 /// `shared/`, `js/`, `scala-2/` and `scala-3/` source roots and Gradle
 /// spreads it over `src/main/java` and `src/testFixtures/java`; keying
-/// on the directory left 496 of Scala's modules orphaned where the
+/// on the directory leaves 496 of Scala's modules orphaned where the
 /// package leaves 290.
 ///
 /// `None` for a file sitting directly ON a source root: that is the
 /// UNNAMED package, which groups nothing. Every such file in a scan
 /// shares the empty key whatever repository it came from, so crediting
-/// it makes one project answer for another — zio's `zio-docs/src/main/
+/// it makes one project answer for another: zio's `zio-docs/src/main/
 /// scala/utils.scala` was credited by a test in `streams-tests`, a
 /// different sbt project, and tigerbeetle's four `samples/*/src/main/
 /// java/Main.java` credited the java client's `module-info.java`. 32
@@ -1010,8 +1013,8 @@ fn package_of(path: &Path) -> Option<String> {
             || c.starts_with("java-")
     };
     // `src/<set>/<language>/<package>` is what Maven, Gradle and sbt all
-    // write. `java` is a package name too — netty declares
-    // java.lang.invoke — so the root is found by the `src` above it
+    // write. `java` is a package name too (netty declares
+    // java.lang.invoke), so the root is found by the `src` above it
     // rather than by its name alone.
     let below = comps
         .windows(3)
@@ -1021,18 +1024,21 @@ fn package_of(path: &Path) -> Option<String> {
         .unwrap_or(0);
     // Below the root a dotted directory is a package written flat: zio
     // files its Scala-2 stream sources under `scala-2/zio.stream/`, and
-    // reading that as one component put them in a package of their own.
-    // Only below the root — `scala-2.13+` is a SOURCE SET and splitting
-    // it took 47 Scala modules out of the packages they belong to.
+    // reading that as one component puts them in a package of their
+    // own. Only below the root: `scala-2.13+` is a SOURCE SET, and
+    // splitting it takes 47 Scala modules out of the packages they
+    // belong to.
     let name = comps[below..].join("/").replace('.', "/");
     (!name.is_empty()).then_some(name)
 }
 
-/// A file whose stem declares it an entry point or an API surface.
+/// A file nothing in the tree needs to import: its stem declares it an
+/// entry point or an API surface, or one of the rules below reads a
+/// declaration that names it.
 ///
-/// The FIRST dot-segment, not `file_stem`: ariakit writes
-/// `index.react.tsx`, whose stem is `index.react`, and no entry name
-/// ever matched. Reading the first segment exempts 360 tsx files and
+/// The FIRST dot-segment rather than `file_stem`: ariakit writes
+/// `index.react.tsx`, whose stem is `index.react`, which matches no
+/// entry name. Reading the first segment exempts 360 tsx files and
 /// exactly none in ts or js.
 fn entryish(path: &Path) -> bool {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -1057,21 +1063,21 @@ fn entryish(path: &Path) -> bool {
 ///
 /// `ci.rs` reads the shell out of a Dockerfile's `RUN` lines and a
 /// workflow's `run:` blocks so that the commands in them are measured,
-/// which is right and is the whole point of that module. But the file
-/// holding them then entered the module graph as a Shell file and was
-/// asked who imports it, and no language has syntax that can name a
-/// Dockerfile or a workflow YAML — the question has one answer by
-/// construction, whatever the repository does.
+/// which is what that module is for. The file holding them then enters
+/// the module graph as a Shell file and gets asked who imports it, and
+/// no language has syntax that can name a Dockerfile or a workflow
+/// YAML: the question has one answer by construction, whatever the
+/// repository does.
 ///
 /// 24 of the gold corpus's orphans are one, and they are 24 of Shell's
-/// 52: netty's ENTIRE shell population is five `Dockerfile.*`. The tell
-/// that the question was wrong is that `built_by_name` had to rescue
+/// 52: netty's ENTIRE shell population is five `Dockerfile.*`. That the
+/// question is the wrong one shows in `built_by_name`, which rescues
 /// curl's Dockerfile by finding it named in a Makefile.
 ///
 /// Only the two build descriptions. A `.vue` component is imported like
-/// any module, and a notebook is a document that RUNS — the same claim,
-/// but a different one, and its six instances in gold sit in `docs/` and
-/// `testWorkspace` trees that other rules answer for.
+/// any module, and a notebook is a document that RUNS: a claim of the
+/// same kind but a different one, and its six instances in gold sit in
+/// `docs/` and `testWorkspace` trees that other rules answer for.
 fn ci_container(path: &Path) -> bool {
     matches!(
         crate::ci::Container::of(path),
@@ -1080,7 +1086,7 @@ fn ci_container(path: &Path) -> bool {
 }
 
 /// A header whose only caller is outside this repository, because the
-/// build DESCRIPTION is what reaches it and not any source in the tree.
+/// build DESCRIPTION reaches it rather than any source in the tree.
 ///
 /// Three separate readings, kept as three functions because they are
 /// three different claims: `include/` is a toolchain constant, an
@@ -1100,9 +1106,9 @@ fn header_the_build_names(path: &Path, name: &str) -> bool {
 /// repository.
 ///
 /// Every repository in gold that ships such a tree says so itself.
-/// musl's Makefile installs the whole of it —
-/// `$(DESTDIR)$(includedir)/%: $(srcdir)/include/%` at :210, reached
-/// from `install-headers` at :218 — curl's CMakeLists.txt:2366 writes
+/// musl's Makefile installs the whole of it
+/// (`$(DESTDIR)$(includedir)/%: $(srcdir)/include/%` at :210, reached
+/// from `install-headers` at :218), curl's CMakeLists.txt:2366 writes
 /// `install(DIRECTORY "${PROJECT_SOURCE_DIR}/include/curl" …)`,
 /// magic_enum's :100 `target_include_directories(…
 /// $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)` and cutlass's :718
@@ -1111,7 +1117,7 @@ fn header_the_build_names(path: &Path, name: &str) -> bool {
 /// `include/stdio.h`, fmt's os.cc `#include "fmt/os.h"` for
 /// `include/fmt/os.h`.
 ///
-/// An entry point and not a sink, because the tree is mostly NOT
+/// An entry point rather than a sink, because the tree is mostly NOT
 /// unreferenced. Gold holds 1374 headers under an `include/` directory
 /// and 66 of them have no includer here; musl/include alone ships 183 of
 /// which 127 are included in the tree, so a sink would drop the lot from
@@ -1126,19 +1132,19 @@ fn published_header(path: &Path) -> bool {
 /// musl's Makefile:51 writes
 /// `CFLAGS_ALL += -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic …`,
 /// so `#include "ksigaction.h"` names one of seven real files and which
-/// one is settled by `$(ARCH)`. The generic copy is what the nearest
-/// match answers with — see `Index::nearest_includes`, which says so —
-/// and the six per-architecture copies read as included by nobody while
-/// each is included in its own configuration, exactly as a translation
-/// unit is linked in its own.
+/// one is settled by `$(ARCH)`. The nearest match answers with the
+/// generic copy (see `Index::nearest_includes`), and the six
+/// per-architecture copies read as included by nobody while each is
+/// included in its own configuration, as a translation unit is linked
+/// in its own.
 ///
 /// A make VARIABLE BELOW the first component is what marks the root, and
 /// it is the only shape in gold that does: of the 44 `-I` flags in the
 /// corpus's makefiles that mention a variable at all, 43 spell it only
 /// as a `$(srcdir)`-style prefix, which selects nothing. Deliberately
-/// entryish and not an edge: handing all seven copies of ksigaction.h an
-/// edge would manufacture six dependencies where the build takes one.
-/// 9 orphans, all musl's.
+/// entryish rather than an edge: handing all seven copies of
+/// ksigaction.h an edge would manufacture six dependencies where the
+/// build takes one. 9 orphans, all musl's.
 fn configured_header(path: &Path) -> bool {
     path.ancestors().skip(1).any(|dir| {
         let Ok(rel) = path.strip_prefix(dir) else {
@@ -1160,27 +1166,27 @@ fn configured_header(path: &Path) -> bool {
 /// `exports`, and every vscode extension its activation module through
 /// `main` and `browser`.
 ///
-/// The declared path is normally a BUILD OUTPUT — vscode writes
+/// The declared path is normally a BUILD OUTPUT (vscode writes
 /// `"main": "./out/npmMain"` and its tsconfig `"rootDir": "./src"`,
-/// `"outDir": "./out"` — so a value that names no file on disk is
+/// `"outDir": "./out"`), so a value that names no file on disk is
 /// matched by NAME and DEPTH within the package that declared it. The
 /// directory the compiler writes to is a build detail; the name the
 /// toolchain loads, and how far down it sits, are the claim.
 ///
-/// The depth is what keeps a stem from claiming a tree. `"main"` and
+/// The depth keeps a stem from claiming a tree. `"main"` and
 /// `"exports"` name a compiled artefact, and matching a bare stem
-/// anywhere below the package exempted 479 gold files to win about a
-/// hundred: hono's fourteen subpath exports claimed 155 files, copilot's
-/// single `"./dist/extension"` claimed nine (three of them ordinary
-/// modules), vscode's root `"./out/main.js"` twelve. Requiring the
-/// candidate to sit as many components deep as the declared path does —
+/// anywhere below the package exempts 479 gold files to win about a
+/// hundred: hono's fourteen subpath exports claim 155 files, copilot's
+/// single `"./dist/extension"` nine (three of them ordinary modules),
+/// vscode's root `"./out/main.js"` twelve. Requiring the candidate to
+/// sit as many components deep as the declared path does cuts that
+/// blanket to 384 and costs exactly one orphan across all 22 corpora:
 /// `"./dist/request.js"` is two, so `src/request.ts` answers and
-/// `src/utils/request.ts` does not — cuts that blanket to 384 and costs
-/// exactly one orphan across all 22 corpora. Two stricter forms were
-/// measured and are worse buys: "a unique stem within the package"
-/// costs 18, and "the declared path minus its first component must
-/// equal the candidate's" costs 10 by losing the real two-level outputs
-/// like `"./client/dist/browser/cssClientMain"`.
+/// `src/utils/request.ts` does not. Two stricter forms were measured
+/// and are worse buys: "a unique stem within the package" costs 18, and
+/// "the declared path minus its first component must equal the
+/// candidate's" costs 10 by losing the real two-level outputs like
+/// `"./client/dist/browser/cssClientMain"`.
 ///
 /// A wildcard must narrow: `"./*": "./src/*.ts"` says which files are
 /// exports, `"./*": "./*"` says only that the package is a directory.
@@ -1255,8 +1261,8 @@ fn declared_include_root(path: &Path) -> bool {
 /// import: an executable, a compiler-plugin macro, or a build plugin.
 ///
 /// A library target is reached by `import <name>` and the module fold
-/// already credits every file in it. An executable has no such name —
-/// `main.swift` used to be the marker and `@main` replaced it, so
+/// already credits every file in it. An executable has no such name:
+/// `main.swift` was the marker and `@main` replaced it, so
 /// swift-nio's echo and websocket samples, vapor's `Development` and the
 /// nine files of its `.macro(name: "VaporMacrosPlugin")` at Package.swift
 /// :141 all read as unreferenced. swift-nio's manifest declares 15
@@ -1283,11 +1289,11 @@ fn swift_leaf_target(path: &Path) -> bool {
 ///
 /// `.executableTarget(name: "X", dependencies: [.product(name: "Y", …)])`
 /// carries two of them and only the outer one names a directory. Cutting
-/// the call at its first `)` — which the nested `.product(` closes —
-/// reads the right one for all 22 leaf stanzas in gold only because
-/// every one writes `name:` on the line after the paren; tracking the
-/// nesting instead does not depend on the field order, and a manifest
-/// that reordered would yield nothing rather than the wrong directory.
+/// the call at its first `)`, which the nested `.product(` closes, reads
+/// the right one for all 22 leaf stanzas in gold only because every one
+/// writes `name:` on the line after the paren. Tracking the nesting does
+/// not depend on the field order, and a manifest that reordered would
+/// yield nothing rather than the wrong directory.
 fn target_name(call: &str) -> Option<&str> {
     let mut depth = 0i32;
     for (at, b) in call.bytes().enumerate() {
@@ -1317,15 +1323,15 @@ fn target_name(call: &str) -> Option<&str> {
 /// `productType = "com.apple.product-type.application"` against a
 /// `PBXFileSystemSynchronizedRootGroup` whose `path = Sources` at
 /// project.pbxproj:274, which is Xcode 16's way of saying "compile that
-/// whole directory" with no per-file listing — 139 orphans. Alamofire's
+/// whole directory" with no per-file listing. 139 orphans. Alamofire's
 /// project declares `com.apple.product-type.framework` for five targets
 /// and no application at all, its 94 library files ARE importable, and
 /// reading any `.xcodeproj` ancestor as an app would have claimed them.
 ///
 /// The product type is matched as a PREFIX, so `.application.watchapp2`,
 /// `.application.watchapp2-container` and `.application-extension` are
-/// accepted too. That is deliberate — a watch app and an app extension
-/// are leaves for the same reason — and it is inert in gold: Alamofire's
+/// accepted too. That is deliberate (a watch app and an app extension
+/// are leaves for the same reason) and inert in gold: Alamofire's
 /// `watchOS Example` project declares two of the three, and contains no
 /// `PBXFileSystemSynchronizedRootGroup` at all, so it lists its files
 /// one by one and this rule reads nothing from it.
@@ -1409,8 +1415,8 @@ fn group_path<'a>(line: &'a str, wanted: &[&str]) -> Option<&'a str> {
 /// What Cargo builds from a `[[bin]]`, `[[bench]]`, `[[example]]` or
 /// `[[test]]` is a TARGET: an artefact nothing links against, reached by
 /// a name only the manifest writes. regex's `fuzz/Cargo.toml` declares
-/// eight — `[[bin]] name = "fuzz_regex_match"` with
-/// `path = "fuzz_targets/fuzz_regex_match.rs"` — and ripgrep's fuzz
+/// eight (`[[bin]] name = "fuzz_regex_match"` with
+/// `path = "fuzz_targets/fuzz_regex_match.rs"`), and ripgrep's fuzz
 /// manifest a ninth. All nine read as unreferenced. 9 orphans.
 fn cargo_target(path: &Path, name: &str) -> bool {
     if !name.ends_with(".rs") {
@@ -1428,7 +1434,7 @@ fn cargo_target(path: &Path, name: &str) -> bool {
 
 /// Is this path the `path` of a TARGET table?
 ///
-/// The enclosing header is what separates the artefact from the crate:
+/// The enclosing header separates the artefact from the crate:
 /// `[lib] path = "src/lib.rs"` names the root every dependent `use`s,
 /// the exact opposite of something nothing links against, and three
 /// manifests in gold write one (git's two libgit crates and a toml
@@ -1477,30 +1483,29 @@ const BUILD_FILES: &[&str] = &[
 /// and mk-file-embed.pl. A generator nothing imports is not
 /// unreferenced; it is invoked.
 ///
-/// OWN DIRECTORY, never an ancestor. The widening was tried and
-/// rejected on one case: fmt's CMakeLists.txt lists every header as a
-/// source, so `include/fmt/core.h` would be exempted — and core.h IS
-/// included by format.h, so the exemption would HIDE a resolver defect
-/// rather than report it. The own-directory restriction is what keeps
-/// an install manifest from being read as an entry-point claim across a
-/// whole repository.
+/// OWN DIRECTORY, never an ancestor. Widening it fails on one case:
+/// fmt's CMakeLists.txt lists every header as a source, so
+/// `include/fmt/core.h` would be exempted, and core.h IS included by
+/// format.h, so the exemption would HIDE a resolver defect rather than
+/// report it. The own-directory restriction keeps an install manifest
+/// from being read as an entry-point claim across a whole repository.
 ///
-/// Two filters, both of which fire in gold and both of which cost
-/// nothing that is not a false positive.
+/// Both filters below fire in gold, and neither costs anything that is
+/// not a false positive.
 ///
 /// A COMMENTED line names nothing. ghostty's pkg/libintl/build.zig
 /// opens with `//! ... I generated the config.h on my own machine (a
-/// Mac) and then copied it here`, and that prose was the whole reason
-/// config.h read as built. Its identical sibling libgnuintl.h, same
-/// directory and same status, was not exempted — because the prose does
-/// not happen to mention it. A rule that can be moved by an anecdote is
-/// not reading the build.
+/// Mac) and then copied it here`, and that prose is the only thing that
+/// would make config.h read as built. Its identical sibling
+/// libgnuintl.h, same directory and same status, would not be exempted,
+/// because the prose does not happen to mention it. A rule that can be
+/// moved by an anecdote is not reading the build.
 ///
 /// A SHIPPING MANIFEST is not an invocation. `EXTRA_DIST` says "put
 /// this in the tarball" and `*_HEADERS` / `*_DATA` say "install this";
 /// none of the three says anything runs. curl's projects/vms/Makefile.am
 /// lists vms_eco_level.h under EXTRA_DIST at line 59, and that file is
-/// genuinely dead — make_pcsi_curl_kit_name.com:106-108 opens it as a
+/// genuinely dead: make_pcsi_curl_kit_name.com:106-108 opens it as a
 /// TEXT file to read a version stamp out of it. Same shape for curl's
 /// Dockerfile and docs/libcurl/symbols.pl.
 ///
@@ -1509,9 +1514,8 @@ const BUILD_FILES: &[&str] = &[
 /// tests/Makefile.am:26 opens `TESTSCRIPTS = \` with eighteen
 /// `test*.pl` under it, and TESTSCRIPTS is referenced exactly once, at
 /// line 85, as the last entry of EXTRA_DIST. Reading only the literal
-/// left-hand side exempted all eighteen — a third of this rule's whole
-/// gain — on a claim no stronger than the one that was rejected for
-/// vms_eco_level.h.
+/// left-hand side exempts all eighteen, a third of this rule's gain, on
+/// a claim no stronger than the one refused for vms_eco_level.h.
 fn built_by_name(path: &Path, name: &str) -> bool {
     let Some(dir) = path.parent() else {
         return false;
@@ -1558,8 +1562,8 @@ struct Entries {
     scripted: Vec<PathBuf>,
     globs: Vec<(PathBuf, Box<str>)>,
     stems: Vec<(Box<str>, usize)>,
-    /// Package names this manifest declares — what says a file named
-    /// after a tool is that tool's driver. See `tool_driver`.
+    /// Package names this manifest declares: a file named after one of
+    /// them is that tool's driver. See `tool_driver`.
     dependencies: Vec<Box<str>>,
 }
 
@@ -1649,15 +1653,15 @@ fn record_entry(out: &mut Entries, dir: &Path, body: &str) {
 /// `"test:perf": "cd __performance_tests__ && node add-data.mjs"`, trpc
 /// four `script.*.ts` under its website, mithril `browser.js`.
 ///
-/// A third arm of the entry fields above and not a rule of its own: it
-/// writes into the same `exact` set and fires only through
+/// A third arm of the entry fields above rather than a rule of its own:
+/// it writes into the same `exact` set and fires only through
 /// `manifest_entry`, and 20 of the ts files it names are vscode
 /// `esbuild*.mts` drivers that `tool_driver` names too. Its own
 /// marginal worth, once the tool-driver rule is in, is 7 ts and 7 js.
 ///
-/// Read textually, because the value is a command line and not a path —
-/// only the tokens carrying a web extension are looked for, and only
-/// where they name a file that is really there.
+/// Read textually, because the value is a command line rather than a
+/// path: only the tokens carrying a web extension are looked for, and
+/// only where they name a file that is really there.
 fn scripted_files(json: &serde_json::Value, dir: &Path) -> Vec<PathBuf> {
     let Some(scripts) = json.get("scripts").and_then(|s| s.as_object()) else {
         return Vec::new();
@@ -1675,7 +1679,7 @@ fn scripted_files(json: &serde_json::Value, dir: &Path) -> Vec<PathBuf> {
 /// A token that ARGUES A FLAG is not a file the command runs, and one
 /// of them inverts the claim outright: ariakit-test writes
 /// `"docs-react": "... --entry src/react.tsx ... --exclude src/index.ts"`,
-/// where `src/index.ts` is named precisely because it is not an entry.
+/// where `src/index.ts` is named because it is not an entry.
 fn command_files(command: &str, dir: &Path) -> Vec<PathBuf> {
     const NEGATED: &[&str] = &["--exclude", "--ignore", "--external", "--exclude-file"];
     let mut base = dir.to_path_buf();
@@ -1823,10 +1827,10 @@ fn free(neighbour: Option<char>) -> bool {
 ///
 /// `containers/src/core/dune` says `(name containers)` and
 /// `containers.ml` is what consumers `open`; nothing inside the project
-/// imports it, exactly as nothing imports a `lib.rs`. 53 of gold
-/// OCaml's 134 orphans are one, and the name is read from the manifest
-/// rather than guessed from the path — a library's module is called
-/// after the library, not after the directory holding it.
+/// imports it, as nothing imports a `lib.rs`. 53 of gold OCaml's 134
+/// orphans are one, and the name is read from the manifest rather than
+/// guessed from the path: a library's module is called after the
+/// library, not after the directory holding it.
 fn dune_root(path: &Path, name: &str, stem: &str) -> bool {
     let ml = name.ends_with(".ml") || name.ends_with(".mli");
     // A js_of_ocaml stub is JavaScript that the OCaml build links in,
@@ -1888,15 +1892,15 @@ fn field_open(text: &str, field: &str) -> bool {
     field_args(text, field).next().is_some()
 }
 
-/// The arguments of a dune field, wherever it appears — everything from
+/// The arguments of a dune field, wherever it appears: everything from
 /// the whitespace after its name to the closing paren.
 ///
 /// ANY whitespace. `containers/fuzz/dune` writes `(names` and then a
 /// NEWLINE before its three crowbar targets, and matching the literal
-/// `"(names "` with a trailing space missed the stanza outright. The
-/// whitespace is also what keeps the field names apart: `(names` cannot
-/// be read as `(name` followed by an argument, because what follows the
-/// shorter match is the letter `s`.
+/// `"(names "` with a trailing space misses the stanza outright. The
+/// whitespace also keeps the field names apart: `(names` cannot be read
+/// as `(name` followed by an argument, because what follows the shorter
+/// match is the letter `s`.
 fn field_args<'a>(text: &'a str, field: &str) -> impl Iterator<Item = &'a str> {
     let starts: Vec<usize> = text
         .match_indices(field)
@@ -1908,8 +1912,8 @@ fn field_args<'a>(text: &'a str, field: &str) -> impl Iterator<Item = &'a str> {
         .filter_map(|at| text[at..].split(')').next())
 }
 
-/// A Mix task, which `mix` resolves from the MODULE name — running
-/// `mix phx.server` finds `Mix.Tasks.Phx.Server` — so nothing imports
+/// A Mix task, which `mix` resolves from the MODULE name (running
+/// `mix phx.server` finds `Mix.Tasks.Phx.Server`), so nothing imports
 /// one and 33 of gold Elixir's 93 orphans are one.
 ///
 /// The path answers as precisely as the declaration does: the corpus
@@ -1917,7 +1921,7 @@ fn field_args<'a>(text: &'a str, field: &str) -> impl Iterator<Item = &'a str> {
 /// they are the same 35. No other language puts anything there.
 ///
 /// Deliberately an entry point rather than a one-shot directory. A task
-/// legitimately has no importers, which is what this says — but
+/// legitimately has no importers, which is what this says. But
 /// `mix phx.server` starts a server and waits, so claiming nothing is
 /// waiting on its executor would be the wrong second claim to make.
 fn mix_task(path: &Path) -> bool {
@@ -1929,11 +1933,11 @@ fn mix_task(path: &Path) -> bool {
 /// tree. The router loads each by NAME, so nothing imports one, and 78
 /// of gold tsx's 506 orphans are one.
 ///
-/// Both narrowings are load-bearing rather than decoration. Without the
-/// extension the stems reach musl's `include/net/route.h` and immer's
-/// eight `default.cpp`; with it but without the directory they still
-/// reach vscode's `layout.ts`, mithril's `route.js` and trpc's
-/// `error.ts`, which are ordinary modules their neighbours import.
+/// Without the extension the stems reach musl's `include/net/route.h`
+/// and immer's eight `default.cpp`; with it but without the directory
+/// they still reach vscode's `layout.ts`, mithril's `route.js` and
+/// trpc's `error.ts`, which are ordinary modules their neighbours
+/// import. Both narrowings are load-bearing.
 fn routed(path: &Path, name: &str, stem: &str) -> bool {
     const ROUTE_FILES: &[&str] = &[
         "page",
@@ -1977,18 +1981,17 @@ fn judgeable(files: &[&GraphFacts], fan_in: &[u32]) -> Vec<bool> {
 /// A C# file of nothing but `[assembly: ...]`.
 ///
 /// `Lang::is_sink` already makes this argument for the file NAMED
-/// `AssemblyInfo.cs`; the content is what that name was standing in for,
+/// `AssemblyInfo.cs`; the content is what that name stands in for,
 /// because FluentValidation writes `AssemblyInfo.FluentValidation.cs`
 /// and `CommonAssemblyInfo.cs` and Dapper writes `Global.cs`. Eight
 /// files in the gold C# corpus carry an assembly attribute and no type
-/// keyword and five of them the name test already caught.
+/// keyword, and the name test already catches five of them.
 ///
 /// Zero-fan-in gated and NOT a sink, though a sink is what the shape
 /// argues for: `is_sink` is wrong wherever any instance has fan-in, and
 /// one does. Dapper's `Global.cs` is answered from the file-stem index
 /// on the bare word `Global`, so a sink would drop a measurable file out
-/// of the population to remove the two orphans this removes anyway. The
-/// weakest mechanism that gets the same number is the one that ships.
+/// of the population to remove the two orphans this removes anyway.
 ///
 /// The read is reached only for a file that exports nothing and that
 /// nothing references, so an ordinary module is never opened.
@@ -2006,7 +2009,7 @@ fn assembly_metadata(f: &GraphFacts) -> bool {
 /// A Java file that declares nothing another package can name.
 ///
 /// `import a.b.C` of a package-private type does not compile, so the
-/// only reference such a file can receive is from its own package —
+/// only reference such a file can receive is from its own package,
 /// which `fold_over_packages` has already credited by the time this is
 /// asked. A zero here therefore means the PACKAGE is unreached, and the
 /// package answers for itself through the public types it does declare:
@@ -2026,7 +2029,7 @@ fn assembly_metadata(f: &GraphFacts) -> bool {
 /// 4634 non-test files declare no public type, and all but TWENTY of
 /// them are credited by their package before this is ever asked. Those
 /// twenty are what leaves the population, and only twelve of them were
-/// orphans — the other eight were reached by a test, which is why the
+/// orphans. The other eight were reached by a test, which is why the
 /// java corpus's `tested_only` falls 131 to 123 with the rule on.
 fn package_private(f: &GraphFacts) -> bool {
     f.lang == crate::lang::Lang::Java && f.exports.is_empty()
@@ -2037,18 +2040,18 @@ fn package_private(f: &GraphFacts) -> bool {
 ///
 /// The same argument `is_sink` already makes for a `.d.ts`, and the
 /// marker is the language server's own. 50 files in gold carry it, 48
-/// of them Lua -- lua-language-server's `meta/template/*.lua`, which
-/// are declarations for `debug`, `ffi` and the rest of the standard
+/// of them Lua: lua-language-server's `meta/template/*.lua`, which are
+/// declarations for `debug`, `ffi` and the rest of the standard
 /// library.
 ///
 /// The marker opens a COMMENT RUN rather than the file. `ffi.lua` line
 /// one is `---#if not JIT then DISABLE() end` and `---@meta ffi` is
 /// line two; `bit.lua`, `bit32.lua`, `jit*.lua`, `utf8.lua`,
 /// `table.new/clear.lua` and `string.buffer.lua` are written the same
-/// way, and reading line one alone missed all ten: 30 Lua files in gold
+/// way, and reading line one alone misses all ten: 30 Lua files in gold
 /// open a comment run holding the marker and only 20 of them open the
 /// FILE with it. Only that leading run is scanned, so a `---@meta`
-/// written below a line of code is that line's neighbour and not a
+/// written below a line of code is that line's neighbour rather than a
 /// claim about the file.
 fn declares_types_only(f: &GraphFacts) -> bool {
     use crate::lang::Lang;
@@ -2064,28 +2067,29 @@ fn declares_types_only(f: &GraphFacts) -> bool {
 }
 
 /// A demo, a benchmark or a codegen script that NOTHING reaches. The
-/// zero-fan-in condition is the whole rule: the claim is that being
+/// rule applies only at zero fan-in: the claim is that being
 /// unreferenced is not a finding for such a file, which says nothing
-/// about one that is referenced. Without it the exclusion eats live
-/// source — lua-language-server keeps its whole tree under `script/`
-/// and kong a library under `kong/tools/`, 349 modules between them,
-/// and dropping those from the population raised Lua's orphan rate
-/// instead of lowering it.
+/// about one that is referenced. Without that condition the exclusion
+/// eats live source. lua-language-server keeps its whole tree under
+/// `script/` and kong a library under `kong/tools/`, 349 modules
+/// between them, and dropping those from the population raises Lua's
+/// orphan rate instead of lowering it.
 fn runs_once(path: &Path) -> bool {
     let norm = crate::facts::rooted(&path.display().to_string());
     crate::facts::one_shot_dir(&norm) || glob_loaded(path) || sbt_meta_build(path)
 }
 
 /// An sbt BUILD DEFINITION. `project/` is compiled as a project of its
-/// own and `build.sbt` is its only caller — zio's opens with `import
+/// own and `build.sbt` is its only caller: zio's opens with `import
 /// BuildHelper.*`, `import Dependencies.*` and `import
-/// MimaSettings.mimaSettings`, and circe's writes `Boilerplate.gen(...)`
-/// — but a `.sbt` file is not source this tool reads, so the three
-/// imports are invisible and every helper reads as an orphan.
+/// MimaSettings.mimaSettings`, and circe's writes
+/// `Boilerplate.gen(...)`. A `.sbt` file is not source this tool reads,
+/// so the three imports are invisible and every helper reads as an
+/// orphan.
 ///
-/// `project/build.properties` is what says sbt owns the directory: it
-/// pins the launcher version and sbt refuses to build without it. The
-/// gold corpus holds twelve of them and sixteen `.scala` files beneath;
+/// `project/build.properties` says sbt owns the directory: it pins the
+/// launcher version and sbt refuses to build without it. The gold
+/// corpus holds twelve of them and sixteen `.scala` files beneath;
 /// the other four already reach each other, which the zero-fan-in gate
 /// leaves alone.
 fn sbt_meta_build(path: &Path) -> bool {
@@ -2101,13 +2105,13 @@ fn sbt_meta_build(path: &Path) -> bool {
 /// `conf.py` in attrs, rich, bats-core, AutoMapper and
 /// transformer-engine, and `.readthedocs.yaml` names it in click and
 /// rich; `setup.py` is what pip and setuptools run. Reading the stem
-/// instead would have taken kong's `conf.lua` loader and vscode's
+/// instead would take kong's `conf.lua` loader and vscode's
 /// `setup.ts`, which are ordinary modules their neighbours import.
 ///
-/// `*.gemspec` was the third and is deliberately absent: three files in
-/// gold are one, and a build file in their own directory already names
-/// two of them — sinatra's Rakefile writes `task 'rack-protection.gemspec'`
-/// and `task 'sinatra-contrib.gemspec'`. A whole-extension exemption
+/// `*.gemspec` is deliberately absent: three files in gold are one, and
+/// a build file in their own directory already names two of them
+/// (sinatra's Rakefile writes `task 'rack-protection.gemspec'` and
+/// `task 'sinatra-contrib.gemspec'`). A whole-extension exemption
 /// worth one file is not worth its surface.
 fn reserved(name: &str) -> bool {
     matches!(name, "conf.py" | "setup.py")
@@ -2126,8 +2130,8 @@ fn reserved(name: &str) -> bool {
 /// sinatra's opens `Gem::Specification.new 'sinatra', version` and
 /// never assigns a name at all, and rubygems requires the file to be
 /// called after the gem it packages. For a script the gemspec has to
-/// quote both the directory and the file, which is what keeps this
-/// from exempting everything under a `bin/`.
+/// quote both the directory and the file, which keeps this from
+/// exempting everything under a `bin/`.
 fn gem_entry(path: &Path, name: &str) -> bool {
     let Some(stem) = name.strip_suffix(".rb").or(Some(name)) else {
         return false;
@@ -2182,7 +2186,7 @@ fn glob_loaded(path: &Path) -> bool {
     // vitest, tsdown and rolldown in devDependencies AND names each in
     // `scripts`, and every one of those tools reads its own config by
     // name. Zero-fan-in gated rather than a sink, because 55 of the
-    // corpus's 132 config files DO have importers — trpc's per-package
+    // corpus's 132 config files DO have importers: trpc's per-package
     // `vitest.config.ts` files import a shared base.
     segments.any(|s| matches!(s, "stories" | "figma" | "config"))
 }
@@ -2196,20 +2200,20 @@ fn glob_loaded(path: &Path) -> bool {
 /// (`esbuildConfigFileName = forWeb ? 'esbuild.browser.mts' :
 /// 'esbuild.mts'`). 42 gold orphans are one.
 ///
-/// The package root is load-bearing and was measured: without it, a
-/// `util` polyfill in vscode's devDependencies claims all 17 files
-/// named `util.ts` in the tree — 284 matches and 47 orphans. With it
-/// gold offers 177 matches, of which 173 are tool drivers; the other
-/// four are preact demos named after the library they demonstrate
-/// (`demo/mobx.jsx`, `demo/redux.jsx`, `demo/styled-components.jsx`,
-/// `demo/zustand.jsx`). That is the rule's real shape — it keys on "a
-/// declared dependency", not on "a tool" — and those four sit under a
-/// `demo/` directory the one-shot rule already excludes.
+/// The package root is load-bearing: without it, a `util` polyfill in
+/// vscode's devDependencies claims all 17 files named `util.ts` in the
+/// tree, 284 matches and 47 orphans. With it gold offers 177 matches,
+/// of which 173 are tool drivers; the other four are preact demos named
+/// after the library they demonstrate (`demo/mobx.jsx`,
+/// `demo/redux.jsx`, `demo/styled-components.jsx`, `demo/zustand.jsx`).
+/// The rule keys on "a declared dependency" rather than on "a tool",
+/// and those four sit under a `demo/` directory the one-shot rule
+/// already excludes.
 ///
-/// `entryish` and not `glob_loaded`: the two mechanisms remove the same
-/// orphan in every one of the 22 corpora, and the stronger one would
-/// additionally take 63 files out of the judged population and exempt
-/// them from the blocking-async check. Nothing is bought by it.
+/// `entryish` rather than `glob_loaded`: the two mechanisms remove the
+/// same orphan in every one of the 22 corpora, and the stronger one
+/// would additionally take 63 files out of the judged population and
+/// exempt them from the blocking-async check, buying nothing.
 fn tool_driver(path: &Path) -> bool {
     let Some(dir) = path.parent().filter(|d| d.join("package.json").is_file()) else {
         return false;
@@ -2240,9 +2244,9 @@ fn deletability(blasts: &[u32], judged: &[bool]) -> (u32, f64) {
     }
 }
 
-/// Modules with no importers and no entry-point name: count plus a
-/// capped, sorted sample. `judged` excludes the files whose fan-in the
-/// language fixes at zero.
+/// Modules with no importer, no test importer and no entry-point name:
+/// count plus a capped, sorted sample. `judged` excludes the files
+/// whose fan-in the language or the build fixes at zero.
 fn find_orphans(
     files: &[&GraphFacts],
     fan_in: &[u32],
@@ -2261,14 +2265,13 @@ fn find_orphans(
     // production orphans are imported by a mock or a harness. Counted,
     // not listed, because the reader's next question is how many.
     //
-    // An ENTRY POINT its own suite exercises belongs here too. It is not
-    // an orphan — that is what the name says — but it is not nothing
-    // either, and excluding entryish from both buckets counted it
-    // NOWHERE. That erasure is the stated reason dune_root's `(wrapped
-    // false)` clause was refused, and it was shipped anyway everywhere
-    // else: the published-header rule alone took 23 cutlass and
-    // transformer-engine headers that a test does include out of
-    // `tested_only` and reported the loss as collateral.
+    // An ENTRY POINT its own suite exercises belongs here too. It is
+    // not an orphan, which is what the name says, but it is not nothing
+    // either, and excluding entryish from both buckets counts it
+    // NOWHERE. That erasure is why dune_root carries no `(wrapped
+    // false)` clause, and the published-header rule pays it elsewhere:
+    // 23 cutlass and transformer-engine headers that a test does
+    // include leave `tested_only` through it.
     let tested = (0..files.len())
         .filter(|&i| unclaimed(i) && from_tests[i] > 0)
         .count() as u32;
@@ -2295,8 +2298,8 @@ fn orphans_by_language(
         let row = tally.entry(f.lang.name()).or_default();
         // The same question the headline asks, so it must make the same
         // two exclusions: an entry point, and a module its own suite
-        // exercises. Without the second the rows summed to the headline
-        // PLUS `tested_only` — php read 174 against a stated 56.
+        // exercises. Without the second the rows sum to the headline
+        // PLUS `tested_only`: php reads 174 against a stated 56.
         let orphan = fan_in[i] == 0 && from_tests[i] == 0 && !entryish(&f.path);
         row.0 += u32::from(orphan);
         row.1 += 1;
@@ -2431,8 +2434,9 @@ mod tests {
         analyze(files, &Mentions::new()).expect("graph present")
     }
 
-    /// Every listed name mentioned by two files — alive, so dead-export
-    /// detection stays out of the way of the structural assertions.
+    /// Every listed name mentioned by two files, so it reads as alive
+    /// and dead-export detection stays out of the way of the structural
+    /// assertions.
     fn seen(names: &[&str]) -> Mentions {
         names.iter().map(|n| ((*n).into(), 2)).collect()
     }
@@ -2443,11 +2447,11 @@ mod tests {
         // `ethers.deployContract('$ERC20Burnable', ...)` and imports
         // nothing; aave's make-suite.ts imports the names out of the
         // typechain barrel its config declares. Neither directory
-        // exists on disk — both are generated.
+        // exists on disk: both are generated.
         let root = std::env::temp_dir().join(format!("elegance-hardhat-{}", std::process::id()));
         // A monorepo: a root config and a per-package one. The DEEPEST
         // config owns the package, so the package's own `outDir` is
-        // what its tests import from — an ancestor walk that stops at
+        // what its tests import from. An ancestor walk that stops at
         // the first config found reads the wrong one.
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
@@ -2558,9 +2562,9 @@ mod tests {
         // tool reads can name one, and all seven JavaScript orphans in
         // the OCaml corpus were these.
         //
-        // The full NAME, where a module is listed under its stem — and
-        // scoped to the stanza, so a filename mentioned anywhere else
-        // in the dune file states nothing.
+        // A stub is matched by its full NAME where a module is listed
+        // under its stem, and scoped to the stanza, so a filename
+        // mentioned anywhere else in the dune file states nothing.
         let dir = std::env::temp_dir().join(format!("elegance-dune-js-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(
@@ -2625,7 +2629,7 @@ mod tests {
         // `---#if not JIT then DISABLE() end` and `---@meta ffi` is
         // line two; bit.lua, jit*.lua, utf8.lua, table.new/clear.lua
         // and string.buffer.lua are written the same way, and reading
-        // line one alone missed all ten.
+        // line one alone misses all ten.
         let dir = std::env::temp_dir().join("elegance-lua-meta");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -2754,8 +2758,8 @@ mod tests {
     #[test]
     fn a_swiftpm_leaf_target_is_declared_by_its_manifest() {
         // A library target is reached by `import <name>` and the module
-        // fold credits every file in it; an executable has no such name
-        // and `@main` replaced the `main.swift` the fold used to key on.
+        // fold credits every file in it; an executable has no such name,
+        // and `@main` replaced the `main.swift` stem the fold keys on.
         // 21 orphans. The target's own `name:` is read at ARGUMENT
         // level, so the nested `.product(name:)` in the dependency list
         // can never be mistaken for it.
@@ -2773,8 +2777,8 @@ mod tests {
         let _ = std::fs::create_dir_all(dir.join("Sources/stackdiff"));
         let manifest = "let package = Package(targets: [\n  .executableTarget(name: \"stackdiff\", dependencies: []),\n  .target(name: \"NIOCore\"),\n])\n";
         std::fs::write(dir.join("Package.swift"), manifest).unwrap();
-        // Not `main.swift` -- that stem is an entry point on its own,
-        // and `@main` is exactly what replaced it.
+        // Not `main.swift`: that stem is an entry point on its own, and
+        // `@main` is what replaced it.
         assert!(entryish(&dir.join("Sources/stackdiff/StackDiff.swift")));
         assert!(
             !entryish(&dir.join("Sources/NIOCore/Channel.swift")),
@@ -2785,7 +2789,7 @@ mod tests {
 
     #[test]
     fn a_cargo_manifest_names_its_own_targets() {
-        // `[[bin]] path = "fuzz_targets/fuzz_regex_match.rs"` — what
+        // `[[bin]] path = "fuzz_targets/fuzz_regex_match.rs"`: what
         // Cargo builds from one is an artefact nothing links against,
         // reached by a name only the manifest writes. 9 orphans.
         //
@@ -2813,8 +2817,8 @@ mod tests {
     #[test]
     fn a_cfg_test_module_is_reached_by_the_suite_and_not_by_production() {
         // `rayon/src/iter/mod.rs:93` writes `#[cfg(test)]` then
-        // `mod test;`. The pack declines the edge, and rightly — but
-        // the file is not unreferenced either. 6 orphans, routed to
+        // `mod test;`. The pack declines the edge, and rightly. The
+        // file is not unreferenced either. 6 orphans, routed to
         // `tested_only` where they belong.
         assert!(declared_cfg_test("#[cfg(test)]\nmod test;\n", "test"));
         assert!(declared_cfg_test(
@@ -2869,10 +2873,10 @@ mod tests {
     fn a_test_in_the_package_it_exercises_states_no_import() {
         // `src/test/java/io/netty/handler/pcap/PcapWriteHandlerTest.java`
         // declares package `io.netty.handler.pcap` and names
-        // `PcapWriteHandler` bare — Java's default access is exactly
-        // what a same-package test is for. Fourteen of gold Java's
-        // twenty remaining orphans and 58 of Scala's 83 had a test in
-        // their own package and no other reader.
+        // `PcapWriteHandler` bare: Java's default access is what a
+        // same-package test is for. Fourteen of gold Java's twenty
+        // remaining orphans and 58 of Scala's 83 had a test in their
+        // own package and no other reader.
         let mut suite = fixture(Lang::Java, "m/src/test/java/io/pcap/WriterTest.java", &[]);
         suite.is_test = true;
         let public = |path: &str, imports: &[&str]| {
@@ -2904,7 +2908,7 @@ mod tests {
         // tigerbeetle's four `samples/*/src/main/java/Main.java` credited
         // the java client's own root files, and zio's `zio-docs/src/main/
         // scala/utils.scala` was credited by a spec under
-        // `streams-tests` — a different sbt project.
+        // `streams-tests`, a different sbt project.
         let mut entry = fixture(
             Lang::Java,
             "samples/basic/src/main/java/Main.java",
@@ -2917,7 +2921,7 @@ mod tests {
         other.exports = vec!["Client".into()];
         let arch = arch(&[entry, helper, other]);
         // The launcher names the FILE, so an entry point is reached
-        // whether it declares a package or not — and it answers for
+        // whether it declares a package or not, and it answers for
         // nobody else.
         assert_eq!(arch.orphans, ["client/src/main/java/Client.java"]);
     }
@@ -2965,10 +2969,9 @@ mod tests {
         let flat = "zio/streams/shared/src/main/scala-2/zio.stream/ZStreamVersionSpecific.scala";
         assert_eq!(pkg(flat).as_deref(), Some("zio/stream"));
         // Only BELOW the root. `scala-2.13+` is a SOURCE SET, and
-        // splitting the whole path instead shifted the root offset and
-        // put 47 Scala modules — every file under
-        // cats/core/src/main/scala-2.13+ among them — in a package of
-        // their own.
+        // splitting the whole path instead shifts the root offset and
+        // puts 47 Scala modules in a package of their own, every file
+        // under cats/core/src/main/scala-2.13+ among them.
         let set = "cats/core/src/main/scala-2.13+/cats/compat/Seq.scala";
         assert_eq!(pkg(set).as_deref(), Some("cats/compat"));
         // Nothing below the root is the UNNAMED package, which groups
@@ -2980,10 +2983,10 @@ mod tests {
     fn an_sbt_build_definition_is_the_build_rather_than_a_module() {
         // zio/build.sbt opens `import BuildHelper.*`, `import
         // Dependencies.*` and `import MimaSettings.mimaSettings`, and
-        // `.sbt` is not a language this tool reads — so all three are
+        // `.sbt` is not a language this tool reads, so all three are
         // invisible and every helper reads as an orphan.
-        // `project/build.properties` is sbt's launcher-version pin and
-        // is what says sbt compiles the directory.
+        // `project/build.properties` is sbt's launcher-version pin, and
+        // it says sbt compiles the directory.
         let dir = std::env::temp_dir().join("elegance-sbt-meta/project");
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(dir.join("build.properties"), "sbt.version=1.9.7\n").unwrap();
@@ -2998,7 +3001,7 @@ mod tests {
     fn a_dune_file_names_a_module_across_a_newline_a_linker_and_a_rename() {
         // Its OWN directory: `a_manifest_names_the_module_its_library_
         // _is_reached_through` writes a different `dune` to
-        // `elegance-dune-root`, and sharing one made both flaky.
+        // `elegance-dune-root`, and sharing one makes both flaky.
         let dir = std::env::temp_dir().join("elegance-dune-fields");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -3010,7 +3013,7 @@ mod tests {
         };
         // `(names` and then a NEWLINE: containers/fuzz/dune declares its
         // three crowbar targets that way, and a literal `"(names "`
-        // matched none of them.
+        // matches none of them.
         std::fs::write(
             &dune,
             "(executables\n (names\n  ccsexp_parse\n  ccutf8_string)\n (optional))\n",
@@ -3027,7 +3030,7 @@ mod tests {
         .unwrap();
         assert!(root("linker.ml"));
         // A rename names the source outright, and the name must stand on
-        // its own — a `(copy# setup.defaults.ml setup.ml)` says nothing
+        // its own: a `(copy# setup.defaults.ml setup.ml)` says nothing
         // about a file called `defaults.ml`.
         std::fs::write(&dune, "(rule\n (copy# setup.defaults.ml setup.ml))\n").unwrap();
         assert!(root("setup.defaults.ml"));
@@ -3141,13 +3144,13 @@ mod tests {
         // Alamofire's Source/Core/AFError.swift is referenced by 24
         // files in its own target and imported by name from none of
         // them, because Swift has no syntax that would say so. At file
-        // granularity 98% of Swift was orphaned by construction, and Go
-        // sat at 52% for the same reason one tier milder.
+        // granularity 98% of Swift is orphaned by construction, and Go
+        // sits at 52% for the same reason one tier milder.
         //
-        // The odd target out is `Reporter` and not a `Demo`: a demo
-        // target joined the one-shot directories, so it would leave the
-        // population here for a reason that has nothing to do with the
-        // fold this test is about.
+        // The odd target out is `Reporter` rather than a `Demo`: a demo
+        // target is one of the one-shot directories, so it would leave
+        // the population here for a reason that has nothing to do with
+        // the fold this test is about.
         let files = [
             fixture(Lang::Swift, "Sources/App/main.swift", &["NIOCore"]),
             fixture(Lang::Swift, "Sources/Reporter/Server.swift", &["NIOCore"]),
@@ -3188,17 +3191,18 @@ mod tests {
         // file stays in it and stops counting as unreferenced.
         assert_eq!(arch.judged_modules, 5);
         // A module honestly NAMED stories.tsx is not one, and `layout`
-        // outside a route tree is an ordinary module — vscode ships two.
+        // outside a route tree is an ordinary module, of which vscode
+        // ships two.
         assert_eq!(arch.orphans, ["src/layout.tsx", "src/stories.tsx"]);
     }
 
     #[test]
     fn the_per_language_rows_answer_the_same_question_as_the_headline() {
-        // The rows summed to the headline PLUS `tested_only`, because
-        // they made one of its two exclusions and not the other. Gold
-        // php reported 174 orphans across its rows against a stated 56,
-        // and a reader who trusted the breakdown read a rate three
-        // times the one the tool had just printed.
+        // Rows that make one of the headline's two exclusions and not
+        // the other sum to the headline PLUS `tested_only`: gold php
+        // reports 174 orphans across its rows against a stated 56, and
+        // a reader who trusts the breakdown reads a rate three times
+        // the one the tool just printed.
         let mut suite = fixture(Lang::Python, "tests/test_client.py", &["app.testing"]);
         suite.is_test = true;
         let files = [
@@ -3229,7 +3233,7 @@ mod tests {
     fn a_one_shot_name_is_a_directory_or_a_module_suffixed_with_one() {
         // `zio-examples`, `rayon-demo` and `cuda-samples` are the same
         // thing as `examples/` spelled the way a build tool names a
-        // module, and the list only ever matched a whole component.
+        // module, and the list matches only a whole component.
         let files = [
             fixture(Lang::Rust, "src/lib.rs", &["crate::core"]),
             fixture(Lang::Rust, "src/core.rs", &[]),
@@ -3244,12 +3248,12 @@ mod tests {
 
     #[test]
     fn a_test_reaching_a_module_reaches_every_file_of_it() {
-        // `fan_in` was folded over the module and `from_tests` was not,
-        // so a test importing a Go PACKAGE credited only the file
-        // standing for it. go-cmp's `internal/teststructs/` is exactly
-        // that: `compare_test.go` imports the package, and the files the
-        // representative did not stand for read as reached by nobody.
-        // 11 of Go's 15 remaining orphans were this one gap.
+        // Without the same fold on `from_tests`, a test importing a Go
+        // PACKAGE credits only the file standing for it. go-cmp's
+        // `internal/teststructs/` is exactly that: `compare_test.go`
+        // imports the package, and the files the representative does
+        // not stand for read as reached by nobody. 11 of Go's 15
+        // remaining orphans were this one gap.
         const ROOT: &str = "github.com/google/go-cmp/cmp";
         let mut suite = fixture(
             Lang::Go,
@@ -3288,7 +3292,7 @@ mod tests {
             fixture(Lang::Ruby, "tasks/cut_release.rake", &[]),
             fixture(Lang::Elixir, "config/config.exs", &[]),
             // An `.exs` elsewhere is an ordinary script and stays
-            // judged: `config/` is the whole of the claim.
+            // judged: the claim is about `config/` only.
             fixture(Lang::Elixir, "priv/seeds.exs", &[]),
         ];
         let arch = arch(&files);
@@ -3301,7 +3305,7 @@ mod tests {
         // `mix phx.server` resolves `Mix.Tasks.Phx.Server` from the
         // module name, so nothing imports a task. 33 of gold Elixir's
         // 93 orphans were one, and the corpus holds 35 files under
-        // `mix/tasks/` against 35 declaring `Mix.Tasks.` — the same 35,
+        // `mix/tasks/` against 35 declaring `Mix.Tasks.`, the same 35,
         // so the path answers as precisely as the declaration.
         let files = [
             fixture(
@@ -3324,8 +3328,8 @@ mod tests {
     #[test]
     fn a_manifest_names_the_module_its_library_is_reached_through() {
         // `containers/src/core/dune` says `(name containers)`, and
-        // `containers.ml` is what a consumer opens — nothing inside the
-        // project imports it, exactly as nothing imports a `lib.rs`.
+        // `containers.ml` is what a consumer opens. Nothing inside the
+        // project imports it, as nothing imports a `lib.rs`.
         // The name is READ rather than guessed: a library's module is
         // called after the library, not after the directory holding it,
         // and `containers_cbor.ml` sits in `src/cbor`.
@@ -3335,7 +3339,7 @@ mod tests {
         assert!(entryish(&dir.join("containers_cbor.ml")));
         assert!(!entryish(&dir.join("encode.ml")), "an ordinary module");
         // `(names ...)` is the plural, and core's `bench-bin/dune`
-        // declares twelve executables in one stanza — each an entry
+        // declares twelve executables in one stanza, each an entry
         // point, and 23 of OCaml's orphans were among them.
         let many = "(executables (modes byte exe) (names array_iter bench_hashtbl))\n";
         std::fs::write(dir.join("dune"), many).unwrap();
@@ -3357,7 +3361,7 @@ mod tests {
         // them netty's.
         let public = |path: &str, imports: &[&str]| {
             let mut f = fixture(Lang::Java, path, imports);
-            // A public type is what keeps a file in the population; see
+            // A public type keeps a file in the population; see
             // `package_private`.
             f.exports = vec!["Type".into()];
             f
@@ -3371,7 +3375,7 @@ mod tests {
         ];
         let arch = arch(&files);
         // Both leave the population, whether or not their own package
-        // is depended on — the package fold fills the zero for `util`
+        // is depended on: the package fold fills the zero for `util`
         // and not for `unused`, and neither answer is the one to give.
         assert_eq!(arch.judged_modules, 3);
         assert_eq!(
@@ -3387,9 +3391,9 @@ mod tests {
     fn a_translation_unit_is_not_asked_whether_anything_depends_on_it() {
         // kakoune's src/buffer.hh is included by 13 files and buffer.cc
         // by none, because nothing ever includes a .cc. They are one
-        // module and the metric split it, calling half of it dead — 57
-        // of kakoune's 58 translation units are that exact shape, and
-        // 3437 of 3883 across the three C-family corpora.
+        // module, and a metric that splits them calls half of it dead:
+        // 57 of kakoune's 58 translation units are that exact shape,
+        // and 3437 of 3883 across the three C-family corpora.
         //
         // The .cc still supplies the edge that makes the .hh live.
         let files = [
@@ -3468,7 +3472,7 @@ mod tests {
         .expect("graph present");
         let i = &arch.interfaces;
         // Only `a` of 8 exports is ever imported by name (_secret is not
-        // part of the surface — it is a leak).
+        // part of the surface; it is a leak).
         assert_eq!(i.fat[0], ("lib/pkg/util.py".to_string(), 1, 8));
         assert_eq!(i.leak_count, 1);
         assert_eq!(

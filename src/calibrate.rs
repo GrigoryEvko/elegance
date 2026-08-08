@@ -22,7 +22,7 @@ const BAND_HI: f64 = 0.95;
 
 /// Languages that collect INCIDENTALLY: their files count wherever they
 /// are found, whatever the checkout was fetched for. Shell is the only
-/// one, and it is a fact about shell rather than a convenience — 207 of
+/// one, and it is a fact about shell rather than a convenience: 207 of
 /// its 342 corpus files are build and CI scripts living inside the
 /// other checkouts, and gold.toml defends that as how shell genuinely
 /// appears in the world.
@@ -31,18 +31,18 @@ const INCIDENTAL: &[Lang] = &[Lang::Shell];
 /// May this file speak for this language? A corpus laid out as
 /// `<root>/<lang>/<repo>` DECLARES what each repository was fetched
 /// for, and calibration has to respect the declaration or a repo chosen
-/// for one language quietly rewrites another's budgets. Five CUDA
-/// repositories moved 46 budgets in four other languages before this
-/// existed — Python's length p99 from 80 to 252 — because a CUDA
-/// repository is a Python and C++ monorepo with kernels inside.
+/// for one language quietly rewrites another's budgets. Unscoped, five
+/// CUDA repositories move 46 budgets in four other languages — Python's
+/// length p99 from 80 to 252 — because a CUDA repository is a Python
+/// and C++ monorepo with kernels inside.
 ///
-/// It also enforces this file's own four-per-language rule, which was
-/// being met on paper only: tsx held two repos and borrowed the rest of
-/// its evidence from the ts checkouts.
+/// It also enforces gold.toml's four-per-language rule. Unscoped, tsx
+/// meets that rule on paper only: two repos of its own, the rest of its
+/// evidence borrowed from the ts checkouts.
 ///
 /// Only when the layout is recognisable. Someone calibrating their own
 /// tree has no such directories and keeps the pooled behaviour, which
-/// is the right answer there — in a real repository every file is the
+/// is the right answer there: in a real repository every file is the
 /// project's own.
 fn scoped(roots: &[PathBuf], path: &Path, lang: Lang, declared: bool) -> bool {
     if !declared || INCIDENTAL.contains(&lang) {
@@ -56,7 +56,7 @@ fn scoped(roots: &[PathBuf], path: &Path, lang: Lang, declared: bool) -> bool {
     })
 }
 
-/// Does this corpus name its languages — is there a `py/` or a `cpp/`
+/// Does this corpus name its languages? Is there a `py/` or a `cpp/`
 /// directly under a root?
 fn declares_languages(roots: &[PathBuf]) -> bool {
     roots.iter().any(|root| names_a_language(root))
@@ -72,8 +72,8 @@ fn names_a_language(root: &Path) -> bool {
 /// Writing the snapshot anyway replaces every budget with silence: the
 /// file still parses, the build still passes, and all 22 languages fall
 /// back to defaults nobody chose. The usual cause is a path that does
-/// not exist yet — /tmp is cleared on reboot and takes the corpus with
-/// it — and the cost of guessing is every budget in the tool.
+/// not exist yet: /tmp is cleared on reboot and takes the corpus with
+/// it.
 ///
 /// A PARTIAL corpus is the same failure wearing fewer clothes: half a
 /// fetch narrows the table quietly, and the languages that dropped out
@@ -108,7 +108,7 @@ fn may_overwrite(fresh: &str, roots: &[PathBuf]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// `[py]`-style language headers in a snapshot — how much of the table
+/// `[py]`-style language headers in a snapshot: how much of the table
 /// a run actually measured.
 fn section_count(toml: &str) -> usize {
     toml.lines()
@@ -118,7 +118,7 @@ fn section_count(toml: &str) -> usize {
 
 /// Scans the corpus, prints the derived table, and writes
 /// calibration.toml next to the current directory. The snapshot is baked
-/// in at the NEXT build — commit it.
+/// in at the NEXT build, so commit it.
 pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
     let cfg = crate::config::Config::default();
     let files = crate::collect_files(roots, &cfg);
@@ -133,8 +133,8 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
     // `of`, not `from_path`: a C++ header is a `.h`, and pooling it into
     // the `[c]` section would calibrate one language on another's code.
     // Partitioned ONCE, because `of` reads a C-family file to decide its
-    // dialect, and deciding inside a per-language filter read each of
-    // them twelve times over — 27,000 reads of musl alone.
+    // dialect, and deciding inside a per-language filter would read each
+    // of them twelve times over: 27,000 reads of musl alone.
     let mut by_lang: Vec<Vec<PathBuf>> = vec![Vec::new(); LANGS.len()];
     for path in &files {
         if let Some(lang) = Lang::of(path) {
@@ -169,10 +169,10 @@ pub fn run(roots: &[PathBuf]) -> Result<i32, Box<dyn Error>> {
     may_overwrite(&out, roots)?;
     std::fs::write("calibration.toml", &out)?;
     println!("\nwrote calibration.toml — rebuild to bake it in");
-    // A policy the admired corpus fails is a wrong policy — the argument
-    // this project already used to move `demeter` off Calib::Policy.
-    // Reported, not gated: calibration itself succeeded, and only the
-    // ratchet and diff modes may fail a build.
+    // A policy the admired corpus fails is a wrong policy, the argument
+    // that moved `demeter` off Calib::Policy. Reported, not gated:
+    // calibration itself succeeded, and only the ratchet and diff modes
+    // may fail a build.
     if !unpoliced.is_empty() {
         println!(
             "\nPOLICY DEBT — gating budgets the gold corpus itself violates (over {:.0}%):",
@@ -192,7 +192,7 @@ fn lang_section(agg: &mut Agg, lang: Lang) -> String {
     let mut section = String::new();
     for (m, def) in METRICS.iter().enumerate() {
         // Doc length is pinned per ROLE, with a pooled fallback the
-        // thin cells inherit — a loop over one metric at a time cannot
+        // thin cells inherit. A loop over one metric at a time cannot
         // see the pool.
         if crate::metrics::DOC_LENGTH.contains(&m) {
             continue;
@@ -228,16 +228,17 @@ struct Pin {
 
 /// One metric's budget as the corpus sets it, or None where the corpus
 /// cannot speak for it: fewer samples than a percentile needs, a
-/// POLICY no percentile may legitimize, or a p99 of zero — which means
-/// the fact is not extracted for this language (Zig live spans without
-/// def sites), and pinning hi=0 would gate everything the day it is.
+/// POLICY no percentile may legitimize, or a p99 of zero. A p99 of zero
+/// means the fact is not extracted for this language (Zig live spans
+/// without def sites), and pinning hi=0 would gate everything the day
+/// it is.
 fn pinned(def: &crate::metrics::MetricDef, dist: &[f32]) -> Option<Pin> {
     if dist.len() < MIN_SAMPLES || def.calib == Calib::Policy {
         return None;
     }
     let q = |p: f64| crate::report::quantile(dist, p) as f64;
-    // Truthful, and worth saying out loud: a floor of zero can never
-    // fire, so the flank is vacuous by the corpus's own verdict.
+    // A floor of zero can never fire, so the flank is vacuous by the
+    // corpus's own verdict, and the snapshot says so above the entry.
     let vacuous = |text| (q(BAND_LO) == 0.0).then_some(text);
     match def.calib {
         Calib::P99 if q(GOLD_PIN) == 0.0 => None,
@@ -262,11 +263,10 @@ fn pinned(def: &crate::metrics::MetricDef, dist: &[f32]) -> Option<Pin> {
 /// marked.
 ///
 /// A role too thin to hold a percentile INHERITS this language's
-/// pooled doc p99 — Solidity writes 44 module headers in all of gold,
-/// two orders below what a p99 needs — and the entry says so on the
-/// line above it. A silently borrowed budget reads exactly like a
-/// measured one, which is the kind of quiet wrongness the rest of this
-/// file exists to prevent.
+/// pooled doc p99: Solidity writes 44 module headers in all of gold,
+/// two orders below what a p99 needs. The entry says so on the line
+/// above it, because a silently borrowed budget reads like a measured
+/// one.
 ///
 /// Where even the POOL is thin nothing is written at all and the
 /// compiled default stands, which `is_pinned` already renders as a
@@ -319,8 +319,8 @@ fn doc_entries(agg: &mut Agg, lang: Lang) -> String {
 
 /// Gold's coverage share for the rate metrics, baked so that a repo's
 /// own rate renders beside the admired reference. Separate from the
-/// budget loop because it answers a different question — not "how much
-/// is too much" but "how much of admired code bothers".
+/// budget loop because it answers a different question: how much of
+/// admired code bothers, rather than how much is too much.
 fn rate_entries(agg: &mut Agg, lang: Lang) -> String {
     let mut section = String::new();
     for m in crate::metrics::RATE_METRICS {
@@ -345,8 +345,8 @@ fn rate_entries(agg: &mut Agg, lang: Lang) -> String {
 /// What each comment ROLE looks like in this corpus, printed and not
 /// pinned.
 ///
-/// Nothing is calibrated from it yet — doc length and ground density
-/// are the metrics that will be — but the distribution has to be
+/// Nothing is calibrated from these tallies yet; doc length and ground
+/// density are the metrics that will be. The distribution has to be
 /// readable before a budget can be argued about, and a corpus scan is
 /// the only place it can be read. Roles with too few runs to mean
 /// anything stay quiet.
@@ -377,7 +377,7 @@ fn report_comment_roles(agg: &Agg, lang: Lang) {
 const POLICY_CEILING: f64 = 0.01;
 
 /// A suspicion may cry louder than a gate, but a rung-3/4 metric that
-/// admired code fails this often is still measuring taste — the same
+/// admired code fails this often is still measuring taste, the same
 /// argument that turned `asserts` and `public docs` into rates.
 const SUSPICION_CEILING: f64 = 0.05;
 

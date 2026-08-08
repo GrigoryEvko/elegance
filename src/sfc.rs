@@ -2,11 +2,10 @@
 //!
 //! A `.vue` or `.svelte` file is a container, not a language. Its
 //! `<script>` blocks are ordinary TypeScript or JavaScript, and the
-//! whole rest of the file — template, styles — is not something this
-//! tool has anything true to say about. The two frameworks differ in
-//! everything except the part this module cares about: both spell
-//! their code `<script>`, both spell its language `lang=`, and both
-//! put everything else outside those tags.
+//! rest of the file (template, styles) is not something this tool has
+//! anything true to say about. Vue and Svelte agree on the part this
+//! module reads: both spell their code `<script>`, both spell its
+//! language `lang=`, and both put everything else outside those tags.
 //!
 //! No new grammar. The community tree-sitter-vue is stale, and a
 //! container needs no parser: replacing everything outside the script
@@ -16,7 +15,7 @@
 //! because nothing downstream ever learns an offset existed.
 //!
 //! Template expressions (`:prop="expr"`, `@click="handler()"`) are out
-//! of scope in this tier and stated so rather than silently missed.
+//! of scope in this tier.
 
 use crate::lang::Lang;
 

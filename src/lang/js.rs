@@ -72,8 +72,8 @@ pub fn pack() -> Pack {
         reassigns,
         attr,
         scope_sep: ".",
-        // JavaScript has no return-type syntax: the name-contract check
-        // is structurally inapplicable, not merely unimplemented.
+        // JavaScript has no return-type syntax. The name-contract check
+        // is inapplicable here rather than unimplemented.
         return_type_field: "",
         bool_op_field: "operator",
         call_target_fields: &["function"],
@@ -117,7 +117,7 @@ pub fn pack() -> Pack {
         // No type syntax: `return [a, b]` is one value, and the tuple
         // intent a TS annotation would state does not exist here.
         return_arity: |_, _| 0,
-        // No interface declarations at all.
+        // No interface declarations.
         interfaces: |_, _| Vec::new(),
         skips_test: typescript::skips_test,
         magic_exempt: &[
@@ -149,7 +149,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
                 Some("true" | "false")
             ),
             optional: true,
-            // `function f({ a, b } = {})` — a default does not stop the
+            // `function f({ a, b } = {})`: a default does not stop the
             // parameter being a shape.
             destructured: node
                 .child_by_field_name("left")

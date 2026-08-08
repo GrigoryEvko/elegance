@@ -116,13 +116,12 @@ pub fn pack() -> Pack {
         is_hook: |_, _| false,
         return_arity,
         skips_test,
-        // An interface here is a convention — Protocol and ABC are
-        // imports, not syntax — and a class body full of defs cannot
-        // tell a contract from an implementation. Measured before
-        // being left undone: the whole gold corpus holds nine files
-        // declaring a Protocol, which is two orders of magnitude below
-        // the 200-sample floor a budget needs, so the metric could only
-        // ever have reported against a compiled-in default.
+        // An interface here is a convention (Protocol and ABC are
+        // imports, not syntax), and a class body full of defs cannot
+        // tell a contract from an implementation. Gold holds nine files
+        // declaring a Protocol, two orders of magnitude below the
+        // 200-sample floor a budget needs, so the metric could only ever
+        // report against a compiled-in default.
         interfaces: |_, _| Vec::new(),
         magic_exempt: &[
             "default_parameter",
@@ -155,8 +154,8 @@ fn test_path(p: &str) -> bool {
 }
 
 /// `@pytest.mark.skip` and `@unittest.skip` switch a test off for
-/// good. `skipif` is deliberately excluded — a platform or version
-/// guard is stated judgment, and the test still runs where it applies.
+/// good. `skipif` is deliberately excluded: a platform or version guard
+/// is stated judgment, and the test still runs where it applies.
 fn skips_test(node: Node, src: &[u8]) -> bool {
     if node.kind() != "function_definition" {
         return false;
@@ -176,9 +175,9 @@ fn skips_test(node: Node, src: &[u8]) -> bool {
 
 /// The decorator must NAME the skip, not merely contain the word.
 /// `@pytest.mark.skipif` is conditional, and an ALIAS hides the
-/// condition behind a name — rich binds five of them
-/// (`skip_py38 = pytest.mark.skipif(...)`), and every one read as an
-/// unconditional skip while this matched on substring.
+/// condition behind a name: rich binds five of them
+/// (`skip_py38 = pytest.mark.skipif(...)`), and a substring match reads
+/// every one as an unconditional skip.
 fn names_a_skip(decorator: Node, src: &[u8]) -> bool {
     let text = decorator.utf8_text(src).unwrap_or("");
     let head = text
@@ -189,10 +188,10 @@ fn names_a_skip(decorator: Node, src: &[u8]) -> bool {
     head.rsplit('.').next() == Some("skip")
 }
 
-/// The widest tuple any `return` in this unit ships — `return a, b, c`
-/// is the language's multi-value idiom, annotation or not — or what a
-/// `-> tuple[...]` annotation declares, whichever is wider. Nested defs
-/// keep their own returns: the walk stops at inner scope-formers.
+/// The widest tuple any `return` in this unit ships, or what a
+/// `-> tuple[...]` annotation declares, whichever is wider. `return a,
+/// b, c` is the language's multi-value idiom, annotation or not. Nested
+/// defs keep their own returns: the walk stops at inner scope-formers.
 fn return_arity(node: Node, src: &[u8]) -> u16 {
     let declared = node
         .child_by_field_name("return_type")
@@ -253,7 +252,7 @@ fn returned_arity(node: Node) -> u16 {
     widest
 }
 
-/// `import a.b, c as d` and `from ..pkg import x, y as z` — one edge per
+/// `import a.b, c as d` and `from ..pkg import x, y as z`: one edge per
 /// module; relative dots ride along in the target text.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     if let Some(package) = imported_package(node, src) {
@@ -273,7 +272,7 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     }
 }
 
-/// `import a.b, c as d` — one edge per module named.
+/// `import a.b, c as d`: one edge per module named.
 fn plain_imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
@@ -300,7 +299,7 @@ fn one_import(child: Node, src: &[u8]) -> Option<super::ImportInfo> {
     })
 }
 
-/// `from ..pkg import x, y as z` — ONE edge, because one module is
+/// `from ..pkg import x, y as z`: ONE edge, because one module is
 /// named; every local it binds rides along. The leading dots ride along
 /// in the target text. A wildcard binds names nothing can enumerate, so
 /// it contributes none.
@@ -346,7 +345,7 @@ fn doc_span(node: Node, _src: &[u8]) -> Option<(u32, u32)> {
     super::node_span(body.named_child(0).filter(|first| is_doc(*first))?)
 }
 
-/// `f = lambda x: ...` is a named function in disguise — measure it as a
+/// `f = lambda x: ...` is a named function in disguise, measured as a
 /// unit. `cast(T, x)` is Python's only way to overrule the checker.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
@@ -367,7 +366,7 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
 /// `rich/_unicode_data/__init__.py:90` writes
 /// `import_module(f".unicode{version}", "rich._unicode_data")`. The
 /// module cannot be read and the package can, so every module under it
-/// is a candidate -- the directory fan-out, resolved against the
+/// is a candidate: the directory fan-out, resolved against the
 /// package the call names. 22 of Python's 28 orphans sit in that one
 /// package.
 fn imported_package<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
@@ -442,7 +441,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
             splat: true,
             ..Default::default()
         },
-        // `def f((a, b), c)` — legal in Python 2 and still parsed here,
+        // `def f((a, b), c)` is legal in Python 2 and still parsed here,
         // because a repository old enough to write it is exactly the
         // one whose documentation drifted.
         "tuple_pattern" | "list_pattern" => ParamInfo {
@@ -459,10 +458,11 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
 ///
 /// An ANNOTATED splat wraps the other way round: `*args: str` is a
 /// typed_parameter holding a list_splat_pattern, where the bare `*args`
-/// IS the splat. Reading the typed one's first child as a name gave
-/// `*args` — a name no caller can write and no documentation names —
-/// and left a typed `**kwargs` unmarked as a splat at all, so `kw
-/// opacity` was blind to every annotated one.
+/// IS the splat, so the name comes from inside that pattern. Reading
+/// the typed node's first child instead gives `*args`, a name no caller
+/// can write and no documentation names, and leaves a typed `**kwargs`
+/// unmarked as a splat at all, so `kw opacity` never sees an annotated
+/// one.
 fn annotated(node: Node, src: &[u8]) -> ParamInfo {
     let text = |n: Node| n.utf8_text(src).unwrap_or("");
     let inner = |n: Node| n.named_child(0).map(text).unwrap_or("");
@@ -482,7 +482,7 @@ fn annotated(node: Node, src: &[u8]) -> ParamInfo {
     }
 }
 
-/// Is this node the splat itself — `*args` or `**kwargs`?
+/// Is this node the splat itself, `*args` or `**kwargs`?
 fn splat_kind(node: Node) -> bool {
     matches!(
         node.kind(),
@@ -577,7 +577,7 @@ fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
 
 /// Is this argument computed rather than spelled out? An f-string
 /// parses as a `string` node; its interpolation children are what make
-/// it computed — `getattr(o, f"h_{x}")` is as dynamic as `getattr(o, x)`.
+/// it computed: `getattr(o, f"h_{x}")` is as dynamic as `getattr(o, x)`.
 fn is_computed(arg: Node) -> bool {
     if arg.kind() != "string" {
         return true;
@@ -615,7 +615,7 @@ fn in_dynamic_protocol(node: Node, src: &[u8]) -> bool {
 /// `test_connection` health check is neither a test to judge nor test
 /// code to pardon, and a Test*-classed harness in production is a
 /// harness. Test-file helpers (setUp, fixtures) are exempted by the
-/// FILE — declaring them via their class judged every setUp as an
+/// FILE rather than by their class, which would judge every setUp as an
 /// assertless test.
 fn names_test(node: Node, src: &[u8]) -> bool {
     node.child_by_field_name("name")

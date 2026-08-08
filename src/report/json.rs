@@ -9,9 +9,9 @@ use crate::lang::LANGS;
 use crate::metrics::METRICS;
 
 /// 2 added per-language units and per-language violation counts per
-/// metric. Before it, `languages` carried file counts alone — and every
+/// metric. Version 1's `languages` carried file counts alone, and every
 /// metric in this tool is per-unit, so no correct per-language rate
-/// could be derived from what this printed.
+/// could be derived from what it printed.
 pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Serialize)]
@@ -37,7 +37,7 @@ struct Report<'a> {
     clumps: Vec<ClumpOut>,
     /// Case-label sets switched on in >=3 places (repeated dispatch).
     repeated_dispatch: Vec<ClumpOut>,
-    /// Anonymous record shapes built in >=3 places — a type nobody
+    /// Anonymous record shapes built in >=3 places: a type nobody
     /// declared, so nothing checks a typo in its keys.
     undeclared_shapes: Vec<ClumpOut>,
     /// Over-budget units no test mentions (name association, not coverage).
@@ -48,19 +48,19 @@ struct Report<'a> {
     /// Step-down reading order per language (report-only; ecosystems
     /// legitimately differ).
     narrative: Vec<NarrativeOut>,
-    /// Coverage rates (public docs, asserts) beside gold's own rate —
+    /// Coverage rates (public docs, asserts) beside gold's own rate:
     /// the claims demoted from per-unit suspicions.
     coverage_rates: Vec<RateOut>,
     /// Edited copies the Merkle detector cannot see (winnowed overlap).
     near_clones: NearOut,
-    /// Counts per verdict class — deliberately not a score.
+    /// Counts per verdict class, deliberately not a score.
     summary: SummaryOut,
 }
 
 #[derive(Serialize)]
 struct NearOut {
     pairs: Vec<NearPairOut>,
-    /// Fingerprint cores in more units than the idiom cap — unpaired
+    /// Fingerprint cores in more units than the idiom cap: unpaired
     /// for cost, counted for honesty (possible mass duplication).
     suppressed_cores: u32,
     widest_core: u32,
@@ -193,7 +193,7 @@ struct LangOut {
     lang: &'static str,
     files: u32,
     /// Units measured in this language; the top-level `units` is their
-    /// sum. Module scopes are excluded, exactly as they are there.
+    /// sum. Module scopes are excluded here as they are there.
     units: u64,
     /// Metrics this language measured at least once, in registry order.
     metrics: Vec<LangMetric>,
@@ -202,7 +202,7 @@ struct LangOut {
 /// What one metric did in one language. `measured` is the honest
 /// denominator: it counts the measurements that metric actually made
 /// there, which for most metrics is narrower than the language's unit
-/// count — module scopes, test bodies and untyped languages are skipped
+/// count. Module scopes, test bodies and untyped languages are skipped
 /// by different metrics for different reasons.
 #[derive(Serialize)]
 struct LangMetric {
@@ -355,9 +355,7 @@ fn clone_section(agg: &mut Agg) -> (Clones, super::Duplication) {
     (clones, dup)
 }
 
-/// Per-metric distribution rows, in registry order, skipping metrics
-/// this run never measured.
-/// Near-duplicate pairs, with the overlap stated as a percentage.
+/// Orphans and judged modules for one language.
 #[derive(Serialize)]
 struct LangOrphans {
     lang: &'static str,
@@ -365,6 +363,7 @@ struct LangOrphans {
     judged: u32,
 }
 
+/// Near-duplicate pairs, with the overlap stated as a percentage.
 fn near_out(agg: &mut Agg) -> NearOut {
     let near = crate::near::pairs(agg.prints.read(), usize::MAX);
     NearOut {
@@ -398,6 +397,8 @@ fn narrative_out(agg: &mut Agg) -> Vec<NarrativeOut> {
         .collect()
 }
 
+/// Per-metric distribution rows, in registry order, skipping metrics
+/// this run never measured.
 fn metric_rows(agg: &mut Agg) -> Vec<Metric> {
     let mut metrics = Vec::new();
     for (m, def) in METRICS.iter().enumerate() {

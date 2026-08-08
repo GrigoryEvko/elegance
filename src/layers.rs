@@ -5,8 +5,8 @@
 //! about a graph is not a verdict about a design. A CONTRACT is
 //! different. When a repository declares that its products never import
 //! each other, an import between them is not a heuristic finding at a
-//! calibrated threshold; it is the stated rule, broken, and certainty
-//! is what a gate is made of.
+//! calibrated threshold. It is the stated rule, broken, and gating
+//! needs certainty of that kind.
 //!
 //! This is the shape teams already enforce by hand. A monorepo with
 //! isolated products checks it with a bespoke script that re-implements
@@ -14,8 +14,8 @@
 //! graph, so the check costs a set lookup per edge.
 //!
 //! Unresolved imports are never judged. A path assembled at run time
-//! resolves to nothing, and a contract check that guesses would be
-//! exactly the kind of claim the Helm tier refused to make.
+//! resolves to nothing, and a contract check that guesses would be the
+//! kind of claim the Helm tier refused to make.
 
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -28,9 +28,9 @@ use crate::graph::GraphFacts;
 #[derive(Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Layer {
-    /// Path prefixes, relative to the scan root. A file belongs to the
-    /// layer with the LONGEST matching prefix, so `src/ui/widgets` can
-    /// carve itself out of `src/ui`.
+    /// Path fragments, matched anywhere in a file's path. A file
+    /// belongs to the layer with the LONGEST matching fragment, so
+    /// `src/ui/widgets` can carve itself out of `src/ui`.
     pub paths: Vec<String>,
     /// Layers this one may import, by name. Absent means "none": an
     /// isolated product declares nothing and reaches nothing.
@@ -46,8 +46,8 @@ pub struct Breach {
     pub to_layer: String,
 }
 
-/// Which layer a file belongs to: longest matching prefix wins, and a
-/// file in no declared layer is unjudged rather than guessed at.
+/// Which layer a file belongs to: longest matching fragment wins, and
+/// a file in no declared layer is unjudged rather than guessed at.
 fn layer_of<'a>(
     layers: &'a std::collections::HashMap<String, Layer>,
     path: &std::path::Path,
@@ -69,8 +69,8 @@ fn layer_of<'a>(
 }
 
 /// Every import the declared contract forbids. Both endpoints must sit
-/// in declared layers, and the edge must have RESOLVED — a guess is
-/// not a breach.
+/// in declared layers, and the edge must have RESOLVED. A target the
+/// resolver could only guess at is not a breach.
 pub fn breaches(
     layers: &std::collections::HashMap<String, Layer>,
     files: &[GraphFacts],
@@ -225,7 +225,7 @@ mod tests {
             file("src/gallery/view.ts", [].as_ref()),
         ];
         assert_eq!(breaches(&contract(), &files).len(), 1);
-        // A file in no declared layer is never judged — the contract
+        // A file in no declared layer is never judged: the contract
         // says nothing about it, so neither does this.
         let files = vec![
             file("scripts/build.ts", ["../src/gallery/view"].as_ref()),

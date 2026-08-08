@@ -34,8 +34,7 @@ const KINDS: &[(&str, Sem)] = &[
     ("false", Sem::BoolLit),
     ("break_statement", Sem::Jump),
     ("return_statement", Sem::Jump),
-    // The one language here with a real `goto`, and the metric that
-    // names it exists because of languages like this one.
+    // `goto` is the flat +1 the Sem::Goto variant exists for.
     ("goto_statement", Sem::Goto),
 ];
 
@@ -52,7 +51,7 @@ const DEF_SITES: &[(&str, &str)] = &[
 /// of a name that is already bound arrives through this one kind.
 const REASSIGNS: &[(&str, &str)] = &[("assignment_statement", "")];
 
-/// `a.b` — the only member access the language has. `a:b()` is a call.
+/// `a.b` is the only member access the language has; `a:b()` is a call.
 const ATTR: (&str, &str) = ("dot_index_expression", "table");
 
 pub fn pack() -> Pack {
@@ -79,7 +78,7 @@ pub fn pack() -> Pack {
         call_target_fields: &["name"],
         types_declared: false,
         record_keys,
-        // `pcall` is the whole error story and there is no scope guard,
+        // `pcall` is the error mechanism and there is no scope guard,
         // so a resource is released by the line that remembers to.
         // Coroutines are a library, not syntax.
         is_async: |_, _| false,
@@ -118,10 +117,10 @@ pub fn pack() -> Pack {
         },
         // Read the WHOLE callee, not its trailing segment: busted spells
         // every assertion `assert.same`, `assert.is_true`, `assert.falsy`,
-        // and stripping to the last segment left `same`/`is_true`/`falsy`,
-        // none of which is assertish. Only a bare `assert(...)` survived,
-        // which is why 872 of the 893 gold Lua tests reported as asserting
-        // nothing were asserting.
+        // and the last segment alone is `same`/`is_true`/`falsy`, none of
+        // which is assertish. On the segment only a bare `assert(...)`
+        // reads as an assertion, and 872 of the 893 gold Lua tests that
+        // then report asserting nothing are asserting.
         asserty: |call, src| callee_qualified(call, src).is_some_and(super::assertish),
         is_hook: |_, _| false,
         // Multiple returns are the language's ordinary idiom and carry
@@ -299,7 +298,7 @@ fn callee_text<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
     Some(text.rsplit(['.', ':']).next().unwrap_or(text))
 }
 
-/// The callee text with its qualifier intact — what a rule about the
+/// The callee text with its qualifier intact: what a rule about the
 /// NAMESPACE a call comes from has to read.
 fn callee_qualified<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
     call.child_by_field_name("name")?.utf8_text(src).ok()
@@ -318,14 +317,15 @@ fn first_string(call: Node, src: &[u8]) -> Option<String> {
 ///
 /// `kong/db/migrations/core/init.lua` returns
 /// `{"000_base", "003_100_to_110", ...}` and a migration runner
-/// requires each beside it; every one of kong's 24 core migrations and
-/// the 39 its plugins ship read as depended on by nothing. A registry
-/// is a LIST, and asking for two is what separates one from a lone
+/// requires each beside it. Unread, every one of kong's 24 core
+/// migrations and the 39 its plugins ship is depended on by nothing. A
+/// registry is a LIST, and asking for two separates one from a lone
 /// string that happens to share a sibling's name.
+///
 /// A field's VALUE is its last named child, whatever precedes it.
-/// Reading the first instead read `["migrations"] = "..."` as the name
-/// `migrations` and `name = "core"` as the name `name`, so the whole
-/// keyed half of the corpus's registries said nothing:
+/// Reading the first instead reads `["migrations"] = "..."` as the name
+/// `migrations` and `name = "core"` as the name `name`, which leaves
+/// every keyed registry in the corpus stating nothing:
 /// `kong/db/migrations/subsystems.lua` returns
 /// `{ name = "core", namespace = "kong.db.migrations.core" }` and
 /// `db/migrations/state.lua:98` does `require(ss.namespace)`.
@@ -373,8 +373,8 @@ fn is_the_module(table: Node) -> bool {
 }
 
 /// The module name a format template builds, with `*` where the source
-/// stops being able to say — the same reading `..` already gets, for
-/// the spelling `string.format` gives it.
+/// stops being able to say: the same reading `..` already gets, for the
+/// spelling `string.format` gives it.
 ///
 /// `kong/db/strategies/init.lua:24` is
 /// `require(fmt("kong.db.strategies.%s.connector", database))`, `:27`
@@ -385,7 +385,7 @@ fn is_the_module(table: Node) -> bool {
 /// `("luarocks.fs.%s.tools"):format(...)`, and the template says the
 /// same thing either way.
 ///
-/// The separator before the first hole is the whole filter. 67 strings
+/// The separator before the first hole is the only filter. 67 strings
 /// in 30 files pass it, and the ones that are not module paths cost
 /// nothing: kong's URL patterns `"/%s"` and `"/%s/:%s"`
 /// (api/endpoints.lua:747,755) reduce to a leading star, which
@@ -415,9 +415,9 @@ fn templated(args: Node, src: &[u8]) -> Option<String> {
 ///
 /// `c/lua/testes/all.lua` is 28 `dofile('...')` lines — `dofile('main.lua')`,
 /// `assert(dofile('attrib.lua') == 27)` — and is the only file naming
-/// any of them, so Lua's own test suite read as 29 files nothing
-/// referenced. The `.lua` requirement is what separates a module from
-/// the suite's other arguments to the same call: gold's literals also
+/// any of them, so unread Lua's own test suite is 29 files nothing
+/// references. The `.lua` requirement separates a module from the
+/// suite's other arguments to the same call: gold's literals also
 /// include `"nomenaoexistente"` and `"# a non-ending comment"`, which
 /// are inputs to an error path rather than files.
 fn loaded_file(args: Node, src: &[u8]) -> Option<String> {
@@ -442,8 +442,8 @@ fn loaded_file(args: Node, src: &[u8]) -> Option<String> {
 /// and only the middle is not. The prefix must end at a separator; a
 /// concatenation starting anywhere else states no path at all.
 ///
-/// The suffix is what tells kong's 150 plugin DIRECTORIES apart from
-/// the files inside them: nothing sits directly under `kong/plugins`,
+/// The suffix tells kong's 150 plugin DIRECTORIES apart from the files
+/// inside them: nothing sits directly under `kong/plugins`,
 /// so the prefix alone reaches nothing while `kong.plugins.*.handler`
 /// names 35 real files.
 fn concatenated(node: Node, src: &[u8]) -> Option<String> {
@@ -473,11 +473,10 @@ fn concatenated(node: Node, src: &[u8]) -> Option<String> {
 /// `kong/observability/tracing/propagation/init.lua:16` writes
 /// `local INJECTORS_PATH = "kong.observability.tracing.propagation.injectors."`
 /// and `:148` writes `require(INJECTORS_PATH .. injector_m)`; the eight
-/// injectors it loads are named nowhere else. This is the narrow form
-/// of a rule that was already rejected in its broad shape — "a
-/// standalone string ending in a separator is a glob prefix" covered
-/// 218 files for the same 8 orphans — and narrowing it to a name a load
-/// actually concatenates leaves one call site in the whole corpus.
+/// injectors it loads are named nowhere else. The rule is narrow by
+/// design: reading any standalone string that ends in a separator as a
+/// glob prefix covers 218 files for the same 8 orphans, while requiring
+/// a name a load concatenates leaves one call site in the whole corpus.
 fn file_scope_string(name: Node, src: &[u8]) -> Option<String> {
     let wanted = name.utf8_text(src).ok()?;
     let mut chunk = name;
@@ -497,7 +496,7 @@ fn file_scope_string(name: Node, src: &[u8]) -> Option<String> {
         })
 }
 
-/// The far end of a concatenation's spine — the outermost literal on
+/// The far end of a concatenation's spine: the outermost literal on
 /// one side, which is as far as the source keeps saying.
 fn spine<'t>(mut node: Node<'t>, side: &str) -> Node<'t> {
     while node.kind() == "binary_expression" {
@@ -519,7 +518,7 @@ fn quoted<'a>(node: Node, src: &'a [u8]) -> &'a str {
 ///
 /// `rawget`/`rawset` are deliberately NOT here: they bypass a metatable
 /// EXPLICITLY, and an object system written by hand is where that form
-/// belongs. Counting them scored Penlight's class module at 22.
+/// belongs. Counting them scores Penlight's class module at 22.
 fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
     sem == Sem::Call
         && matches!(
@@ -554,10 +553,11 @@ fn record_keys(node: Node, src: &[u8]) -> Option<Vec<Box<str>>> {
 }
 
 /// busted and its ancestors all spell a test the same way: a call to
-/// `it` or `describe` taking a name and a function. The test is that
-/// FUNCTION — the same shape jest gives TypeScript — so the evidence is
-/// read from the call the body was handed to, and `refine` promotes the
-/// body to a unit so there is something to judge.
+/// `it`, `describe` or a sibling of theirs, taking a name and a
+/// function. The test is that FUNCTION — the same shape jest gives
+/// TypeScript — so the evidence is read from the call the body was
+/// handed to, and `refine` promotes the body to a unit so there is
+/// something to judge.
 fn declaring_test<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let args = node.parent().filter(|p| p.kind() == "arguments")?;
     let call = args.parent().filter(|c| c.kind() == "function_call")?;
@@ -594,7 +594,7 @@ fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
 /// A table LISTING names is how Lua writes a registry, and the names
 /// are not otherwise said anywhere; an argument list holds a format
 /// template or a `dofile` path. Both kinds are unmapped, so promoting
-/// either costs nothing — the table's strings stay strings for the
+/// either costs nothing: the table's strings stay strings for the
 /// secret, repetition and clone checks, and `dofile` stays a call for
 /// the spooky one.
 fn states_a_module(node: Node, src: &[u8]) -> bool {
@@ -605,10 +605,9 @@ fn states_a_module(node: Node, src: &[u8]) -> bool {
     }
 }
 
-/// Two normalizations. `elseif` is its own kind here rather than a
-/// nested if, so it needs no flattening — but `and`/`or` share the
-/// binary kind with every arithmetic operator, and only those two
-/// sequence a condition.
+/// `elseif` is its own kind here rather than a nested if, so it needs
+/// no flattening. `and`/`or` share the binary kind with every
+/// arithmetic operator, and only those two sequence a condition.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
         // A busted test is an anonymous function handed to `it`; without
@@ -625,10 +624,9 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
             _ => Sem::None,
         },
         Sem::None if states_a_module(node, src) => Sem::Import,
-        // Lua's import is a CALL, and the core asks about imports at
-        // `Sem::Import` nodes — so until this arm existed the pack's
-        // `imports` hook was written, tested and never once asked, and
-        // Lua had no module graph at all.
+        // Lua's import is a CALL and the core asks about imports at
+        // `Sem::Import` nodes, so without this arm the pack's `imports`
+        // hook is never once asked and Lua has no module graph.
         Sem::Call if requires(node, src) => Sem::Import,
         // `return` at the tail of a chunk is the module's export, not a
         // jump out of control flow.
@@ -664,9 +662,9 @@ mod tests {
     fn a_registry_reads_a_fields_value_and_keeps_its_dots() {
         // kong/db/migrations/subsystems.lua returns exactly this, and
         // db/migrations/state.lua:98 does `require(ss.namespace)`.
-        // Reading the field's FIRST child took the key `name`, and
-        // rejecting a dot dropped the namespace itself, so the whole
-        // keyed half of the corpus's registries said nothing.
+        // Reading the field's FIRST child takes the key `name`, and
+        // rejecting a dot drops the namespace itself, which leaves
+        // every keyed registry in the corpus stating nothing.
         let src = "return {\n  { name = \"core\", namespace = \"kong.db.migrations.core\" },\n  { name = \"acl\", namespace = \"kong.plugins.acl.migrations\" },\n}\n";
         assert_eq!(
             imports_of(src),
@@ -738,7 +736,7 @@ mod tests {
     #[test]
     fn a_tests_directory_is_test_code_like_a_test_directory() {
         // Penlight files its suite under tests/, and matching only
-        // /test/ left 43 of its 115 modules counted as production.
+        // /test/ counts 43 of its 115 modules as production.
         let is_test = super::pack().test_path;
         for p in [
             "Penlight/tests/test-pretty.lua",

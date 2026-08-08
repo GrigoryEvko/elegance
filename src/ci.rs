@@ -1,30 +1,30 @@
 //! The shell that provisions production, hiding inside other formats.
 //!
 //! A GitHub Actions `run:` block and a Dockerfile `RUN` line are shell
-//! scripts. They deploy, they build, they hold credentials — and they
+//! scripts. They deploy, they build, they hold credentials, and they
 //! are reviewed less than any source file, because the file they live
-//! in is "configuration". Nothing was measuring them.
+//! in is "configuration".
 //!
 //! Same container contract the Vue pack established: blank everything
-//! that is not shell, keep the rest exactly where it was, and every
-//! line number stays true with no offset bookkeeping anywhere
-//! downstream. No YAML parser is involved — a block scalar is defined
-//! by indentation, which is a line-shaped fact, and the structural
-//! parse would throw away the line numbers a finding needs.
+//! that is not shell, keep the rest where it was, and every line
+//! number stays true with no offset bookkeeping anywhere downstream.
+//! No YAML parser is involved: a block scalar is defined by
+//! indentation, which is a line-shaped fact, and the structural parse
+//! would throw away the line numbers a finding needs.
 //!
-//! Scope, stated rather than silently missed:
+//! Scope:
 //! - `.github/workflows/` ONLY. A Helm chart is also YAML and belongs
 //!   to `--helm`, which measures it as configuration rather than code.
 //! - Dockerfile `RUN` in SHELL form. The exec form (`RUN ["a", "b"]`)
 //!   is a JSON array that never reaches a shell.
 //! - `ENV`/`ARG` keep their `NAME=value` bodies, which are already
-//!   shell assignments — so the credential detector reads a
+//!   shell assignments, so the credential detector reads a
 //!   Dockerfile's baked-in secrets for free.
 
 /// A file whose code is written in another file's format.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Container {
-    /// A single-file component — Vue or Svelte — whose code lives in
+    /// A single-file component (Vue or Svelte) whose code lives in
     /// `<script>` blocks inside markup.
     Component,
     /// A GitHub Actions workflow: shell inside `run:` blocks.
@@ -61,7 +61,7 @@ impl Container {
 }
 
 /// The shell inside a workflow's `run:` blocks, everything else blank.
-/// `None` when the workflow runs no shell at all — a purely
+/// `None` when the workflow runs no shell at all: a purely
 /// `uses:`-driven pipeline has nothing here to measure.
 pub fn shell_of_workflow(source: &str) -> Option<String> {
     let mut kept = false;
@@ -119,10 +119,10 @@ fn indent_of(line: &str) -> usize {
 }
 
 /// GitHub's `${{ matrix.target }}` is interpolated BEFORE a shell ever
-/// sees the script, and it is not shell — bash reads `${` then `{`
-/// and gives up. Left in, this repository's own release workflow came
-/// back unparseable, and so would every workflow that uses a matrix,
-/// a secret or an env expression, which is most of them.
+/// sees the script, and it is not shell: bash reads `${` then `{` and
+/// gives up. Left in, it makes this repository's own release workflow
+/// unparseable, along with every workflow that uses a matrix, a secret
+/// or an env expression, which is most of them.
 ///
 /// Each expression becomes an underscore run of the SAME LENGTH: a
 /// valid shell word, so the surrounding script parses, and no column
@@ -231,9 +231,9 @@ mod tests {
     #[test]
     fn a_github_expression_is_not_shell_and_must_not_break_the_parse() {
         // `${{ }}` is interpolated before a shell exists. Left in, it
-        // makes the script unparseable — this repository's own release
-        // workflow was low-confidence until this landed, and so would
-        // be every workflow using a matrix, a secret or an env.
+        // makes the script unparseable: this repository's own release
+        // workflow reads low-confidence, and so does every workflow
+        // using a matrix, a secret or an env.
         let wf = "jobs:\n  b:\n    steps:\n      - run: |\n          BIN=target/${{ matrix.target }}/release/elegance\n          strip \"$BIN\"\n";
         let shell = shell_of_workflow(wf).expect("has a run block");
         assert!(!shell.contains("${{"), "the expression is gone");
@@ -243,7 +243,7 @@ mod tests {
             shell.lines().nth(4).unwrap().len(),
             wf.lines().nth(4).unwrap().len()
         );
-        // And what is left is shell the pack can read.
+        // The remainder is shell the pack can read.
         let pack = crate::lang::Lang::Shell.pack();
         let mut parser = pack.make_parser();
         let f = crate::facts::extract(pack, &mut parser, Path::new("ci.yml"), &shell);
@@ -256,7 +256,7 @@ mod tests {
             shell_of_workflow("name: ci\njobs:\n  a:\n    steps:\n      - uses: x@v1\n").is_none(),
             "a uses-only pipeline runs no shell"
         );
-        // Only .github/workflows — a Helm chart is --helm's business.
+        // Only .github/workflows; a Helm chart is --helm's business.
         assert_eq!(
             Container::of(Path::new("chart/values-prod.yaml")),
             None,

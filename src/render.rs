@@ -3,27 +3,26 @@
 //! `--helm` reports what a chart says without evaluating it, because
 //! evaluating it statically is impossible: aliasing, computed access
 //! and helper indirection defeat every static reading (48 findings on
-//! a real chart, zero true — see the helm module).
+//! a real chart, zero true; see the helm module).
 //!
-//! The way past that is not a cleverer analysis. It is to stop
-//! analysing the template and read what it PRODUCES: `helm template`
-//! resolves every indirection by running them, and hands back plain
-//! manifests where a resource's shape is simply visible. It is the
-//! same call the C pack makes about macros — measure what you can
-//! actually read, and say so when you cannot.
+//! No cleverer static reading gets past that. `helm template` runs the
+//! indirections instead and hands back plain manifests, where a
+//! resource's shape is visible. It is the same call the C pack makes
+//! about macros: measure what you can read, and say so when you
+//! cannot.
 //!
-//! What that makes decidable, and nothing else does:
+//! Rendering decides what no reading of the template can:
 //!
-//! - CROSS-ENVIRONMENT DRIFT in the artifacts that actually ship. Not
-//!   which values a file sets, but which resources each environment
-//!   ends up with, and which of them differ.
+//! - CROSS-ENVIRONMENT DRIFT in the artifacts that ship: which
+//!   resources each environment ends up with, and which of them
+//!   differ, rather than which values a file sets.
 //! - CREDENTIALS that a template injected from its values, invisible
 //!   in both the template and the values file on their own.
 //! - RESOURCE SHAPE: what a rendered container declares.
 //!
 //! Report-only, always. Nothing here gates and nothing enters language
 //! calibration: a manifest is not code, and letting it move a
-//! cognitive budget would be a category error of its own.
+//! cognitive budget would be a category error.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -34,7 +33,7 @@ use std::process::Command;
 /// Resources shown before the list stops being read.
 const SHOW: usize = 12;
 
-/// One rendered resource, keyed the way Kubernetes itself keys them.
+/// One rendered resource, keyed the way Kubernetes keys resources.
 struct Resource {
     kind: String,
     name: String,
@@ -141,9 +140,9 @@ fn render_one(chart: &Chart, values: &Path) -> Result<Vec<Resource>, String> {
 }
 
 /// Rendered manifests, split on document boundaries. A hand-rolled
-/// scalar reader rather than a YAML parse: what this needs is a
-/// resource's identity and its flat scalars, and reading them by line
-/// keeps the credential scan working on the text that actually shipped.
+/// scalar reader rather than a YAML parse: a resource's identity and
+/// its flat scalars are all this needs, and reading them line by line
+/// keeps the credential scan on the text that shipped.
 fn parse_manifests(text: &str) -> Vec<Resource> {
     let mut found = Vec::new();
     for doc in text.split("\n---") {
@@ -212,8 +211,8 @@ fn render_chart(chart: &Chart, out: &mut String) {
     render_secrets(&rendered, out);
 }
 
-/// Which resources each environment ends up with — the artifacts that
-/// actually ship, not the values that were set. A resource present in
+/// Which resources each environment ends up with: the artifacts that
+/// ship, rather than the values that were set. A resource present in
 /// one environment and missing from another is a difference no values
 /// diff shows, because it may come from a conditional in a template.
 fn render_drift(rendered: &[(String, Vec<Resource>)], out: &mut String) {
@@ -271,9 +270,9 @@ fn leaked_keys(r: &Resource) -> Vec<&str> {
         .collect()
 }
 
-/// Credentials the TEMPLATE injected. Invisible in the template (it
-/// holds a reference) and invisible in the values file (it holds a
-/// fragment) — visible only here, in what shipped.
+/// Credentials the TEMPLATE injected. The template holds a reference
+/// and the values file holds a fragment, so the credential is visible
+/// only here, in what shipped.
 fn render_secrets(rendered: &[(String, Vec<Resource>)], out: &mut String) {
     let mut found: BTreeSet<String> = BTreeSet::new();
     for (env, resources) in rendered {

@@ -3,9 +3,9 @@
 //! A flat offender list is the wrong shape for a monorepo: the worst
 //! twenty units may all sit in one package nobody on your team owns, and
 //! the list gives no way to see that. Rolling findings up to a directory
-//! answers the question a team lead actually asks — which part of this
-//! tree is in trouble — and it does it without a new measurement, since
-//! every violation already carries a path.
+//! answers the question a team lead asks, which part of this tree is in
+//! trouble, and costs no new measurement, since every violation already
+//! carries a path.
 //!
 //! Density, not totals: a big directory has more of everything. The
 //! ranking is violations per file, so a small rotten package outranks a
@@ -21,8 +21,8 @@ use crate::report::Agg;
 /// Directories shown; beyond this nobody re-plans their week.
 const SHOW: usize = 15;
 
-/// A directory needs this many files before its rate means anything —
-/// one file with one violation is a 100% rate and says nothing.
+/// A directory needs this many files before its rate means anything.
+/// One file with one violation is a 100% rate and says nothing.
 const MIN_FILES: u32 = 3;
 
 #[derive(Default)]
@@ -30,7 +30,8 @@ struct Dir {
     files: u32,
     gates: u32,
     suspicions: u32,
-    /// The metric contributing the most gated violations here.
+    /// Gated violations here, counted per metric. The largest count
+    /// names the directory's driver.
     worst: HashMap<&'static str, u32>,
 }
 
@@ -108,8 +109,8 @@ fn render(dirs: HashMap<String, Dir>, show: usize) -> String {
     if ranked.is_empty() {
         return "rollup — no directory carries a gated violation\n".to_string();
     }
-    // Worst first, ties broken by gate count then by name so the
-    // order never depends on the map's.
+    // Worst first, ties broken by gate count then by name, so the
+    // order never depends on the map's iteration order.
     ranked.sort_by(|(a_dir, a), (b_dir, b)| {
         b.density()
             .total_cmp(&a.density())

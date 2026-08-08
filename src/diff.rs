@@ -1,7 +1,7 @@
-//! Diff-time findings: violations only on units the change actually
-//! touched, capped and ranked. Engineers act on findings about code they
-//! just wrote, at the moment they wrote it — batch reports get archived,
-//! diff findings get fixed.
+//! Diff-time findings: violations only on units the change touched,
+//! capped and ranked. Engineers act on findings about code they just
+//! wrote, at the moment they wrote it. Batch reports get archived.
+//! Diff findings get fixed.
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -12,8 +12,8 @@ use crate::metrics::{LangBudgets, METRICS};
 use crate::report::Agg;
 use crate::{config, facts, metrics};
 
-/// The cap findings never exceed on screen; beyond it, engineers triage
-/// nothing at all.
+/// The cap on findings shown at once. Past it, a list stops being
+/// triaged.
 const SHOW: usize = 10;
 
 struct Finding {
@@ -30,15 +30,16 @@ struct Finding {
     lang: &'static str,
     /// Position in this repository's own SAME-LANGUAGE distribution,
     /// when there are enough measurements for a percentile to mean
-    /// anything. Mixing languages positioned a C function against a
-    /// Python-heavy curve and called it "of repo".
+    /// anything. One mixed distribution would position a C function
+    /// against a Python-heavy curve and label it "of repo".
     repo_pctl: Option<u8>,
     /// The named refactoring this finding calls for, where the facts
     /// justify naming one.
     suggest: Option<String>,
 }
 
-/// Returns the process exit code: 0 when the change adds no violations.
+/// Returns the process exit code: 0 when the change adds no violation
+/// at or below `max_rung`.
 pub fn run(
     reference: &str,
     root: &Path,
@@ -49,8 +50,8 @@ pub fn run(
     let mut files_seen = 0u32;
     // A budget is a ceiling; a position says whether this unit reads like
     // the codebase or like its ugliest tail. That needs the whole repo's
-    // SAME-LANGUAGE distribution, so this is a second scan — cached by
-    // content, since a pre-commit hook pays it on every commit.
+    // SAME-LANGUAGE distribution, so this is a second scan, cached by
+    // content because a pre-commit hook pays it on every commit.
     let cfg = config::Config::load(root)?;
     let all = crate::collect_files(std::slice::from_ref(&root.to_path_buf()), &cfg);
     let mut review = Review {
@@ -113,11 +114,11 @@ pub fn run(
     Ok(1)
 }
 
-/// Every metric value in the repository, for positioning — one
+/// Every metric value in the repository, for positioning: one
 /// distribution PER LANGUAGE, because a repository's Python p90 says
-/// nothing about how its C reads. Only the distributions are populated
-/// — see cache.rs for why this deliberately cannot serve the full
-/// report.
+/// nothing about how its C reads. Only the distributions are
+/// populated. See cache.rs for why this deliberately cannot serve the
+/// full report.
 fn distributions(files: &[std::path::PathBuf], budgets: LangBudgets, root: &Path) -> Vec<Agg> {
     let mut cache = crate::cache::Cache::load(root);
     let mut per: Vec<Agg> = crate::lang::LANGS
@@ -175,7 +176,7 @@ struct Review {
 
 impl Review {
     /// Measure one changed file, keeping violations on units the change
-    /// actually touched. Returns whether the file was analyzable at all.
+    /// touched. Returns whether the file was source this tool reads.
     fn collect(&mut self, path: &Path, ranges: &LineRanges) -> bool {
         let Ok(source) = std::fs::read_to_string(path) else {
             return false;
@@ -247,14 +248,12 @@ impl Review {
 /// Inclusive 1-based line ranges on the new side of a diff.
 type LineRanges = Vec<(u32, u32)>;
 
-/// Changed files (post-image, tracked) with their changed line ranges in
-/// the new revision.
-/// Changed files and their new-side line ranges. The reference reaches
-/// git VERBATIM, which is what makes `origin/main...HEAD` work: git
-/// resolves three dots to the merge base, so a pull request is judged
-/// on what it added rather than on everything main merged meanwhile.
-/// `HEAD` with no dots compares against the working tree, which is
-/// what a pre-commit hook wants.
+/// Changed files (post-image, tracked) with their new-side line
+/// ranges. The reference reaches git VERBATIM, so `origin/main...HEAD`
+/// works: git resolves three dots to the merge base, and a pull
+/// request is judged on what it added rather than on everything main
+/// merged meanwhile. `HEAD` with no dots compares against the working
+/// tree, which is what a pre-commit hook wants.
 fn changed_files(
     root: &Path,
     reference: &str,
@@ -283,7 +282,8 @@ fn parse_hunks(diff: &str) -> Vec<(u32, u32)> {
             let mut it = plus[1..].split(',');
             let start: u32 = it.next()?.parse().ok()?;
             let count: u32 = it.next().map_or(1, |c| c.parse().unwrap_or(1));
-            // Lazy: deletion-only hunks (+N,0) must not evaluate the range.
+            // Lazily: a deletion-only hunk (+N,0) must not evaluate
+            // `start + count - 1`, which would underflow.
             (count > 0).then(|| (start, start + count - 1))
         })
         .collect()
@@ -313,12 +313,12 @@ mod tests {
 
     #[test]
     fn a_three_dot_reference_reaches_git_verbatim() {
-        // The merge-base form is what makes a pull-request gate honest:
+        // The merge-base form keeps a pull-request gate honest:
         // `origin/main` alone also reports everything main merged since
         // the branch point, which the author cannot fix here. Nothing
-        // between the flag and git may rewrite the reference, and this
-        // is the test that says so — it runs against this repository,
-        // where HEAD~1...HEAD is always a valid range.
+        // between the flag and git may rewrite the reference. This test
+        // runs against this repository, where HEAD~1...HEAD is always a
+        // valid range.
         let root = std::path::Path::new(".");
         if git(root, &["rev-parse", "HEAD~1"]).is_err() {
             return; // a shallow or fresh checkout has no history to span
@@ -343,8 +343,8 @@ mod tests {
 
     #[test]
     fn positioning_is_per_language_never_mixed() {
-        // A TS finding in a Python-heavy repo was positioned against
-        // Python's curve and the label still said "of repo".
+        // A TS finding in a Python-heavy repo must not be positioned
+        // against Python's curve under a label saying "of repo".
         let budgets = LangBudgets::defaults();
         let mut repo: Vec<crate::report::Agg> = crate::lang::LANGS
             .iter()
