@@ -890,6 +890,7 @@ fn entryish(path: &Path) -> bool {
         || xcode_app(path)
         || swift_leaf_target(path)
         || cargo_target(path, name)
+        || gem_entry(path, name)
 }
 
 /// A header whose only caller is outside this repository, because the
@@ -1429,6 +1430,58 @@ fn sbt_meta_build(path: &Path) -> bool {
         && dir.join("build.properties").is_file()
 }
 
+/// A gem's own entry points, named by the gemspec beside them.
+///
+/// `lib/<X>.rb` is what `require "<X>"` loads and no file inside the
+/// gem requires it; `rubocop/rubocop.gemspec:18` sets
+/// `s.bindir = 'exe'` and `:19` `s.executables = ['rubocop']`, and
+/// `sequel/sequel.gemspec:24` says `'bin'` and pushes `'sequel'`. Four
+/// files in gold, and every one of them is the file a user of the gem
+/// reaches first.
+///
+/// The gemspec's FILENAME is the field, not its `name =` line:
+/// sinatra's opens `Gem::Specification.new 'sinatra', version` and
+/// never assigns a name at all, and rubygems requires the file to be
+/// called after the gem it packages. For a script the gemspec has to
+/// quote both the directory and the file, which is what keeps this
+/// from exempting everything under a `bin/`.
+fn gem_entry(path: &Path, name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".rb").or(Some(name)) else {
+        return false;
+    };
+    let Some(dir) = path.parent().and_then(|d| d.file_name()?.to_str()) else {
+        return false;
+    };
+    let Some(root) = path.parent().and_then(Path::parent) else {
+        return false;
+    };
+    match dir {
+        "lib" if name.ends_with(".rb") => root.join(format!("{stem}.gemspec")).is_file(),
+        "bin" | "exe" => quoted_in_gemspec(root, dir, name),
+        _ => false,
+    }
+}
+
+/// Does the gemspec at this root quote both the directory and the file?
+fn quoted_in_gemspec(root: &Path, dir: &str, name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.ends_with(".gemspec"))
+        })
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .any(|text| {
+            ['\'', '"'].iter().any(|q| {
+                text.contains(&format!("{q}{dir}{q}")) && text.contains(&format!("{q}{name}{q}"))
+            })
+        })
+}
+
 /// A file a TOOL collects by pattern rather than one any code imports,
 /// and the pattern is in the repository: primer-react's
 /// `.storybook/main.ts` writes `stories: ['../src/**/*.stories.tsx']`,
@@ -1652,6 +1705,32 @@ mod tests {
     /// detection stays out of the way of the structural assertions.
     fn seen(names: &[&str]) -> Mentions {
         names.iter().map(|n| ((*n).into(), 2)).collect()
+    }
+
+    #[test]
+    fn a_gem_is_entered_through_the_files_its_gemspec_names() {
+        // rubocop.gemspec:18 sets `s.bindir = 'exe'` and :19
+        // `s.executables = ['rubocop']`; sinatra's gemspec opens
+        // `Gem::Specification.new 'sinatra', version` and never assigns
+        // a name at all, which is why `lib/<X>.rb` matches on the
+        // gemspec FILE rather than on the field.
+        let dir = std::env::temp_dir().join("elegance-gem-entry");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("lib/sinatra")).unwrap();
+        std::fs::create_dir_all(dir.join("exe")).unwrap();
+        std::fs::write(
+            dir.join("sinatra.gemspec"),
+            "Gem::Specification.new 'sinatra', version do |s|\n  s.bindir = 'exe'\n  s.executables = ['rubocop']\nend\n",
+        )
+        .unwrap();
+        assert!(entryish(&dir.join("lib/sinatra.rb")));
+        assert!(entryish(&dir.join("exe/rubocop")));
+        // A module the gem merely ships is not its entry point, and a
+        // script the gemspec does not quote is not an executable.
+        assert!(!entryish(&dir.join("lib/sinatra/base.rb")));
+        assert!(!entryish(&dir.join("exe/other")));
+        assert!(!entryish(&dir.join("lib/rack-protection.rb")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

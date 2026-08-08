@@ -162,6 +162,19 @@ fn name_node(node: Node) -> Option<Node> {
 /// and 86 as `autoload :Alignment, "#{__dir__}/mixin/alignment"`; those
 /// 609 cop files are 55% of every orphan in the Ruby corpus.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    // An argument list is an unmapped kind, so reading one leaves the
+    // call around it a call — which matters here, because the verb is
+    // whatever the project called it.
+    if node.kind() == "argument_list" {
+        return autoloaded(node, src)
+            .map(|target| super::ImportInfo {
+                target: target.into(),
+                names: Vec::new(),
+                reach: super::Reach::Mention,
+            })
+            .into_iter()
+            .collect();
+    }
     let Some(string) = requires(node, src).then(|| first_string(node)).flatten() else {
         return Vec::new();
     };
@@ -178,17 +191,161 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let Some(target) = load_target(string, src) else {
         return Vec::new();
     };
-    vec![super::ImportInfo {
+    // `require_relative` is a path from this file and must land on
+    // one. `require` searches the load path, where a gem is an
+    // ordinary answer.
+    let reach = match callee_text(node, src) {
+        Some("require_relative") => super::Reach::Project,
+        _ => super::Reach::Anywhere,
+    };
+    let widened = widened_target(string, src)
+        .filter(|w| *w != target)
+        .map(|target| super::ImportInfo {
+            target: target.into(),
+            // The widening is read off an assignment rather than
+            // stated by the load, so it names modules without
+            // claiming to be a second dependency.
+            reach: super::Reach::Mention,
+            names: Vec::new(),
+        });
+    std::iter::once(super::ImportInfo {
         target: target.into(),
-        // `require_relative` is a path from this file and must land on
-        // one. `require` searches the load path, where a gem is an
-        // ordinary answer.
-        reach: match callee_text(node, src) {
-            Some("require_relative") => super::Reach::Project,
-            _ => super::Reach::Anywhere,
-        },
+        reach,
         names: Vec::new(),
-    }]
+    })
+    .chain(widened)
+    .collect()
+}
+
+/// The file an autoload-shaped call names, whatever the verb is.
+///
+/// `sinatra/sinatra-contrib/lib/sinatra/contrib/setup.rb:14` defines
+/// `register(name, path)` as `autoload(name, path, :register)` and
+/// `helpers` beside it identically; `contrib.rb:12-32` names all eleven
+/// extensions through them — `register :ConfigFile, 'sinatra/config_file'`
+/// — and nothing else in the corpus names any of the ten files they
+/// reach. The verb is the project's, so the ARGUMENTS have to be what
+/// is read: a CONSTANT symbol and a bare path.
+///
+/// Both narrowings were measured. 1077 lines across gold pair a
+/// receiverless verb with a symbol and a string; requiring the symbol
+/// to name a CONSTANT leaves 785, which is what keeps `mime_type :foo,
+/// 'application/x-foo'`, `set :views, 'app/views'` and `column :name,
+/// "text"` out. Requiring the string to be stated OUTRIGHT leaves
+/// rubocop's 609 `register_cop :Alias, "#{__dir__}/style/alias"` to the
+/// `__dir__` reading above, which already resolves them as paths.
+fn autoloaded(args: Node, src: &[u8]) -> Option<String> {
+    let call = args.parent().filter(|c| c.kind() == "call")?;
+    // A receiver makes it somebody's own method, and `autoload` itself
+    // already states its dependency through the load path above.
+    if call.child_by_field_name("receiver").is_some() || names_a_load(call, src) {
+        return None;
+    }
+    let mut cursor = args.walk();
+    let given: Vec<Node> = args.named_children(&mut cursor).collect();
+    let constant = |n: &&Node| {
+        n.kind() == "simple_symbol"
+            && n.utf8_text(src)
+                .ok()
+                .and_then(|t| t.strip_prefix(':'))
+                .is_some_and(|t| t.starts_with(char::is_uppercase))
+    };
+    given.iter().find(constant)?;
+    let path = given.iter().find(|n| n.kind() == "string")?;
+    let text = plain_text(*path, src)?;
+    text.contains('/').then_some(text)
+}
+
+/// A string with nothing built into it — the only kind whose text the
+/// source states outright.
+fn plain_text(string: Node, src: &[u8]) -> Option<String> {
+    let mut cursor = string.walk();
+    let parts: Vec<Node> = string.named_children(&mut cursor).collect();
+    match parts.as_slice() {
+        [only] if only.kind() == "string_content" => Some(only.utf8_text(src).ok()?.to_string()),
+        _ => None,
+    }
+}
+
+/// The same path, with a hole widened by the assignment behind it.
+///
+/// `sequel/lib/sequel/database/connecting.rb:84` is
+/// `require "sequel/adapters/#{file}"` and `:76`, six lines above it,
+/// is `file = "#{subdir}/#{scheme}"` — so the hole is TWO components
+/// wide, and the doc at `:70` says why: ":subdir :: The subdirectory of
+/// sequel/adapters to look in, only to be used for loading
+/// subadapters". Reading the hole as one component reached none of the
+/// eleven `adapters/jdbc/*.rb` or three `adapters/odbc/*.rb`.
+///
+/// Bounded by an assignment in the file rather than by an unbounded
+/// trailing star, which was the alternative and is a guess:
+/// `glob_modules` is shared with Lua and Python, where `kong.plugins.*`
+/// would then match thousands of files. The `else file = scheme` branch
+/// binds a name rather than a string and is skipped, so a hole nothing
+/// assigns keeps its single star.
+fn widened_target(string: Node, src: &[u8]) -> Option<String> {
+    let mut cursor = string.walk();
+    let parts: Vec<Node> = string.named_children(&mut cursor).collect();
+    let mut out = String::new();
+    for (n, part) in parts.iter().enumerate() {
+        match part.kind() {
+            "string_content" => out.push_str(part.utf8_text(src).ok()?),
+            "interpolation" if n > 0 => out.push_str(&hole(*part, src)),
+            _ => return None,
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// What one hole stands for: the shape of the string a name is bound
+/// to, where the file binds one, and otherwise a single component.
+fn hole(interpolation: Node, src: &[u8]) -> String {
+    let star = String::from("*");
+    let Some(name) = interpolation
+        .named_child(0)
+        .filter(|n| n.kind() == "identifier")
+        .and_then(|n| n.utf8_text(src).ok())
+    else {
+        return star;
+    };
+    let Some(bound) = assigned_string(interpolation, name, src) else {
+        return star;
+    };
+    let mut cursor = bound.walk();
+    let mut out = String::new();
+    for part in bound.named_children(&mut cursor) {
+        match part.kind() {
+            "string_content" => out.push_str(part.utf8_text(src).unwrap_or("")),
+            "interpolation" => out.push('*'),
+            _ => return star,
+        }
+    }
+    out
+}
+
+/// The first string literal this file assigns to `name`.
+fn assigned_string<'t>(from: Node<'t>, name: &str, src: &[u8]) -> Option<Node<'t>> {
+    let mut root = from;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "assignment"
+            && node
+                .child_by_field_name("left")
+                .and_then(|l| l.utf8_text(src).ok())
+                == Some(name)
+            && let Some(value) = node
+                .child_by_field_name("right")
+                .filter(|v| v.kind() == "string")
+        {
+            return Some(value);
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+    }
+    None
 }
 
 /// The path a `"#{__dir__}/x/y"` literal names, relative to the file
@@ -529,6 +686,13 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         // `imports` hook was written, tested and never once asked, and
         // Ruby had no module graph at all.
         Sem::Call if requires(node, src) => Sem::Import,
+        // An autoload written under the project's own verb. The
+        // ARGUMENT LIST is promoted and not the call, so the twenty
+        // calls in gold that match the shape and load nothing go on
+        // being counted as the calls they are.
+        Sem::None if node.kind() == "argument_list" && autoloaded(node, src).is_some() => {
+            Sem::Import
+        }
         _ => sem,
     }
 }
@@ -659,6 +823,62 @@ mod tests {
             .iter()
             .map(|i| (i.target.to_string(), i.reach))
             .collect()
+    }
+
+    #[test]
+    fn an_autoload_shaped_call_is_a_load_whatever_the_verb() {
+        // sinatra-contrib/lib/sinatra/contrib/setup.rb:14 defines
+        // `register(name, path)` as `autoload(name, path, :register)`
+        // and `helpers` beside it identically; contrib.rb names all
+        // eleven extensions through them and nothing else names any of
+        // the files they reach. Requiring a CONSTANT symbol is what
+        // separates a load from `column :name, "text"`: 1077 lines in
+        // gold pair a verb with a symbol and a string, and 785 of them
+        // name a constant.
+        let got = imports_of(concat!(
+            "register :ConfigFile, 'sinatra/config_file'\n",
+            "helpers :ContentFor, 'sinatra/content_for'\n",
+            "mime_type :foo, 'application/x-foo'\n",
+            "set :views, 'app/views'\n",
+            "column :name, 'text'\n",
+        ));
+        assert_eq!(
+            got,
+            [
+                ("sinatra/config_file".to_string(), Reach::Mention),
+                ("sinatra/content_for".to_string(), Reach::Mention),
+            ],
+            "a lower-case symbol names a setting, not a constant"
+        );
+    }
+
+    #[test]
+    fn a_hole_is_as_wide_as_the_string_the_file_assigns_to_it() {
+        // sequel/lib/sequel/database/connecting.rb:84 is the require
+        // and :76, six lines above it, is the assignment; the doc at
+        // :70 says ":subdir :: The subdirectory of sequel/adapters to
+        // look in". Reading the hole as one component reached none of
+        // the eleven jdbc or three odbc adapters. The `else file =
+        // scheme` branch binds a name rather than a string and is
+        // skipped, so a hole nothing assigns keeps its single star.
+        let got = imports_of(concat!(
+            "if subdir = opts[:subdir]\n",
+            "  file = \"#{subdir}/#{scheme}\"\n",
+            "else\n",
+            "  file = scheme\n",
+            "end\n",
+            "require \"sequel/adapters/#{file}\"\n",
+            "require \"roda/plugins/#{name}\"\n",
+        ));
+        assert_eq!(
+            got,
+            [
+                ("sequel/adapters/*".to_string(), Reach::Anywhere),
+                ("sequel/adapters/*/*".to_string(), Reach::Mention),
+                ("roda/plugins/*".to_string(), Reach::Anywhere),
+            ],
+            "the plain reading is kept beside the widened one"
+        );
     }
 
     #[test]
