@@ -205,8 +205,163 @@ fn production_view(all: &[GraphFacts]) -> Option<ProdView<'_>> {
             }
         }
     }
+    deployed_by_suite(all, &files, &mut from_tests);
     (files.len() >= 2 && !edge_list.is_empty())
         .then_some((resolution, files, edge_list, targets, from_tests))
+}
+
+/// A contract the project's own hardhat suite deploys BY NAME.
+///
+/// An EVM test does not import the contract it exercises. hardhat
+/// compiles `contracts/` into artifacts and the suite asks for one by
+/// string: openzeppelin's test/token/ERC20/extensions/ERC20Burnable.js
+/// writes `ethers.deployContract('$ERC20Burnable', [name, symbol],
+/// owner)`, and the `$` is hardhat-exposed's, required at
+/// hardhat.config.js:61 with its `exposed: { imports: true }` stanza at
+/// :109 — it generates a subclass per contract into `contracts-exposed/`,
+/// a directory the repository does not hold. aave says the same thing
+/// through typechain: hardhat.config.ts:42 declares
+/// `typechain: { outDir: 'types' }` and test-suites/helpers/make-suite.ts:35
+/// writes `import { AaveOracle, ACLManager, ... } from '../../types'`,
+/// against a directory typechain generates and the checkout does not
+/// have. 256 distinct lookup arguments appear across the three gold
+/// hardhat projects and every one of them is contract-shaped.
+///
+/// Credited to `from_tests` and NEVER to `fan_in`, so the claim made is
+/// exactly the one `tested_only` already makes: a contract its own
+/// suite deploys and nothing else references is a different finding
+/// from one nothing references at all. Measured: solidity edges are
+/// byte-identical either way, so this cannot create a dependency, hide
+/// a cycle or move deletability.
+fn deployed_by_suite(all: &[GraphFacts], files: &[&GraphFacts], from_tests: &mut [u32]) {
+    use crate::lang::Lang;
+    if !files.iter().any(|f| f.lang == Lang::Solidity) {
+        return;
+    }
+    let roots = hardhat_roots(files);
+    if roots.is_empty() {
+        return;
+    }
+    let mut declared: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, f) in files.iter().enumerate() {
+        if f.lang != Lang::Solidity {
+            continue;
+        }
+        let stem = f.path.file_stem().and_then(|s| s.to_str());
+        for name in f.exports.iter().map(|e| &**e).chain(stem) {
+            declared.entry(name).or_default().push(i);
+        }
+    }
+    for suite in all.iter().filter(|f| f.is_test) {
+        let Some(out) = deployed_from(&roots, &suite.path) else {
+            continue;
+        };
+        // The generated typechain barrel, named by the config, and the
+        // names an import binds out of it.
+        let typed = suite
+            .imports
+            .iter()
+            .filter(|i| i.target.rsplit('/').next() == Some(out))
+            .flat_map(|i| i.names.iter().map(|n| n.to_string()));
+        let text = std::fs::read_to_string(&suite.path).unwrap_or_default();
+        for name in lookup_args(&text).chain(typed) {
+            let Some(cands) = declared.get(name.as_str()) else {
+                continue;
+            };
+            // Two files declaring one name is a vendored copy beside an
+            // original: aave ships its own SafeERC20 next to
+            // openzeppelin's. The nearer one is meant, exactly as a C
+            // include picks the header beside the source.
+            let Some(&i) = cands
+                .iter()
+                .max_by_key(|&&i| shared_prefix(&files[i].path, &suite.path))
+            else {
+                continue;
+            };
+            from_tests[i] = from_tests[i].max(1);
+        }
+    }
+}
+
+/// Every hardhat project root above a Solidity file, with the directory
+/// its config sends typechain's generated bindings to.
+///
+/// The DEEPEST config wins. Gold's three configs sit in sibling
+/// repositories so it never shows there, but a monorepo with a root
+/// config and per-package configs would otherwise read the wrong
+/// `outDir` — a first-match ancestor walk answers with whichever
+/// happened to be shallowest.
+fn hardhat_roots(files: &[&GraphFacts]) -> Vec<(PathBuf, String)> {
+    const CONFIGS: &[&str] = &[
+        "hardhat.config.js",
+        "hardhat.config.ts",
+        "hardhat.config.cjs",
+        "hardhat.config.mjs",
+    ];
+    let mut seen: HashSet<&Path> = HashSet::new();
+    let mut out = Vec::new();
+    for f in files
+        .iter()
+        .filter(|f| f.lang == crate::lang::Lang::Solidity)
+    {
+        for dir in f.path.ancestors().skip(1) {
+            if !seen.insert(dir) {
+                break;
+            }
+            let found = CONFIGS
+                .iter()
+                .filter_map(|c| std::fs::read_to_string(dir.join(c)).ok())
+                .next();
+            if let Some(text) = found {
+                let out_dir = quoted_after(&text, "outDir").unwrap_or("types").to_string();
+                out.push((dir.to_path_buf(), out_dir));
+            }
+        }
+    }
+    out
+}
+
+/// The typechain output directory of the hardhat project this test
+/// belongs to: the DEEPEST root that contains it, not the first found.
+fn deployed_from<'a>(roots: &'a [(PathBuf, String)], path: &Path) -> Option<&'a str> {
+    roots
+        .iter()
+        .filter(|(dir, _)| path.starts_with(dir))
+        .max_by_key(|(dir, _)| dir.components().count())
+        .map(|(_, out)| out.as_str())
+}
+
+/// The first quoted argument of hardhat's three lookup-by-name calls,
+/// with hardhat-exposed's `$` prefix stripped.
+fn lookup_args(text: &str) -> impl Iterator<Item = String> + '_ {
+    const LOOKUPS: &[&str] = &["deployContract(", "getContractFactory(", "getContractAt("];
+    LOOKUPS
+        .iter()
+        .flat_map(move |call| text.match_indices(call).map(|(at, c)| at + c.len()))
+        .filter_map(move |at| {
+            let rest = text[at..].trim_start();
+            let quote = rest.chars().next().filter(|c| matches!(c, '\'' | '"'))?;
+            let arg = rest[1..].split(quote).next()?;
+            Some(arg.trim_start_matches('$').to_string())
+        })
+}
+
+/// The string value following `field` in a config fragment, whichever
+/// quote it is written with. `typechain: { outDir: 'types' }`.
+fn quoted_after<'a>(text: &'a str, field: &str) -> Option<&'a str> {
+    let rest = text.split_once(field)?.1.trim_start().strip_prefix(':')?;
+    let rest = rest.trim_start();
+    let quote = rest.chars().next().filter(|c| matches!(c, '\'' | '"'))?;
+    rest[1..].split(quote).next()
+}
+
+/// How many leading path components two files share — how near one is
+/// to the other.
+fn shared_prefix(a: &Path, b: &Path) -> usize {
+    a.components()
+        .zip(b.components())
+        .take_while(|(x, y)| x == y)
+        .count()
 }
 
 /// Strongly connected components with per-component sizes.
@@ -2202,6 +2357,75 @@ mod tests {
     /// detection stays out of the way of the structural assertions.
     fn seen(names: &[&str]) -> Mentions {
         names.iter().map(|n| ((*n).into(), 2)).collect()
+    }
+
+    #[test]
+    fn a_contract_the_suite_deploys_by_name_is_tested_not_orphaned() {
+        // openzeppelin's ERC20Burnable.test.js writes
+        // `ethers.deployContract('$ERC20Burnable', ...)` and imports
+        // nothing; aave's make-suite.ts imports the names out of the
+        // typechain barrel its config declares. Neither directory
+        // exists on disk — both are generated.
+        let root = std::env::temp_dir().join(format!("elegance-hardhat-{}", std::process::id()));
+        // A monorepo: a root config and a per-package one. The DEEPEST
+        // config owns the package, so the package's own `outDir` is
+        // what its tests import from — an ancestor walk that stops at
+        // the first config found reads the wrong one.
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("hardhat.config.ts"),
+            "module.exports = { typechain: { outDir: 'root-types' } };\n",
+        )
+        .unwrap();
+        let dir = root.join("packages/core");
+        let contracts = dir.join("contracts/token");
+        std::fs::create_dir_all(&contracts).unwrap();
+        std::fs::write(
+            dir.join("hardhat.config.ts"),
+            "module.exports = { typechain: { outDir: 'types' } };\n",
+        )
+        .unwrap();
+        let suite = dir.join("test/ERC20Burnable.test.js");
+        std::fs::create_dir_all(suite.parent().unwrap()).unwrap();
+        std::fs::write(
+            &suite,
+            "const t = await ethers.deployContract('$ERC20Burnable', [name], owner);\n",
+        )
+        .unwrap();
+        let named = |p: &Path| p.to_str().unwrap().to_string();
+        let mut test = fixture(Lang::TypeScript, &named(&suite), &[]);
+        test.is_test = true;
+        test.imports = vec![crate::facts::ImportFact {
+            target: "../types".into(),
+            names: vec!["ACLManager".into()],
+            reach: crate::lang::Reach::Anywhere,
+        }];
+        let files = [
+            fixture(Lang::Solidity, &named(&contracts.join("ERC20.sol")), &[]),
+            fixture(
+                Lang::Solidity,
+                &named(&contracts.join("ERC20Burnable.sol")),
+                &["./ERC20.sol"],
+            ),
+            fixture(
+                Lang::Solidity,
+                &named(&contracts.join("ACLManager.sol")),
+                &[],
+            ),
+            fixture(Lang::Solidity, &named(&contracts.join("Unused.sol")), &[]),
+            test,
+        ];
+        let arch = arch(&files);
+        // The deployed contract and the typechain-imported one are
+        // exercised; the one nothing names is the finding.
+        assert_eq!(arch.orphan_count, 1, "{:?}", arch.orphans);
+        assert!(
+            arch.orphans[0].ends_with("Unused.sol"),
+            "{:?}",
+            arch.orphans
+        );
+        assert_eq!(arch.tested_only, 2);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
