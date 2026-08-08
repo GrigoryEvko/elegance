@@ -147,16 +147,16 @@
 "public docs" = { rate = 0.36 }
 
 [js]
-"cognitive" = { hi = 22.0 }
-"cyclomatic" = { hi = 14.0 }
+"cognitive" = { hi = 19.0 }
+"cyclomatic" = { hi = 12.0 }
 "depth" = { hi = 3.0 }
-"length" = { hi = 78.0 }
+"length" = { hi = 79.0 }
 "params" = { hi = 4.0 }
 "expr depth" = { hi = 12.0 }
-"live span" = { hi = 60.0 }
-"magic numbers" = { hi = 2.0 }
+"live span" = { hi = 61.0 }
+"magic numbers" = { hi = 3.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.32 }
+"comment ratio" = { lo = 0.00, hi = 0.33 }
 "abbreviated" = { hi = 1.0 }
 "loop depth" = { hi = 1.0 }
 "magic strings" = { hi = 1.0 }

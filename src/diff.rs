@@ -143,7 +143,7 @@ fn distributions(files: &[std::path::PathBuf], budgets: LangBudgets, root: &Path
             agg.add_values(lang, &values);
             continue;
         }
-        if config::is_generated(&source) {
+        if config::is_generated(path, &source) {
             continue;
         }
         let f = facts::extract(lang.pack(), &mut lang.pack().make_parser(), path, &text);
@@ -175,7 +175,7 @@ impl Review {
         let Ok(source) = std::fs::read_to_string(path) else {
             return false;
         };
-        if config::is_generated(&source) {
+        if config::is_generated(path, &source) {
             return false;
         }
         let Some((lang, text)) = crate::measurable(path, &source) else {

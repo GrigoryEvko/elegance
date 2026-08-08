@@ -166,7 +166,7 @@ fn scan(files: &[PathBuf]) -> Scanned {
             |(mut acc, mut parsers), path| {
                 let package = package_of(path).unwrap_or_else(|| "?".to_string());
                 match std::fs::read_to_string(path) {
-                    Ok(source) if crate::config::is_generated(&source) => acc.generated += 1,
+                    Ok(source) if crate::config::is_generated(path, &source) => acc.generated += 1,
                     Ok(source) => {
                         if let Some((lang, text)) = crate::measurable(path, &source) {
                             let f =
@@ -205,7 +205,7 @@ fn straddling(root: &Path, prints: &HashMap<u64, Print>) -> Result<Vec<Straddle>
                 || (Vec::new(), crate::Parsers::default()),
                 |(mut hits, mut parsers), path| {
                     if let Ok(source) = std::fs::read_to_string(path)
-                        && !crate::config::is_generated(&source)
+                        && !crate::config::is_generated(path, &source)
                     {
                         let lang = Lang::of_source(path, &source)
                             .expect("collect_files filters by language");

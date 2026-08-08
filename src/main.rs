@@ -409,7 +409,7 @@ fn scan_in_pool(
             || (make(), Parsers::default()),
             |(mut agg, mut parsers), path| {
                 match std::fs::read_to_string(path) {
-                    Ok(source) if config::is_generated(&source) => agg.generated += 1,
+                    Ok(source) if config::is_generated(path, &source) => agg.generated += 1,
                     Ok(source) => match measurable(path, &source) {
                         Some((lang, text)) => {
                             let f = facts::extract(lang.pack(), parsers.get(lang), path, &text);
