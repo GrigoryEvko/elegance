@@ -988,7 +988,27 @@ fn declares_types_only(f: &GraphFacts) -> bool {
 /// instead of lowering it.
 fn runs_once(path: &Path) -> bool {
     let norm = crate::facts::rooted(&path.display().to_string());
-    crate::facts::one_shot_dir(&norm) || glob_loaded(path)
+    crate::facts::one_shot_dir(&norm) || glob_loaded(path) || sbt_meta_build(path)
+}
+
+/// An sbt BUILD DEFINITION. `project/` is compiled as a project of its
+/// own and `build.sbt` is its only caller — zio's opens with `import
+/// BuildHelper.*`, `import Dependencies.*` and `import
+/// MimaSettings.mimaSettings`, and circe's writes `Boilerplate.gen(...)`
+/// — but a `.sbt` file is not source this tool reads, so the three
+/// imports are invisible and every helper reads as an orphan.
+///
+/// `project/build.properties` is what says sbt owns the directory: it
+/// pins the launcher version and sbt refuses to build without it. The
+/// gold corpus holds twelve of them and sixteen `.scala` files beneath;
+/// the other four already reach each other, which the zero-fan-in gate
+/// leaves alone.
+fn sbt_meta_build(path: &Path) -> bool {
+    let Some(dir) = path.parent() else {
+        return false;
+    };
+    dir.file_name().and_then(|n| n.to_str()) == Some("project")
+        && dir.join("build.properties").is_file()
 }
 
 /// A file a TOOL collects by pattern rather than one any code imports,
@@ -1362,6 +1382,24 @@ mod tests {
         // Nothing below the root is the UNNAMED package, which groups
         // nothing at all.
         assert_eq!(pkg("zio/zio-docs/src/main/scala/utils.scala"), None);
+    }
+
+    #[test]
+    fn an_sbt_build_definition_is_the_build_rather_than_a_module() {
+        // zio/build.sbt opens `import BuildHelper.*`, `import
+        // Dependencies.*` and `import MimaSettings.mimaSettings`, and
+        // `.sbt` is not a language this tool reads — so all three are
+        // invisible and every helper reads as an orphan.
+        // `project/build.properties` is sbt's launcher-version pin and
+        // is what says sbt compiles the directory.
+        let dir = std::env::temp_dir().join("elegance-sbt-meta/project");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("build.properties"), "sbt.version=1.9.7\n").unwrap();
+        assert!(runs_once(&dir.join("BuildHelper.scala")));
+        // Without the pin `project` is an ordinary package name.
+        std::fs::remove_file(dir.join("build.properties")).unwrap();
+        assert!(!runs_once(&dir.join("BuildHelper.scala")));
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
     #[test]

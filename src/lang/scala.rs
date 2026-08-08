@@ -36,6 +36,9 @@ const KINDS: &[(&str, Sem)] = &[
     ("comment", Sem::Comment),
     ("block_comment", Sem::Comment),
     ("import_declaration", Sem::Import),
+    // The file itself is asked for the qualified names its BODY uses.
+    // See `qualified_uses`.
+    ("compilation_unit", Sem::Import),
     ("identifier", Sem::Ident),
     ("type_identifier", Sem::Ident),
     ("integer_literal", Sem::NumLit),
@@ -147,6 +150,9 @@ fn name_node(node: Node) -> Option<Node> {
 /// Only `._` was trimmed, so 949 Scala 3 wildcards carried a literal
 /// `.*` into the resolver.
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    if node.kind() == "compilation_unit" {
+        return qualified_uses(node, src);
+    }
     let mut cursor = node.walk();
     let path: Vec<&str> = node
         .children_by_field_name("path", &mut cursor)
@@ -188,6 +194,73 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
             reach: super::Reach::Anywhere,
         })
         .collect()
+}
+
+/// What a file depends on WITHOUT importing it: Scala resolves a fully
+/// qualified name on the spot, so `cats.compat.Seq.zipWith(fa, fb)` at
+/// core/src/main/scala/cats/instances/seq.scala:192 is the only
+/// statement cats makes about `cats/compat/Seq.scala`, and there is no
+/// import line to read. All nine files under `cats/compat` read as
+/// depended on by nothing.
+///
+/// A `Mention`, never an import: the file states no dependency — it
+/// spells a name the compiler resolves against the whole classpath — so
+/// it supplies an edge and no tally entry, exactly as a C# type
+/// reference does.
+///
+/// The shape is a dotted chain that OPENS lower case and reaches a
+/// capitalized segment: a package path ending at a type. `foo.bar` is a
+/// field access and names nothing, and `Foo.bar` is a member of a type
+/// the ordinary reference machinery already sees.
+fn qualified_uses(root: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+        if node.kind() != "field_expression" && node.kind() != "stable_identifier" {
+            continue;
+        }
+        let Ok(text) = node.utf8_text(src) else {
+            continue;
+        };
+        let Some(target) = package_qualified(text) else {
+            continue;
+        };
+        if seen.insert(target.to_string()) {
+            out.push(super::ImportInfo {
+                target: target.into(),
+                names: super::java::leaf(target)
+                    .map(Into::into)
+                    .into_iter()
+                    .collect(),
+                reach: super::Reach::Mention,
+            });
+        }
+    }
+    out
+}
+
+/// The type a dotted chain names, when the chain is a PACKAGE path.
+/// `cats.compat.Seq.zipWith` -> `cats.compat.Seq`; `x.foo.bar` and
+/// `Chunk.empty` yield nothing.
+fn package_qualified(text: &str) -> Option<&str> {
+    let mut segs = text.split('.');
+    let first = segs.next()?;
+    let plain = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_');
+    // `this` and `super` open a chain through the OBJECT, not through a
+    // package, so `this.foo.Bar` names a member and no file.
+    if !plain(first) || !first.starts_with(|c: char| c.is_lowercase()) {
+        return None;
+    }
+    if matches!(first, "this" | "super") {
+        return None;
+    }
+    if !segs.clone().all(plain) || !segs.any(|s| s.starts_with(char::is_uppercase)) {
+        return None;
+    }
+    Some(super::java::type_path(text))
 }
 
 /// One entry of a selector list: a name, a rename whose left side is the
@@ -501,5 +574,21 @@ mod tests {
         assert!(!super::test_path(
             "cats/core/src/main/scala/input/Parser.scala"
         ));
+    }
+
+    #[test]
+    fn a_fully_qualified_name_is_a_dependency_with_no_import_to_read() {
+        // `cats.compat.Seq.zipWith(fa, fb)` at
+        // core/src/main/scala/cats/instances/seq.scala:192 is the only
+        // statement cats makes about cats/compat/Seq.scala. All nine
+        // files under `cats/compat` read as depended on by nothing.
+        let cut = |t| super::package_qualified(t);
+        assert_eq!(cut("cats.compat.Seq.zipWith"), Some("cats.compat.Seq"));
+        assert_eq!(cut("zio.Chunk"), Some("zio.Chunk"));
+        // A field access names no package, and a member of a type the
+        // ordinary reference machinery already sees is not one either.
+        assert_eq!(cut("config.server.port"), None);
+        assert_eq!(cut("Chunk.empty"), None);
+        assert_eq!(cut("this.foo.Bar"), None);
     }
 }
