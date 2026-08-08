@@ -3464,7 +3464,15 @@ pub(crate) fn one_shot_dir(norm: &str) -> bool {
     let Some((dirs, _)) = lower.rsplit_once('/') else {
         return false;
     };
-    dirs.split('/').any(|seg| {
+    // A SPACE separates the words of a directory name exactly as a dash
+    // does, and Xcode is where a name gets one: Alamofire ships
+    // `watchOS Example/watchOS Example WatchKit Extension/`, whose four
+    // files are what `Example/` means everywhere else. Audited all 37
+    // spaced directory names in gold against the list above -- `Test
+    // Data`, `Preview Content`, `Concurrency Primitives`, `System
+    // Calls`, `Command Palette`, `deep purple` and the rest -- and the
+    // watchOS family is the only match. 4 orphans.
+    dirs.split(['/', ' ']).any(|seg| {
         ONE_SHOT
             .iter()
             .any(|d| seg == *d || seg.strip_suffix(d).is_some_and(|head| head.ends_with('-')))
@@ -5163,5 +5171,25 @@ pub fn f(x: usize) -> usize {
         // The file's own name is never tested, or `parse-demo.rs` would
         // qualify -- and `benchmarking.rs` is not a bench directory.
         assert!(!one_shot_dir("/src/parse-demo.rs"));
+    }
+
+    #[test]
+    fn a_spaced_directory_name_is_two_words_as_a_dash_is() {
+        // A SPACE separates the words of a directory name exactly as a
+        // dash does, and Xcode is where a name gets one. Audited all 37
+        // spaced directory names in gold and the watchOS family is the
+        // only match. 4 orphans.
+        assert!(one_shot_dir(
+            "/Alamofire/watchOS Example/watchOS Example WatchKit Extension/Networking.swift"
+        ));
+        // The word has to be the whole component or suffixed onto a
+        // module name; `Preview Content` and `Concurrency Primitives`
+        // are two of the 37 that are neither.
+        assert!(!one_shot_dir(
+            "/ghostty/macos/Sources/Preview Content/x.swift"
+        ));
+        assert!(!one_shot_dir(
+            "/nio/Sources/Concurrency Primitives/Lock.swift"
+        ));
     }
 }

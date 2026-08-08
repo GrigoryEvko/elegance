@@ -886,7 +886,162 @@ fn entryish(path: &Path) -> bool {
         || routed(path, name, stem)
         || dune_root(path, name, stem)
         || mix_task(path)
+        || xcode_app(path)
+        || swift_leaf_target(path)
         || cargo_target(path, name)
+}
+
+/// A source of a SwiftPM target that produces something nothing can
+/// import: an executable, a compiler-plugin macro, or a build plugin.
+///
+/// A library target is reached by `import <name>` and the module fold
+/// already credits every file in it. An executable has no such name —
+/// `main.swift` used to be the marker and `@main` replaced it, so
+/// swift-nio's echo and websocket samples, vapor's `Development` and the
+/// nine files of its `.macro(name: "VaporMacrosPlugin")` at Package.swift
+/// :141 all read as unreferenced. swift-nio's manifest declares 15
+/// `.executableTarget(`, its `dev/stackdiff` one more. 21 orphans.
+fn swift_leaf_target(path: &Path) -> bool {
+    const LEAF: &[&str] = &[".executableTarget(", ".macro(", ".plugin("];
+    if path.extension().and_then(|e| e.to_str()) != Some("swift") {
+        return false;
+    }
+    path.ancestors().skip(1).any(|dir| {
+        let Ok(text) = std::fs::read_to_string(dir.join("Package.swift")) else {
+            return false;
+        };
+        LEAF.iter().any(|kind| {
+            text.split(kind)
+                .skip(1)
+                .filter_map(target_name)
+                .any(|target| path.starts_with(dir.join("Sources").join(target)))
+        })
+    })
+}
+
+/// The `name:` a target stanza declares, read at ARGUMENT level.
+///
+/// `.executableTarget(name: "X", dependencies: [.product(name: "Y", …)])`
+/// carries two of them and only the outer one names a directory. Cutting
+/// the call at its first `)` — which the nested `.product(` closes —
+/// reads the right one for all 22 leaf stanzas in gold only because
+/// every one writes `name:` on the line after the paren; tracking the
+/// nesting instead does not depend on the field order, and a manifest
+/// that reordered would yield nothing rather than the wrong directory.
+fn target_name(call: &str) -> Option<&str> {
+    let mut depth = 0i32;
+    for (at, b) in call.bytes().enumerate() {
+        match b {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' if depth == 0 => return None, // the stanza closed
+            b')' | b']' => depth -= 1,
+            b'n' if depth == 0 && call[at..].starts_with("name:") => {
+                return super::quoted_after(&call[at..], "name:");
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A Swift source Xcode compiles into an APPLICATION.
+///
+/// An app bundle is a leaf: no module can import one, and inside a
+/// module Swift has no import to write, so a file that ends up in an
+/// application target is unreferenced by construction. ghostty's
+/// `TerminalController` is declared once and named in 24 files, and not
+/// one of them imports anything.
+///
+/// The PRODUCT TYPE is the discriminator, not the presence of a project:
+/// `Ghostty.xcodeproj` declares
+/// `productType = "com.apple.product-type.application"` against a
+/// `PBXFileSystemSynchronizedRootGroup` whose `path = Sources` at
+/// project.pbxproj:274, which is Xcode 16's way of saying "compile that
+/// whole directory" with no per-file listing — 139 orphans. Alamofire's
+/// project declares `com.apple.product-type.framework` for five targets
+/// and no application at all, its 94 library files ARE importable, and
+/// reading any `.xcodeproj` ancestor as an app would have claimed them.
+///
+/// The product type is matched as a PREFIX, so `.application.watchapp2`,
+/// `.application.watchapp2-container` and `.application-extension` are
+/// accepted too. That is deliberate — a watch app and an app extension
+/// are leaves for the same reason — and it is inert in gold: Alamofire's
+/// `watchOS Example` project declares two of the three, and contains no
+/// `PBXFileSystemSynchronizedRootGroup` at all, so it lists its files
+/// one by one and this rule reads nothing from it.
+fn xcode_app(path: &Path) -> bool {
+    if path.extension().and_then(|e| e.to_str()) != Some("swift") {
+        return false;
+    }
+    for dir in path.ancestors().skip(1) {
+        let mut project = None;
+        let mut repo_root = false;
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            match entry.file_name().to_str() {
+                Some(n) if n.ends_with(".xcodeproj") => project = Some(entry.path()),
+                Some(".git") => repo_root = true,
+                _ => {}
+            }
+        }
+        if let Some(proj) = project {
+            let Ok(text) = std::fs::read_to_string(proj.join("project.pbxproj")) else {
+                return false;
+            };
+            return app_target_dirs(&text)
+                .iter()
+                .any(|group| path.starts_with(dir.join(group)));
+        }
+        // The scan never leaves the repository: a `.xcodeproj` above it
+        // belongs to another project and says nothing about this file.
+        if repo_root {
+            return false;
+        }
+    }
+    false
+}
+
+/// The directories an Xcode project hands wholesale to an application
+/// target, read from `project.pbxproj`.
+///
+/// A `PBXNativeTarget` writes its fields alphabetically and `productType`
+/// is the last of them, so the text between the marker and it is exactly
+/// one target. A synchronized root group declares its `path` on a single
+/// line, which is how the identifier is turned back into a directory.
+fn app_target_dirs(text: &str) -> Vec<&str> {
+    let wanted = app_group_ids(text);
+    text.lines()
+        .filter(|l| l.contains("isa = PBXFileSystemSynchronizedRootGroup;"))
+        .filter_map(|l| group_path(l, &wanted))
+        .collect()
+}
+
+/// The synchronized root groups every APPLICATION target claims.
+fn app_group_ids(text: &str) -> Vec<&str> {
+    const APP: &str = "com.apple.product-type.application";
+    let mut wanted: Vec<&str> = Vec::new();
+    for block in text.split("isa = PBXNativeTarget;").skip(1) {
+        let Some((body, kind)) = block.split_once("productType = \"") else {
+            continue;
+        };
+        let ids = body
+            .split_once("fileSystemSynchronizedGroups = (")
+            .and_then(|(_, rest)| rest.split_once(')'));
+        if let (true, Some((ids, _))) = (kind.starts_with(APP), ids) {
+            wanted.extend(ids.split(',').filter_map(|e| e.split_whitespace().next()));
+        }
+    }
+    wanted
+}
+
+/// The directory one root-group line declares, when the group is wanted.
+fn group_path<'a>(line: &'a str, wanted: &[&str]) -> Option<&'a str> {
+    let id = line.split_whitespace().next()?;
+    if !wanted.contains(&id) {
+        return None;
+    }
+    let (_, rest) = line.split_once("path = ")?;
+    let declared = rest.split(';').next()?;
+    Some(declared.trim().trim_matches('"'))
 }
 
 /// A source file a Cargo manifest names outright.
@@ -1367,6 +1522,73 @@ mod tests {
     /// detection stays out of the way of the structural assertions.
     fn seen(names: &[&str]) -> Mentions {
         names.iter().map(|n| ((*n).into(), 2)).collect()
+    }
+
+    #[test]
+    fn an_xcode_application_target_takes_a_whole_directory() {
+        // Xcode 16 hands a `PBXFileSystemSynchronizedRootGroup` to a
+        // target with no per-file listing, and an application bundle is
+        // a leaf nothing can import. The PRODUCT TYPE is the
+        // discriminator: Alamofire declares `framework` for the same
+        // shape and its 94 library files ARE importable.
+        let app = r#"
+		A5B30530299BEAAA0047F10C /* Ghostty */ = {
+			isa = PBXNativeTarget;
+			fileSystemSynchronizedGroups = (
+				81F82BC72E82815D001EDFA7 /* Sources */,
+			);
+			productType = "com.apple.product-type.application";
+		};
+		A54F45F22E1F047A0046BD5C /* Lib */ = {
+			isa = PBXNativeTarget;
+			fileSystemSynchronizedGroups = (
+				A54F45F42E1F047A0046BD5C /* Source */,
+			);
+			productType = "com.apple.product-type.framework";
+		};
+		81F82BC72E82815D001EDFA7 /* Sources */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Sources; sourceTree = "<group>"; };
+		A54F45F42E1F047A0046BD5C /* Source */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Source; sourceTree = "<group>"; };
+"#;
+        assert_eq!(app_target_dirs(app), ["Sources"]);
+        // A watch app and an app extension are leaves for the same
+        // reason, which is why the product type is matched as a prefix.
+        let watch = app.replace(
+            "com.apple.product-type.application\"",
+            "com.apple.product-type.application.watchapp2\"",
+        );
+        assert_eq!(app_target_dirs(&watch), ["Sources"]);
+    }
+
+    #[test]
+    fn a_swiftpm_leaf_target_is_declared_by_its_manifest() {
+        // A library target is reached by `import <name>` and the module
+        // fold credits every file in it; an executable has no such name
+        // and `@main` replaced the `main.swift` the fold used to key on.
+        // 21 orphans. The target's own `name:` is read at ARGUMENT
+        // level, so the nested `.product(name:)` in the dependency list
+        // can never be mistaken for it.
+        assert_eq!(
+            target_name("name: \"stackdiff\", dependencies: [.product(name: \"NIO\")])"),
+            Some("stackdiff")
+        );
+        assert_eq!(
+            target_name("dependencies: [.product(name: \"NIO\")], name: \"Dev\")"),
+            Some("Dev"),
+            "a nested name is not the target's"
+        );
+        assert_eq!(target_name("dependencies: [])"), None);
+        let dir = std::env::temp_dir().join("elegance-swiftpm-leaf");
+        let _ = std::fs::create_dir_all(dir.join("Sources/stackdiff"));
+        let manifest = "let package = Package(targets: [\n  .executableTarget(name: \"stackdiff\", dependencies: []),\n  .target(name: \"NIOCore\"),\n])\n";
+        std::fs::write(dir.join("Package.swift"), manifest).unwrap();
+        // Not `main.swift` -- that stem is an entry point on its own,
+        // and `@main` is exactly what replaced it.
+        assert!(entryish(&dir.join("Sources/stackdiff/StackDiff.swift")));
+        assert!(
+            !entryish(&dir.join("Sources/NIOCore/Channel.swift")),
+            "a library target is reached by its import"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
