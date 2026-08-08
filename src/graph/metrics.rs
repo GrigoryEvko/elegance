@@ -119,7 +119,7 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
     let mut blasts = blast_radii(&sccs, &comp_succ, n);
     fold_over_modules(&files, &edge_list, &mut fan_in, &mut blasts);
     fold_over_packages(&files, &edge_list, &mut fan_in, &mut blasts);
-    fold_test_reach(&files, &mut from_tests);
+    fold_test_reach(&files, all, &mut from_tests);
     let judged = judgeable(&files, &fan_in);
     let (judged_modules, deletable_pct) = deletability(&blasts, &judged);
     let load = load_bearing(&file_labels, &blasts);
@@ -663,13 +663,24 @@ fn fold_over_modules(
 ///
 /// A zero is filled and a count is never overwritten: the question is
 /// only whether a test reaches the module at all.
-fn fold_test_reach(files: &[&GraphFacts], from_tests: &mut [u32]) {
-    let reached: HashSet<(usize, String)> = files
+fn fold_test_reach(files: &[&GraphFacts], all: &[GraphFacts], from_tests: &mut [u32]) {
+    let mut reached: HashSet<(usize, String)> = files
         .iter()
         .zip(from_tests.iter())
         .filter(|&(_, &n)| n > 0)
         .filter_map(|(f, _)| module_key(f))
         .collect();
+    // A test that BELONGS to the module writes no import into it, for
+    // the same reason a production sibling does not: `src/test/java/io/
+    // netty/handler/pcap/PcapWriteHandlerTest.java` declares package
+    // `io.netty.handler.pcap` and names `PcapWriteHandler` bare, and a
+    // Go `_test.go` sits in the package it exercises. Fourteen of gold
+    // Java's twenty remaining orphans, 58 of Scala's 83 and all three of
+    // tigerbeetle's Go client files have a same-package test and no
+    // other reader — which is `tested_only`, a finding this metric
+    // already separates from being reached by nobody. All 75 change
+    // BUCKET and none changes a judged count.
+    reached.extend(all.iter().filter(|f| f.is_test).filter_map(module_key));
     for (i, f) in files.iter().enumerate() {
         let held = module_key(f).is_some_and(|k| reached.contains(&k));
         from_tests[i] = from_tests[i].max(u32::from(held));
@@ -682,7 +693,7 @@ fn module_key(f: &GraphFacts) -> Option<(usize, String)> {
     use crate::lang::Lang;
     let name = match f.lang {
         Lang::Go | Lang::Swift => f.path.parent()?.display().to_string(),
-        Lang::Java | Lang::Scala => package_of(&f.path),
+        Lang::Java | Lang::Scala => package_of(&f.path)?,
         _ => return None,
     };
     Some((f.lang as usize, name))
@@ -710,21 +721,54 @@ fn fold_over_packages(
     if !files.iter().any(|f| jvm(f)) {
         return;
     }
-    let key = |f: &GraphFacts| (f.lang as usize, package_of(&f.path));
+    let key = |f: &GraphFacts| Some((f.lang as usize, package_of(&f.path)?));
     let depended: HashSet<(usize, String)> = edges
         .iter()
         .map(|&(_, b)| files[b as usize])
         .filter(|f| jvm(f))
-        .map(key)
+        .filter_map(key)
+        .collect();
+    // A package that HOLDS an entry point is itself reached, for the
+    // same reason a Go directory holding a `main` is. See `jvm_entry`.
+    let entries: HashSet<(usize, String)> = files
+        .iter()
+        .filter(|f| jvm(f) && jvm_entry(f))
+        .filter_map(|f| key(f))
         .collect();
     for (i, f) in files.iter().enumerate() {
         if !jvm(f) {
             continue;
         }
-        let held = u32::from(depended.contains(&key(f)));
-        fan_in[i] = fan_in[i].max(held);
-        blasts[i] = blasts[i].max(held);
+        // The launcher names the FILE. Its package is credited too where
+        // it declares one, but the entry point itself is reached whether
+        // it does or not: tigerbeetle's four `samples/*/src/main/java/
+        // Main.java` declare no package at all.
+        let held =
+            jvm_entry(f) || key(f).is_some_and(|k| depended.contains(&k) || entries.contains(&k));
+        fan_in[i] = fan_in[i].max(u32::from(held));
+        blasts[i] = blasts[i].max(u32::from(held));
     }
+}
+
+/// A file the JVM launcher itself names: `java Foo` runs `Foo.main`, so
+/// the class holding it is an entry point and nothing in the tree needs
+/// to reference it.
+///
+/// Read from the file's own declared surface rather than from its path.
+/// 94 of the gold Java corpus's non-test files write `static void main`
+/// and not ONE of them is named `Main.java` — netty writes
+/// `AutobahnServer`, `Http2Server` and `DnsNativeClient`, gson writes
+/// `ParseBenchmark`, junit5 writes `ConsoleLauncher` — so the
+/// path-based `ENTRY_STEMS` could never see them.
+///
+/// Worth 19 of gold Java's 65 orphans and one more in the zig corpus's
+/// java client, every one a netty `testsuite-*` demo server or the
+/// handler and initializer sitting in its package. It raises `judged`
+/// by 154 as well, but circularly: those are files the zero-fan-in
+/// gates had dropped and that this rule itself makes unorphanable, so
+/// the denominator growth is not extra coverage.
+fn jvm_entry(f: &GraphFacts) -> bool {
+    entryish(&f.path) || f.exports.iter().any(|e| &**e == "main")
 }
 
 /// The package a JVM source file declares, read off its path: whatever
@@ -735,7 +779,17 @@ fn fold_over_packages(
 /// spreads it over `src/main/java` and `src/testFixtures/java`; keying
 /// on the directory left 496 of Scala's modules orphaned where the
 /// package leaves 290.
-fn package_of(path: &Path) -> String {
+///
+/// `None` for a file sitting directly ON a source root: that is the
+/// UNNAMED package, which groups nothing. Every such file in a scan
+/// shares the empty key whatever repository it came from, so crediting
+/// it makes one project answer for another — zio's `zio-docs/src/main/
+/// scala/utils.scala` was credited by a test in `streams-tests`, a
+/// different sbt project, and tigerbeetle's four `samples/*/src/main/
+/// java/Main.java` credited the java client's `module-info.java`. 32
+/// files share the empty key in the gold Java corpus alone, across
+/// gson, netty, junit5 and jackson-databind.
+fn package_of(path: &Path) -> Option<String> {
     let comps: Vec<&str> = path
         .parent()
         .unwrap_or(Path::new(""))
@@ -757,7 +811,13 @@ fn package_of(path: &Path) -> String {
         .map(|k| k + 3)
         .or_else(|| comps.iter().rposition(|c| root(c)).map(|k| k + 1))
         .unwrap_or(0);
-    comps[below..].join("/")
+    // Below the root a dotted directory is a package written flat: zio
+    // files its Scala-2 stream sources under `scala-2/zio.stream/`, and
+    // reading that as one component put them in a package of their own.
+    // Only below the root — `scala-2.13+` is a SOURCE SET and splitting
+    // it took 47 Scala modules out of the packages they belong to.
+    let name = comps[below..].join("/").replace('.', "/");
+    (!name.is_empty()).then_some(name)
 }
 
 /// A file whose stem declares it an entry point or an API surface.
@@ -864,9 +924,38 @@ fn judgeable(files: &[&GraphFacts], fan_in: &[u32]) -> Vec<bool> {
         .zip(fan_in)
         .map(|(f, &reached)| {
             let sink = f.lang.is_sink(&f.path) || declares_types_only(f);
-            !(sink || reached == 0 && runs_once(&f.path))
+            !(sink || reached == 0 && (runs_once(&f.path) || package_private(f)))
         })
         .collect()
+}
+
+/// A Java file that declares nothing another package can name.
+///
+/// `import a.b.C` of a package-private type does not compile, so the
+/// only reference such a file can receive is from its own package —
+/// which `fold_over_packages` has already credited by the time this is
+/// asked. A zero here therefore means the PACKAGE is unreached, and the
+/// package answers for itself through the public types it does declare:
+/// netty's `io.netty.handler.pcap` is one public `PcapWriteHandler` and
+/// six package-private packet writers, and reporting it seven times
+/// states one fact seven ways.
+///
+/// The three shapes this covers are all build artifacts by their own
+/// account: the seven shaded `DoNotRemove` classes say "Placeholder for
+/// module-info maven plugin to add the package to the module-info
+/// descriptor" in their only comment, the four `io.netty.util.internal.
+/// svm` classes carry `@TargetClass` and are read by GraalVM's image
+/// builder, and junit5's `eclipse-public-license-2.0.java` is a spotless
+/// header template.
+///
+/// Zero-fan-in gated rather than a sink: 1227 of the gold Java corpus's
+/// 4634 non-test files declare no public type, and all but TWENTY of
+/// them are credited by their package before this is ever asked. Those
+/// twenty are what leaves the population, and only twelve of them were
+/// orphans — the other eight were reached by a test, which is why the
+/// java corpus's `tested_only` falls 131 to 123 with the rule on.
+fn package_private(f: &GraphFacts) -> bool {
+    f.lang == crate::lang::Lang::Java && f.exports.is_empty()
 }
 
 /// A LuaCATS declaration file: `---@meta` on line one marks a file as
@@ -1128,6 +1217,154 @@ mod tests {
     }
 
     #[test]
+    fn a_jvm_package_holding_a_main_is_reached_and_so_are_its_helpers() {
+        // `java io.netty.testsuite.autobahn.AutobahnServer` runs a class
+        // the tree never names, and the handler and initializer beside
+        // it are same-package references with no import to resolve. 19
+        // of gold Java's 65 orphans were one package away from a `main`,
+        // across five netty test suites and its GraalVM image checks.
+        let entry = |path: &str| {
+            let mut f = fixture(Lang::Java, path, &[]);
+            f.exports = vec!["Server".into(), "main".into()];
+            f
+        };
+        let held = |path: &str| {
+            let mut f = fixture(Lang::Java, path, &[]);
+            f.exports = vec!["Type".into()];
+            f
+        };
+        let mut root = fixture(
+            Lang::Java,
+            "suite/src/main/java/io/netty/app/Root.java",
+            &["io.netty.autobahn.Server"],
+        );
+        root.exports = vec!["Root".into(), "main".into()];
+        let files = [
+            entry("suite/src/main/java/io/netty/autobahn/Server.java"),
+            held("suite/src/main/java/io/netty/autobahn/Handler.java"),
+            held("suite/src/main/java/io/netty/lonely/Lonely.java"),
+            root,
+        ];
+        let arch = arch(&files);
+        // Only the package with no entry point and no importer is left.
+        assert_eq!(
+            arch.orphans,
+            ["suite/src/main/java/io/netty/lonely/Lonely.java"]
+        );
+    }
+
+    #[test]
+    fn a_test_in_the_package_it_exercises_states_no_import() {
+        // `src/test/java/io/netty/handler/pcap/PcapWriteHandlerTest.java`
+        // declares package `io.netty.handler.pcap` and names
+        // `PcapWriteHandler` bare — Java's default access is exactly
+        // what a same-package test is for. Fourteen of gold Java's
+        // twenty remaining orphans and 58 of Scala's 83 had a test in
+        // their own package and no other reader.
+        let mut suite = fixture(Lang::Java, "m/src/test/java/io/pcap/WriterTest.java", &[]);
+        suite.is_test = true;
+        let public = |path: &str, imports: &[&str]| {
+            let mut f = fixture(Lang::Java, path, imports);
+            f.exports = vec!["Type".into()];
+            f
+        };
+        let mut root = public("m/src/main/java/io/app/Root.java", &["io.other.Used"]);
+        root.exports = vec!["Root".into(), "main".into()];
+        let files = [
+            suite,
+            public("m/src/main/java/io/pcap/Writer.java", &[]),
+            public("m/src/main/java/io/other/Used.java", &[]),
+            root,
+            public("m/src/main/java/io/dead/Gone.java", &[]),
+        ];
+        let arch = arch(&files);
+        // The tested package is `tested_only`, which is a different
+        // finding from being reached by nobody.
+        assert_eq!(arch.orphans, ["m/src/main/java/io/dead/Gone.java"]);
+        assert_eq!(arch.tested_only, 1);
+    }
+
+    #[test]
+    fn an_entry_point_in_the_unnamed_package_answers_for_itself_alone() {
+        // A package key is what lies BELOW the source root, and a file
+        // sitting directly on one has nothing below it. Every such file
+        // in a scan shares that empty key whatever build it came from:
+        // tigerbeetle's four `samples/*/src/main/java/Main.java` credited
+        // the java client's own root files, and zio's `zio-docs/src/main/
+        // scala/utils.scala` was credited by a spec under
+        // `streams-tests` — a different sbt project.
+        let mut entry = fixture(
+            Lang::Java,
+            "samples/basic/src/main/java/Main.java",
+            &["io.lib.Helper"],
+        );
+        entry.exports = vec!["Main".into(), "main".into()];
+        let mut helper = fixture(Lang::Java, "lib/src/main/java/io/lib/Helper.java", &[]);
+        helper.exports = vec!["Helper".into()];
+        let mut other = fixture(Lang::Java, "client/src/main/java/Client.java", &[]);
+        other.exports = vec!["Client".into()];
+        let arch = arch(&[entry, helper, other]);
+        // The launcher names the FILE, so an entry point is reached
+        // whether it declares a package or not — and it answers for
+        // nobody else.
+        assert_eq!(arch.orphans, ["client/src/main/java/Client.java"]);
+    }
+
+    #[test]
+    fn a_java_file_declaring_no_importable_type_is_not_asked_who_imports_it() {
+        // `import a.b.C` of a package-private type does not compile, so
+        // the only reference such a file can receive is same-package,
+        // which `fold_over_packages` has already credited by the time
+        // this is asked. netty's seven shaded `DoNotRemove` classes say
+        // it themselves: "Placeholder for module-info maven plugin to
+        // add the package to the module-info descriptor".
+        let public = |path: &str, imports: &[&str]| {
+            let mut f = fixture(Lang::Java, path, imports);
+            f.exports = vec!["Type".into()];
+            f
+        };
+        let hidden = |path: &str| fixture(Lang::Java, path, &[]);
+        let mut root = public("m/src/main/java/io/app/Root.java", &["io.live.Live"]);
+        root.exports = vec!["Root".into(), "main".into()];
+        let files = [
+            root,
+            public("m/src/main/java/io/live/Live.java", &[]),
+            hidden("m/src/main/java/io/live/Helper.java"),
+            public("m/src/main/java/io/dead/Dead.java", &[]),
+            hidden("m/src/main/java/io/dead/DoNotRemove.java"),
+        ];
+        let arch = arch(&files);
+        // The dead package answers ONCE, through the public type it
+        // declares; its hidden half states the same fact a second time.
+        assert_eq!(arch.orphans, ["m/src/main/java/io/dead/Dead.java"]);
+        // Zero-fan-in gated, not a sink: the live package's hidden half
+        // is credited by its package and stays in the population. 611 of
+        // gold Java's 4406 production files declare no public type.
+        assert_eq!(arch.judged_modules, 4);
+    }
+
+    #[test]
+    fn a_dotted_directory_below_the_source_root_is_a_package_written_flat() {
+        let pkg = |p: &str| package_of(Path::new(p));
+        // zio files its Scala-2 stream sources under a directory named
+        // `zio.stream`, and the first line of the file is `package
+        // zio.stream`; the sibling implementations live under
+        // `scala/zio/stream/`.
+        let flat = "zio/streams/shared/src/main/scala-2/zio.stream/ZStreamVersionSpecific.scala";
+        assert_eq!(pkg(flat).as_deref(), Some("zio/stream"));
+        // Only BELOW the root. `scala-2.13+` is a SOURCE SET, and
+        // splitting the whole path instead shifted the root offset and
+        // put 47 Scala modules — every file under
+        // cats/core/src/main/scala-2.13+ among them — in a package of
+        // their own.
+        let set = "cats/core/src/main/scala-2.13+/cats/compat/Seq.scala";
+        assert_eq!(pkg(set).as_deref(), Some("cats/compat"));
+        // Nothing below the root is the UNNAMED package, which groups
+        // nothing at all.
+        assert_eq!(pkg("zio/zio-docs/src/main/scala/utils.scala"), None);
+    }
+
+    #[test]
     fn deliberate_cycle_is_detected_with_members() {
         let files = [
             fixture(Lang::Python, "app/a.py", &[".b"]),
@@ -1378,15 +1615,18 @@ mod tests {
         // Javadoc; `import io.netty.buffer.package-info` is not legal
         // syntax. 89 sat in the gold orphan list by construction, 53 of
         // them netty's.
+        let public = |path: &str, imports: &[&str]| {
+            let mut f = fixture(Lang::Java, path, imports);
+            // A public type is what keeps a file in the population; see
+            // `package_private`.
+            f.exports = vec!["Type".into()];
+            f
+        };
         let files = [
-            fixture(
-                Lang::Java,
-                "io/netty/buffer/ByteBuf.java",
-                &["io.netty.util.Recycler"],
-            ),
-            fixture(Lang::Java, "io/netty/util/Recycler.java", &[]),
+            public("io/netty/buffer/ByteBuf.java", &["io.netty.util.Recycler"]),
+            public("io/netty/util/Recycler.java", &[]),
             fixture(Lang::Java, "io/netty/util/package-info.java", &[]),
-            fixture(Lang::Java, "io/netty/unused/Unused.java", &[]),
+            public("io/netty/unused/Unused.java", &[]),
             fixture(Lang::Java, "io/netty/unused/package-info.java", &[]),
         ];
         let arch = arch(&files);
