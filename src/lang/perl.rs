@@ -157,7 +157,27 @@ pub fn pack() -> Pack {
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
-        test_path: |p| p.contains("/t/") || p.ends_with(".t") || p.contains("/xt/"),
+        // `t/` and `xt/` are what a CPAN distribution writes, and `.t`
+        // is the file extension for a test script. `tests/` is what a
+        // project in ANOTHER language writes when its harness happens to
+        // be Perl: curl keeps `runtests.pl` there — `#!/usr/bin/env
+        // perl`, documented at docs/runtests.md — with the FTP, HTTP,
+        // HTTP/2 and HTTP/3 servers it starts, the per-case
+        // `libtest/test*.pl`, and `appveyor.pm`/`azure.pm`/
+        // `directories.pm` beside them.
+        //
+        // Audited every Perl-family file in all 22 gold corpora under a
+        // `tests` component: 53 in curl and 18 in dune, and dune's are
+        // all `.t`, which the rule above already matched. So this reads
+        // curl's harness and nothing else in the corpus.
+        //
+        // `/test/` singular is NOT here. Its motivating files were
+        // vscode's `.pl` colorize fixtures, and those are fixtures — the
+        // one-shot rule takes them by name rather than by pretending a
+        // syntax-highlighting sample is a Perl test.
+        test_path: |p| {
+            p.contains("/t/") || p.ends_with(".t") || p.contains("/xt/") || p.contains("/tests/")
+        },
         asserty,
         is_hook: |_, _| false,
         // A sub returns a list and declares nothing about its width.
@@ -720,6 +740,25 @@ mod tests {
         // The string must OPEN with the name and carry two segments.
         assert!(!got.iter().any(|t| t.starts_with("failed")), "{got:?}");
         assert!(!got.iter().any(|t| t.starts_with("Bareword")), "{got:?}");
+    }
+
+    #[test]
+    fn a_harness_a_c_project_writes_in_perl_is_still_a_test() {
+        let is_test = crate::lang::perl::pack().test_path;
+        // CPAN's own spellings.
+        assert!(is_test("/Plack/t/middleware.t"));
+        assert!(is_test("/mojo/xt/author.t"));
+        // curl keeps its harness under `tests/`, because the project is
+        // a C project and `t/` is not its convention.
+        assert!(is_test("/curl/tests/runtests.pl"));
+        assert!(is_test("/curl/tests/ftpserver.pl"));
+        assert!(is_test("/curl/tests/appveyor.pm"));
+        assert!(is_test("/curl/tests/libtest/test1013.pl"));
+        // Production Perl is untouched, and `/test/` singular is not
+        // this rule — vscode's colorize samples are fixtures.
+        assert!(!is_test("/Plack/lib/Plack/Builder.pm"));
+        assert!(!is_test("/curl/docs/libcurl/symbols.pl"));
+        assert!(!is_test("/vscode/ext/colorize-fixtures/test.pl"));
     }
 
     #[test]
