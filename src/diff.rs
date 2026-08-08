@@ -146,7 +146,12 @@ fn distributions(files: &[std::path::PathBuf], budgets: LangBudgets, root: &Path
         if config::is_generated(path, &source) {
             continue;
         }
-        let f = facts::extract(lang.pack(), &mut lang.pack().make_parser(), path, &text);
+        let f = facts::extract(
+            lang.pack_for(path),
+            &mut lang.pack().make_parser(),
+            path,
+            &text,
+        );
         if f.low_confidence() {
             continue;
         }
@@ -181,7 +186,12 @@ impl Review {
         let Some((lang, text)) = crate::measurable(path, &source) else {
             return false;
         };
-        let f = facts::extract(lang.pack(), &mut lang.pack().make_parser(), path, &text);
+        let f = facts::extract(
+            lang.pack_for(path),
+            &mut lang.pack().make_parser(),
+            path,
+            &text,
+        );
         if f.low_confidence() {
             return true;
         }

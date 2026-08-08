@@ -412,7 +412,8 @@ fn scan_in_pool(
                     Ok(source) if config::is_generated(path, &source) => agg.generated += 1,
                     Ok(source) => match measurable(path, &source) {
                         Some((lang, text)) => {
-                            let f = facts::extract(lang.pack(), parsers.get(lang), path, &text);
+                            let f =
+                                facts::extract(lang.pack_for(path), parsers.get(lang), path, &text);
                             agg.add_file(&f);
                         }
                         // A container with no code in it (a Vue

@@ -487,16 +487,16 @@
 "expr depth" = { hi = 11.0 }
 "magic numbers" = { hi = 1.0 }
 # gold p05 is zero: the low flank is vacuous by the corpus's verdict
-"comment ratio" = { lo = 0.00, hi = 0.16 }
+"comment ratio" = { lo = 0.00, hi = 0.83 }
 "untyped params" = { hi = 5.0 }
 "confusable" = { hi = 1.0 }
 "abbreviated" = { hi = 1.0 }
 "magic strings" = { hi = 1.0 }
-"module doc" = { hi = 255.0 }
-"type doc" = { hi = 137.0 }
+"module doc" = { hi = 251.0 }
+"type doc" = { hi = 161.0 }
 "fn doc" = { hi = 118.0 }
-"field doc" = { hi = 101.0 }
-"inline doc" = { hi = 121.0 }
+"field doc" = { hi = 88.0 }
+"inline doc" = { hi = 110.0 }
 "asserts" = { rate = 0.00 }
 "public docs" = { rate = 0.00 }
 

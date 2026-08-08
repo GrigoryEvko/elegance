@@ -67,7 +67,27 @@ pub(crate) fn grammar(path: &std::path::Path) -> tree_sitter::Language {
 }
 
 pub fn pack() -> Pack {
-    let ts: tree_sitter::Language = tree_sitter_ocaml::LANGUAGE_OCAML.into();
+    built(tree_sitter_ocaml::LANGUAGE_OCAML.into())
+}
+
+/// The pack for a `.mli`, whose tables are built from the INTERFACE
+/// grammar.
+///
+/// `Pack::sems`, `def_sites` and `reassigns` are all indexed by
+/// `node.kind_id()`, and tree-sitter numbers a grammar's kinds by that
+/// grammar's own rule order. `retune` re-languaged the parser for a
+/// `.mli` and left the tables built from the implementation grammar
+/// behind, so every id read off an interface addressed the wrong row:
+/// a `.mli` saying `open Import` supplied no edge at all, while the
+/// identical `.ml` supplied one. All 1147 `.mli` files in the gold
+/// corpus were mis-typed that way — imports, units and comments alike —
+/// which is also what `Lang::is_sink` means when it says "the
+/// interface's own references still count".
+pub fn interface_pack() -> Pack {
+    built(tree_sitter_ocaml::LANGUAGE_OCAML_INTERFACE.into())
+}
+
+fn built(ts: tree_sitter::Language) -> Pack {
     let kinds: &[&[(&str, Sem)]] = &[KINDS];
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
@@ -377,5 +397,35 @@ end
         // `open struct .. end` names no module, and `Some` is a
         // constructor rather than a module qualifier.
         assert!(!got.contains(&"Some"));
+    }
+
+    /// A `.mli` is parsed with the INTERFACE grammar, and its tables
+    /// have to come from that grammar too. `Pack::sems` is indexed by
+    /// `node.kind_id()`, and tree-sitter numbers each grammar's kinds by
+    /// its own rule order, so reading an interface's nodes through the
+    /// implementation's table addresses the wrong rows — silently, since
+    /// every id is in range. All 1147 `.mli` files in gold were read
+    /// that way and supplied no edges at all.
+    #[test]
+    fn an_interface_names_the_modules_it_references_as_an_implementation_does() {
+        const SRC: &str = r#"
+open! Import
+module P = Stdune.Path
+val f : Path.Build.t -> string
+type t = Dune_lang.Decoder.t
+"#;
+        let iface = crate::lang::Lang::OCaml.pack_for(Path::new("t.mli"));
+        let mut parser = iface.make_parser();
+        let f = crate::facts::extract(iface, &mut parser, Path::new("t.mli"), SRC);
+        let got: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
+        assert_eq!(
+            got,
+            ["Import", "Stdune.Path", "Path.Build", "Dune_lang.Decoder"]
+        );
+        // And the selection is by PATH, not by language: a `.ml` still
+        // gets the implementation pack.
+        let impl_pack = crate::lang::Lang::OCaml.pack_for(Path::new("t.ml"));
+        assert!(std::ptr::eq(impl_pack, crate::lang::Lang::OCaml.pack()));
+        assert!(!std::ptr::eq(iface, impl_pack));
     }
 }

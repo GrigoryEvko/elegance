@@ -169,8 +169,12 @@ fn scan(files: &[PathBuf]) -> Scanned {
                     Ok(source) if crate::config::is_generated(path, &source) => acc.generated += 1,
                     Ok(source) => {
                         if let Some((lang, text)) = crate::measurable(path, &source) {
-                            let f =
-                                crate::facts::extract(lang.pack(), parsers.get(lang), path, &text);
+                            let f = crate::facts::extract(
+                                lang.pack_for(path),
+                                parsers.get(lang),
+                                path,
+                                &text,
+                            );
                             acc.add_file(&f, &package);
                         }
                     }
@@ -209,8 +213,12 @@ fn straddling(root: &Path, prints: &HashMap<u64, Print>) -> Result<Vec<Straddle>
                     {
                         let lang = Lang::of_source(path, &source)
                             .expect("collect_files filters by language");
-                        let f =
-                            crate::facts::extract(lang.pack(), parsers.get(lang), path, &source);
+                        let f = crate::facts::extract(
+                            lang.pack_for(path),
+                            parsers.get(lang),
+                            path,
+                            &source,
+                        );
                         if !f.low_confidence() {
                             collect_straddles(&f, prints, &mut hits);
                         }

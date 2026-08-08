@@ -502,6 +502,23 @@ impl Lang {
         static PACKS: [OnceLock<Pack>; LANGS.len()] = [const { OnceLock::new() }; LANGS.len()];
         PACKS[self as usize].get_or_init(|| (DESCS[self as usize].make)())
     }
+
+    /// The pack a FILE is measured with. One language ships two
+    /// grammars: OCaml's `.mli` is a signature, and tree-sitter-ocaml
+    /// generates it separately from the implementation.
+    ///
+    /// This has to be chosen by path rather than by language, because
+    /// `Pack::sems`, `def_sites` and `reassigns` are indexed by
+    /// `node.kind_id()` and each grammar numbers its own kinds. Handing
+    /// an interface's nodes to the implementation's tables addresses the
+    /// wrong rows — silently, since every id is in range.
+    pub fn pack_for(self, path: &Path) -> &'static Pack {
+        static INTERFACE: OnceLock<Pack> = OnceLock::new();
+        match self == Lang::OCaml && path.extension().is_some_and(|e| e == "mli") {
+            true => INTERFACE.get_or_init(ocaml::interface_pack),
+            false => self.pack(),
+        }
+    }
 }
 
 /// How a catch clause mishandles errors. Zen of Python: "Errors should
