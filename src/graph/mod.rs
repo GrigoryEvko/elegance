@@ -372,7 +372,7 @@ impl Index {
             Lang::Swift => self.swift(target),
             // A module name is CamelCase and its path is snake_case,
             // and nothing bridged the two.
-            Lang::Elixir => self.elixir(target),
+            Lang::Elixir => self.elixir(from, target),
             // A module IS a file, and the file is not capitalised.
             Lang::OCaml => self.ocaml(i, target),
             // The packs cut a JVM import back to the TYPE, whose file it
@@ -855,17 +855,81 @@ impl Index {
     /// missed all 2740 module references in the corpus, so Elixir
     /// reported 31 internal edges and every one of them was JavaScript
     /// under phoenix/assets/js.
-    fn elixir(&self, target: &str) -> Class {
+    /// A module name is not a path, and Elixir says so oftener than the
+    /// convention holds. `plug/lib/plug/exceptions.ex` declares
+    /// `Plug.BadRequestError` and `Plug.TimeoutError` and answers to
+    /// neither of its own path's spellings; `ecto/lib/ecto/exceptions.ex`
+    /// holds sixteen `defmodule`s and not one is `Ecto.Exceptions`;
+    /// `phoenix/installer/lib/phx_new/project.ex` declares
+    /// `Phx.New.Project`, where the directory merges two segments into
+    /// one. So the DECLARATION is asked first and the path only after.
+    ///
+    /// Only a name exactly one file declares. Taking every declarer
+    /// instead scored the same orphan count and added 1266 edges, all of
+    /// them among duplicate test fixtures — gold declares `Schema` forty
+    /// times and `DemoWeb.Router` seven — so an ambiguous name falls
+    /// through to the path matcher, which at least prefers the
+    /// shallowest.
+    ///
+    /// One component never reaches the path matcher at all. `Mix`,
+    /// `Config` and `Repo` are how the language spells its own, and a
+    /// one-component suffix match lands on whatever file bears the name:
+    /// of 165 such names that resolved this way, 9 pointed at a file
+    /// declaring no such module and carried 537 of the occurrences.
+    fn elixir(&self, from: &GraphFacts, target: &str) -> Class {
+        if let Some(i) = self.declares(target) {
+            return Class::Internal(i);
+        }
+        if let Some(i) = self.shortened(from, target) {
+            return Class::Internal(i);
+        }
         let segs: Vec<String> = target
             .split('.')
             .filter(|s| !s.is_empty())
             .map(crate::lang::underscore)
             .collect();
+        if segs.len() < 2 {
+            return Class::External;
+        }
         let parts: Vec<&str> = segs.iter().map(String::as_str).collect();
         match self.suffix(&parts) {
             Some(i) => Class::Internal(i),
             None => Class::External,
         }
+    }
+
+    /// The one file declaring this module name, where exactly one does.
+    fn declares(&self, target: &str) -> Option<usize> {
+        match self
+            .declared
+            .get(&(Lang::Elixir, Box::<str>::from(target)))?
+            .as_slice()
+        {
+            [only] => Some(*only),
+            _ => None,
+        }
+    }
+
+    /// `alias Phoenix.Socket.{V1, V2, Transport}` and then, five lines
+    /// down, `V1.JSONSerializer` — the head is the alias's short name
+    /// and only the file's own import list says what it stands for.
+    /// `phoenix/lib/phoenix/transports/websocket.ex:24` and `:29` are
+    /// that pair, and `long_poll.ex:20` writes it again; the two
+    /// serializer modules they name have no other reference in the
+    /// corpus.
+    ///
+    /// Self-validating: the expanded name has to be one exactly one
+    /// file declares, so a wrong guess resolves to nothing rather than
+    /// to somebody else.
+    fn shortened(&self, from: &GraphFacts, target: &str) -> Option<usize> {
+        let (head, rest) = target.split_once('.')?;
+        let full = from
+            .imports
+            .iter()
+            .map(|i| &*i.target)
+            .filter(|t| t.len() > head.len())
+            .find(|t| t.rsplit('.').next() == Some(head))?;
+        self.declares(&format!("{full}.{rest}"))
     }
 
     /// An OCaml module IS a compilation unit, and its name is the file
@@ -1068,6 +1132,9 @@ impl Index {
                 self.beside(from, &imp.target).into_iter().collect()
             }
             Lang::Lua | Lang::Ruby | Lang::Python => self.glob_modules(from, imp),
+            // A name Elixir builds at run time; everything else this
+            // language names resolves through `elixir` above.
+            Lang::Elixir => self.glob_modules(from, imp),
             Lang::C | Lang::Cpp | Lang::Cuda => self.nearest_includes(from, &imp.target),
             // A member name answers from the extension-method index
             // alone; see `Reach::Member`.
@@ -1163,14 +1230,25 @@ impl Index {
     /// Only real files are ever named, so unlike completing the literal
     /// this manufactures no external dependency.
     fn glob_modules(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Vec<usize> {
-        if !matches!(from.lang, Lang::Lua | Lang::Ruby | Lang::Python) {
+        if !matches!(
+            from.lang,
+            Lang::Lua | Lang::Ruby | Lang::Python | Lang::Elixir
+        ) {
             return Vec::new();
         }
-        let segs: Vec<&str> = imp
+        // An Elixir module name is CamelCase and its path is the same
+        // name underscored, which is the bridge `elixir` already builds
+        // — and `underscore("*")` is `"*"`, so the hole survives it.
+        let owned: Vec<String> = imp
             .target
             .split(component_separators(from.lang))
             .filter(|s| !s.is_empty())
+            .map(|s| match from.lang {
+                Lang::Elixir => crate::lang::underscore(s),
+                _ => s.to_string(),
+            })
             .collect();
+        let segs: Vec<&str> = owned.iter().map(String::as_str).collect();
         let Some(star) = segs.iter().position(|s| *s == "*") else {
             return Vec::new();
         };
@@ -1270,7 +1348,10 @@ impl Index {
 /// that resolve a name by its declaration rather than by where it sits.
 fn declaring_files(files: &[GraphFacts]) -> HashMap<(Lang, Box<str>), Vec<usize>> {
     let mut out: HashMap<(Lang, Box<str>), Vec<usize>> = HashMap::new();
-    let named = |f: &GraphFacts| matches!(f.lang, Lang::Rust | Lang::CSharp);
+    // Elixir joins Rust and C# because a module name is a DECLARATION
+    // there too: nothing about `plug/lib/plug/exceptions.ex` says it
+    // holds `Plug.BadRequestError`, and only `defmodule` does.
+    let named = |f: &GraphFacts| matches!(f.lang, Lang::Rust | Lang::CSharp | Lang::Elixir);
     // A TEST file's declaration must not answer for a production name,
     // for the reason `dirs` already skips one: production code cannot
     // depend on a test, so the edge lands on a file the production
@@ -1893,6 +1974,71 @@ mod tests {
         // Two includes, two dependencies: the extra arch rides past the
         // row without being tallied twice.
         assert_eq!((res.internal, res.external, res.unresolved), (2, 0, 0));
+    }
+
+    #[test]
+    fn an_elixir_name_resolves_to_the_file_that_declares_it() {
+        // `plug/lib/plug/exceptions.ex` declares `Plug.BadRequestError`
+        // at :56 and `Plug.TimeoutError` at :64 and answers to neither
+        // spelling of its own path; `ecto/lib/ecto/exceptions.ex` holds
+        // sixteen `defmodule`s and not one is `Ecto.Exceptions`.
+        //
+        // Only a name exactly one file declares. Taking every declarer
+        // instead scored the same orphan count and added 1266 edges,
+        // all among duplicate test fixtures — gold declares `Schema`
+        // forty times.
+        let mut exceptions = file(Lang::Elixir, "lib/plug/exceptions.ex", &[]);
+        exceptions.exports = vec!["Plug.BadRequestError".into(), "Plug.TimeoutError".into()];
+        let mut one = file(Lang::Elixir, "test/a/schema.ex", &[]);
+        one.exports = vec!["Schema".into()];
+        let mut two = file(Lang::Elixir, "test/b/schema.ex", &[]);
+        two.exports = vec!["Schema".into()];
+        let files = [
+            exceptions,
+            one,
+            two,
+            file(
+                Lang::Elixir,
+                "lib/plug/conn.ex",
+                &["Plug.BadRequestError", "Schema", "Mix"],
+            ),
+        ];
+        let (_, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[3][0], Some(idx("lib/plug/exceptions.ex")));
+        assert_eq!(targets[3][1], None, "two files declare Schema");
+        assert_eq!(
+            targets[3][2], None,
+            "one component names the language's own"
+        );
+    }
+
+    #[test]
+    fn an_alias_shortened_reference_is_expanded_by_the_file_that_wrote_it() {
+        // phoenix/lib/phoenix/transports/websocket.ex:24 is `alias
+        // Phoenix.Socket.{V1, V2, Transport}` and :29 names
+        // `V1.JSONSerializer`; long_poll.ex:20 writes it again, and the
+        // two serializer modules have no other reference in the corpus.
+        let mut v1 = file(
+            Lang::Elixir,
+            "lib/phoenix/socket/serializers/v1_json.ex",
+            &[],
+        );
+        v1.exports = vec!["Phoenix.Socket.V1.JSONSerializer".into()];
+        let files = [
+            v1,
+            file(
+                Lang::Elixir,
+                "lib/phoenix/transports/websocket.ex",
+                &["Phoenix.Socket.V1", "V1.JSONSerializer"],
+            ),
+        ];
+        let (_, targets) = super::resolve_imports(&files);
+        assert_eq!(
+            targets[1][1],
+            Some(0),
+            "the file's own alias says what V1 is"
+        );
     }
 
     #[test]

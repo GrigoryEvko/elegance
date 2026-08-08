@@ -178,7 +178,12 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     // A module named in expression position — `Plug.Conn.send_resp(...)`
     // — is the reference itself, with no statement around it.
     if node.kind() == "alias" {
-        return node.utf8_text(src).map(module).into_iter().collect();
+        return node.utf8_text(src).map(spelled).into_iter().collect();
+    }
+    // The two shapes that BUILD a name out of the module this file
+    // declares, neither of which any file spells out.
+    if matches!(node.kind(), "dot" | "list") {
+        return own_submodule(node, src).map(mention).into_iter().collect();
     }
     if !matches!(
         target_text(node, src),
@@ -206,6 +211,110 @@ fn module(target: &str) -> super::ImportInfo {
         names: Vec::new(),
         reach: super::Reach::Anywhere,
     }
+}
+
+/// A name the source never writes down. It contributes an edge where a
+/// file answers to it and is never tallied: `imports_external` has to
+/// go on meaning "a module from outside", not "a segment the resolver
+/// could not complete".
+fn mention(target: String) -> super::ImportInfo {
+    super::ImportInfo {
+        target: target.into(),
+        names: Vec::new(),
+        reach: super::Reach::Mention,
+    }
+}
+
+/// A module name written in expression position. One SEGMENT is a
+/// mention rather than a statement: `Enum`, `String` and `Map` are the
+/// standard library and are written thousands of times, so counting
+/// each as a dependency would drown the tally in names the file merely
+/// uses. `@behaviour Plug` is the same node and is a real edge — 20
+/// files under plug/lib write it and plug/lib/plug.ex is the corpus's
+/// only `defmodule Plug`.
+fn spelled(target: &str) -> super::ImportInfo {
+    match target.contains('.') {
+        true => module(target),
+        false => mention(target.to_string()),
+    }
+}
+
+/// The module name a `__MODULE__` construction builds, spelled out
+/// against the module this file declares.
+///
+/// Elixir names a submodule at run time in two ways and gold uses both.
+/// `absinthe/lib/absinthe/schema/prototype.ex:37` writes
+/// `use __MODULE__.Notation` and `schema/notation.ex:2170`
+/// `unquote(__MODULE__).SDL.parse(` — 33 files across the corpus write
+/// one of those two forms, and the name they build appears in no file.
+/// `oban/lib/oban/migrations/postgres.ex:71` writes
+/// `[__MODULE__, "V#{pad_idx}"] |> Module.concat()`, where the leaf is
+/// an interpolation and only its SHAPE survives, so each element after
+/// `__MODULE__` becomes one unknown component — which is what reaches
+/// all fourteen of `oban/lib/oban/migrations/postgres/v*.ex`.
+///
+/// Gold holds 97 `Module.concat` calls and exactly one of them leads
+/// with `__MODULE__`; the other 96 concatenate names this rule has
+/// nothing to say about. `dot` and `list` are unmapped kinds, so
+/// promoting either costs the node nothing — the call keeps being a
+/// call and the string keeps being a string.
+fn own_submodule(node: Node, src: &[u8]) -> Option<String> {
+    let owner = enclosing_module(node, src)?;
+    match node.kind() {
+        "dot" => {
+            let leaf = node.named_child(1).filter(|l| l.kind() == "alias")?;
+            names_self(node.named_child(0)?, src).then(|| {
+                let leaf = leaf.utf8_text(src).unwrap_or("");
+                format!("{owner}.{leaf}")
+            })
+        }
+        _ => {
+            let mut cursor = node.walk();
+            let elements: Vec<Node> = node.named_children(&mut cursor).collect();
+            let leads = elements.first().is_some_and(|e| names_self(*e, src));
+            (leads && concatenated_here(node, src))
+                .then(|| owner + &".*".repeat(elements.len() - 1))
+        }
+    }
+}
+
+/// `__MODULE__`, and the `unquote(__MODULE__)` a macro writes to reach
+/// the module its expansion will land in.
+fn names_self(node: Node, src: &[u8]) -> bool {
+    let text = node.utf8_text(src).unwrap_or("").trim();
+    text == "__MODULE__" || text == "unquote(__MODULE__)"
+}
+
+/// Is this list handed to `Module.concat`? Either piped into it, which
+/// is how oban writes it, or passed as its argument.
+fn concatenated_here(list: Node, src: &[u8]) -> bool {
+    let Some(parent) = list.parent() else {
+        return false;
+    };
+    let call = match parent.kind() {
+        "binary_operator" => parent.child_by_field_name("right"),
+        "arguments" => parent.parent(),
+        _ => None,
+    };
+    call.and_then(|c| target_text(c, src)) == Some("Module.concat")
+}
+
+/// The module this file declares around `node` — the nearest enclosing
+/// `defmodule`, which is what `__MODULE__` expands to.
+fn enclosing_module(node: Node, src: &[u8]) -> Option<String> {
+    let mut at = node.parent();
+    while let Some(n) = at {
+        if target_text(n, src) == Some("defmodule")
+            && let Some(name) = args_of(n)
+                .and_then(|a| a.named_child(0))
+                .filter(|c| c.kind() == "alias")
+                .and_then(|c| c.utf8_text(src).ok())
+        {
+            return Some(name.to_string());
+        }
+        at = n.parent();
+    }
+    None
 }
 
 /// The members of `alias Foo.{Bar, Baz}`, each spelled out in full.
@@ -238,15 +347,24 @@ fn braces(dot: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 /// position across the five repos against 2458 alias/import/require/use
 /// statements, and 6686 of them name a module the corpus defines.
 ///
-/// A single segment is excluded. It is how the language spells its OWN
-/// modules — `Mix`, `Config`, `Repo`, `Inspect` — and a one-component
+/// A single segment used to be excluded, because a one-component
 /// suffix match lands on whatever file bears that name: of 165 distinct
 /// single-segment names that resolved, 9 pointed at a file declaring no
-/// such module, and those 9 carried 537 of the occurrences. Requiring a
-/// dot leaves 620 distinct names of which 619 land on a file that
-/// declares them.
+/// such module, and those 9 carried 537 of the occurrences. The fix for
+/// that is in the RESOLVER, which now answers a name by the file
+/// DECLARING it and refuses a one-component path match outright — so
+/// the exclusion here was costing real edges: `absinthe.ex`,
+/// `phoenix.ex` and `plug.ex` are each their library's front door,
+/// named `Absinthe.run/3`, `mod: {Phoenix, []}` and `@behaviour Plug`,
+/// and every one read as depended on by nothing.
+///
+/// The cost is that `Enum`, `String` and `Map` become imports too.
+/// They are `Reach::Mention`, so they reach the graph without reaching
+/// the tally, and the vocabulary still sees them: the `Sem::Import` arm
+/// records an ident when the table said Ident, so gold Elixir's dead
+/// export count is 420 either way.
 fn names_a_module(node: Node, src: &[u8]) -> bool {
-    node.utf8_text(src).is_ok_and(|t| t.contains('.')) && !declared_here(node, src)
+    !declared_here(node, src)
 }
 
 fn parent_of<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
@@ -542,6 +660,13 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         // A module name written out is the dependency; there is no
         // import statement to read instead.
         Sem::Ident if node.kind() == "alias" && names_a_module(node, src) => Sem::Import,
+        // A name built from `__MODULE__`. Both kinds are unmapped, so
+        // the promotion costs the node nothing.
+        Sem::None
+            if matches!(node.kind(), "dot" | "list") && own_submodule(node, src).is_some() =>
+        {
+            Sem::Import
+        }
         _ => sem,
     }
 }
@@ -555,6 +680,16 @@ mod tests {
         let mut parser = pack.make_parser();
         let f = crate::facts::extract(pack, &mut parser, std::path::Path::new("a.ex"), src);
         f.imports.iter().map(|i| i.target.to_string()).collect()
+    }
+
+    fn reaches(src: &str) -> Vec<(String, crate::lang::Reach)> {
+        let pack = Lang::Elixir.pack();
+        let mut parser = pack.make_parser();
+        let f = crate::facts::extract(pack, &mut parser, std::path::Path::new("a.ex"), src);
+        f.imports
+            .iter()
+            .map(|i| (i.target.to_string(), i.reach))
+            .collect()
     }
 
     #[test]
@@ -590,19 +725,75 @@ mod tests {
                 "App.Repo",
                 "Ecto.Changeset",
                 "Plug.Conn",
+                // The alias's short form, which the resolver expands
+                // against the file's own import list.
+                "Repo",
             ]
         );
     }
 
     #[test]
-    fn a_single_segment_name_is_not_read_as_a_dependency() {
-        // `Mix`, `Config`, `Repo` are the language's own, and a
-        // one-component suffix match lands on whatever file bears the
-        // name: gold resolved 165 such names of which 9 pointed at a
-        // file declaring no such module, carrying 537 occurrences.
-        assert!(
-            targets("defmodule X do\n  def f, do: Enum.map(Mix.env(), & &1)\nend\n").is_empty()
+    fn a_single_segment_name_is_a_mention_and_not_a_dependency() {
+        // `Enum` and `Mix` are the language's own and are written
+        // thousands of times, so counting each as a dependency would
+        // drown the tally; `Plug` is plug.ex, the library's front door,
+        // named by `@behaviour Plug` in 20 files under plug/lib and by
+        // nothing else at all. A Mention is both answers at once: an
+        // edge where a file declares the name, and never a tally entry.
+        assert_eq!(
+            reaches(
+                "defmodule X do\n  @behaviour Plug\n  def f, do: Enum.map(Mix.env(), & &1)\nend\n"
+            ),
+            [
+                ("Plug".to_string(), crate::lang::Reach::Mention),
+                ("Enum".to_string(), crate::lang::Reach::Mention),
+                ("Mix".to_string(), crate::lang::Reach::Mention),
+            ]
         );
+    }
+
+    #[test]
+    fn a_name_built_from_the_module_this_file_declares_is_read() {
+        // absinthe/lib/absinthe/schema/prototype.ex:37 `use
+        // __MODULE__.Notation`, notation.ex:2170
+        // `unquote(__MODULE__).SDL.parse(`, and oban's
+        // migrations/postgres.ex:71 piping `[__MODULE__, "V#{i}"]` into
+        // `Module.concat()`. None of the names they build is written
+        // anywhere in the corpus.
+        let src = "defmodule Oban.Migrations.Postgres do\n\
+                   \x20 use __MODULE__.Notation\n\
+                   \x20 def f do\n\
+                   \x20   unquote(__MODULE__).SDL.parse(x)\n\
+                   \x20   [__MODULE__, \"V#{pad}\"] |> Module.concat() |> apply(d, [o])\n\
+                   \x20 end\n\
+                   end\n";
+        let mut got = targets(src);
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                // `Module.concat` names the standard library's own
+                // module, which nothing here declares.
+                "Module",
+                // Each element after `__MODULE__` is one component the
+                // source stops being able to name.
+                "Oban.Migrations.Postgres.*",
+                "Oban.Migrations.Postgres.Notation",
+                "Oban.Migrations.Postgres.SDL",
+                // The dot's own leaf, an ordinary single-segment
+                // mention that answers to nothing here.
+                "SDL",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_concat_that_does_not_lead_with_module_states_nothing() {
+        // Gold holds 97 `Module.concat` calls and exactly one of them
+        // leads with `__MODULE__`; the other 96 build a name this rule
+        // has nothing to say about.
+        let src = "defmodule X do\n  def f, do: [Foo, \"Bar\"] |> Module.concat()\nend\n";
+        assert!(!targets(src).iter().any(|t| t.contains('*')));
     }
 
     #[test]
