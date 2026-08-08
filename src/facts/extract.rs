@@ -3430,6 +3430,13 @@ pub(crate) fn one_shot_dir(norm: &str) -> bool {
         // across netty, dune and swift-nio sit under it.
         "microbench",
         "bench",
+        // Cargo's own spelling. A `.rs` directly under `benches/` is
+        // auto-discovered as a bench target with no `[[bench]]` stanza
+        // to declare it, so nothing names it and nothing imports it.
+        // Gold holds exactly two such directories -- regex-syntax's and
+        // globset's -- and both files open `#![feature(test)] extern
+        // crate test;`. 2 orphans.
+        "benches",
         "perf-measures",
         "examples",
         "example",
@@ -5143,5 +5150,18 @@ pub fn f(x: usize) -> usize {
         );
         let py = "class C:\n    # What it does.\n    @property\n    def m(self):\n        pass\n";
         assert_eq!(roles(Lang::Python, "s.py", py), [("fn", 2, 3)]);
+    }
+
+    #[test]
+    fn a_bench_directory_is_cargos_own_spelling_of_a_harness() {
+        // Cargo auto-discovers `benches/*.rs` as bench targets with no
+        // `[[bench]]` stanza to declare them, so nothing names one and
+        // nothing imports one. Gold holds exactly two such directories
+        // -- regex-syntax's and globset's -- and both files open
+        // `#![feature(test)] extern crate test;`. 2 orphans.
+        assert!(one_shot_dir("/regex-syntax/benches/bench.rs"));
+        // The file's own name is never tested, or `parse-demo.rs` would
+        // qualify -- and `benchmarking.rs` is not a bench directory.
+        assert!(!one_shot_dir("/src/parse-demo.rs"));
     }
 }

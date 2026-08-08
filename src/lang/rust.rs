@@ -105,7 +105,16 @@ pub fn pack() -> Pack {
         declares_test,
         names_test: |_, _| false,
         is_test_code,
-        test_path: |p| p.contains("/tests/") || p.ends_with("_test.rs"),
+        // `/test/` as well as `/tests/`. Cargo reserves the plural, so a
+        // Rust file under the singular is one a project of some OTHER
+        // language keeps as test material -- and all four in gold are:
+        // three `vscode-colorize-tests/test/colorize-fixtures/*.rs`
+        // syntax-highlighting samples and one copilot parser fixture.
+        // `find -name '*.rs' -path '*/test/*'` over all 22 corpora
+        // returns those four and nothing else, so the rule provably
+        // cannot reach a shipping crate here. The C, Ruby and Lua packs
+        // already spell both; this closes the inconsistency. 4 orphans.
+        test_path: |p| p.contains("/tests/") || p.contains("/test/") || p.ends_with("_test.rs"),
         asserty: |node, src| {
             node.child_by_field_name("macro")
                 .and_then(|m| m.utf8_text(src).ok())
@@ -559,4 +568,30 @@ fn is_override(node: Node, _src: &[u8]) -> bool {
         anc = a.parent();
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::lang::Lang;
+
+    #[test]
+    fn a_rust_file_under_a_test_directory_is_test_material() {
+        // Cargo reserves the PLURAL, so a `.rs` under the singular is
+        // one a project of some other language keeps as test material.
+        // All four in gold are: three vscode-colorize-tests
+        // syntax-highlighting samples and one copilot parser fixture,
+        // and `find -name '*.rs' -path '*/test/*'` over all 22 corpora
+        // returns those four and nothing else. The C, Ruby and Lua
+        // packs already spell both. 4 orphans.
+        let is_test = Lang::Rust.pack().test_path;
+        assert!(is_test(
+            "/vscode/extensions/vscode-colorize-tests/test/colorize-fixtures/test-6611.rs"
+        ));
+        assert!(is_test("/regex/tests/suite.rs"));
+        assert!(is_test("/src/parser_test.rs"));
+        // A crate's own source is not test material because a directory
+        // three levels up was named `latest`.
+        assert!(!is_test("/rayon/src/iter/mod.rs"));
+        assert!(!is_test("/ripgrep/crates/testutil/src/lib.rs"));
+    }
 }

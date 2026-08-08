@@ -120,6 +120,7 @@ pub fn analyze(all: &[GraphFacts], mentions: &Mentions) -> Option<Architecture> 
     fold_over_modules(&files, &edge_list, &mut fan_in, &mut blasts);
     fold_over_packages(&files, &edge_list, &mut fan_in, &mut blasts);
     fold_test_reach(&files, all, &mut from_tests);
+    fold_cfg_test_modules(&files, &fan_in, &mut from_tests);
     let judged = judgeable(&files, &fan_in);
     let (judged_modules, deletable_pct) = deletability(&blasts, &judged);
     let load = load_bearing(&file_labels, &blasts);
@@ -687,6 +688,58 @@ fn fold_test_reach(files: &[&GraphFacts], all: &[GraphFacts], from_tests: &mut [
     }
 }
 
+/// A Rust module its own parent declares behind `#[cfg(test)]`.
+///
+/// The pack DECLINES to emit that declaration as an edge — `src/lang/
+/// rust.rs` requires `!preceding_attr_contains(node, src, "cfg(test")`
+/// — and it is right to: a module compiled only under `cfg(test)` is
+/// not production coupling. But refusing the edge left the file reached
+/// by nothing at all, which says something stronger and false. rayon
+/// writes `#[cfg(test)]` then `mod test;` five times and ripgrep's
+/// searcher once for `src/testutil.rs`, and all six read as orphans
+/// where `tested_only` is the bucket that describes them.
+///
+/// Routed to `from_tests` rather than to `fan_in`, so the tool still
+/// says nothing in production depends on the file. Read from disk only
+/// where the file would otherwise BE an orphan, so a corpus without the
+/// shape opens nothing. 6 orphans, the last Rust ones in gold.
+fn fold_cfg_test_modules(files: &[&GraphFacts], fan_in: &[u32], from_tests: &mut [u32]) {
+    use crate::lang::Lang;
+    for (i, f) in files.iter().enumerate() {
+        if f.lang != Lang::Rust || fan_in[i] > 0 || from_tests[i] > 0 {
+            continue;
+        }
+        // `x.rs` is module `x` of the directory holding it; `x/mod.rs`
+        // is module `x` of the directory ABOVE.
+        let (stem, dir) = match f.path.file_name().and_then(|n| n.to_str()) {
+            Some("mod.rs") => (f.path.parent(), f.path.parent().and_then(Path::parent)),
+            _ => (Some(f.path.as_path()), f.path.parent()),
+        };
+        let (Some(stem), Some(dir)) = (stem.and_then(|p| p.file_stem()?.to_str()), dir) else {
+            continue;
+        };
+        let parents = ["mod.rs", "lib.rs", "main.rs"].map(|n| dir.join(n));
+        let sibling = dir.with_extension("rs");
+        from_tests[i] =
+            u32::from(parents.iter().chain([&sibling]).any(|p| {
+                std::fs::read_to_string(p).is_ok_and(|text| declared_cfg_test(&text, stem))
+            }));
+    }
+}
+
+/// Does this module text declare `mod <stem>;` behind a `#[cfg(test)]`?
+/// The attribute must be the token immediately before it, so a
+/// production `mod testutil;` further down the file does not match one
+/// higher up.
+fn declared_cfg_test(text: &str, stem: &str) -> bool {
+    let decl = format!("mod {stem};");
+    text.match_indices(&decl).any(|(at, _)| {
+        let head = text[..at].trim_end();
+        let head = head.strip_suffix("pub").unwrap_or(head).trim_end();
+        head.ends_with("#[cfg(test)]")
+    })
+}
+
 /// What a module means for the language, where its imports name one: a
 /// directory for Go and Swift, a declared package for Java and Scala.
 fn module_key(f: &GraphFacts) -> Option<(usize, String)> {
@@ -833,6 +886,56 @@ fn entryish(path: &Path) -> bool {
         || routed(path, name, stem)
         || dune_root(path, name, stem)
         || mix_task(path)
+        || cargo_target(path, name)
+}
+
+/// A source file a Cargo manifest names outright.
+///
+/// What Cargo builds from a `[[bin]]`, `[[bench]]`, `[[example]]` or
+/// `[[test]]` is a TARGET: an artefact nothing links against, reached by
+/// a name only the manifest writes. regex's `fuzz/Cargo.toml` declares
+/// eight — `[[bin]] name = "fuzz_regex_match"` with
+/// `path = "fuzz_targets/fuzz_regex_match.rs"` — and ripgrep's fuzz
+/// manifest a ninth. All nine read as unreferenced. 9 orphans.
+fn cargo_target(path: &Path, name: &str) -> bool {
+    if !name.ends_with(".rs") {
+        return false;
+    }
+    path.ancestors().skip(1).any(|dir| {
+        let Ok(rel) = path.strip_prefix(dir) else {
+            return false;
+        };
+        let rel = rel.display().to_string().replace('\\', "/");
+        std::fs::read_to_string(dir.join("Cargo.toml"))
+            .is_ok_and(|text| declares_target(&text, &rel))
+    })
+}
+
+/// Is this path the `path` of a TARGET table?
+///
+/// The enclosing header is what separates the artefact from the crate:
+/// `[lib] path = "src/lib.rs"` names the root every dependent `use`s,
+/// the exact opposite of something nothing links against, and three
+/// manifests in gold write one (git's two libgit crates and a toml
+/// testdata fixture). A dependency's `path` points ABOVE the manifest so
+/// it can never spell a file under it, but it is excluded here anyway by
+/// sitting under `[dependencies]`.
+fn declares_target(text: &str, rel: &str) -> bool {
+    const TARGET: &[&str] = &["[[bin]]", "[[bench]]", "[[example]]", "[[test]]"];
+    let mut here = false;
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.starts_with('[') {
+            here = TARGET.contains(&line);
+        } else if here
+            && line
+                .split_once('=')
+                .is_some_and(|(k, v)| k.trim() == "path" && v.trim().trim_matches('"') == rel)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// The root module of a dune library or executable, which the `dune`
@@ -1264,6 +1367,51 @@ mod tests {
     /// detection stays out of the way of the structural assertions.
     fn seen(names: &[&str]) -> Mentions {
         names.iter().map(|n| ((*n).into(), 2)).collect()
+    }
+
+    #[test]
+    fn a_cargo_manifest_names_its_own_targets() {
+        // `[[bin]] path = "fuzz_targets/fuzz_regex_match.rs"` — what
+        // Cargo builds from one is an artefact nothing links against,
+        // reached by a name only the manifest writes. 9 orphans.
+        //
+        // The enclosing TABLE is what separates that from
+        // `[lib] path = "src/lib.rs"`, which names the crate root every
+        // dependent `use`s; three manifests in gold write one.
+        let dir = std::env::temp_dir().join("elegance-cargo-target");
+        let _ = std::fs::create_dir_all(dir.join("fuzz_targets"));
+        let _ = std::fs::create_dir_all(dir.join("src"));
+        let manifest = "[package]\nname = \"regex-fuzz\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[[bin]]\nname = \"m\"\npath = \"fuzz_targets/m.rs\"\n\n[dependencies]\nregex = { path = \"..\" }\n";
+        std::fs::write(dir.join("Cargo.toml"), manifest).unwrap();
+        assert!(entryish(&dir.join("fuzz_targets/m.rs")));
+        assert!(!entryish(&dir.join("fuzz_targets/other.rs")));
+        // `src/lib.rs` is an entry point on its stem either way, so the
+        // [lib] refusal is asserted where it lives.
+        let text = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        assert!(declares_target(&text, "fuzz_targets/m.rs"));
+        assert!(
+            !declares_target(&text, "src/lib.rs"),
+            "a [lib] path is the crate root, not a target artefact"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cfg_test_module_is_reached_by_the_suite_and_not_by_production() {
+        // `rayon/src/iter/mod.rs:93` writes `#[cfg(test)]` then
+        // `mod test;`. The pack declines the edge, and rightly — but
+        // the file is not unreferenced either. 6 orphans, routed to
+        // `tested_only` where they belong.
+        assert!(declared_cfg_test("#[cfg(test)]\nmod test;\n", "test"));
+        assert!(declared_cfg_test(
+            "mod a;\n#[cfg(test)]\npub mod testutil;\n",
+            "testutil"
+        ));
+        assert!(!declared_cfg_test(
+            "mod lines;\nmod testutil;\n",
+            "testutil"
+        ));
+        assert!(!declared_cfg_test("#[cfg(test)]\nmod test;\n", "lines"));
     }
 
     #[test]
