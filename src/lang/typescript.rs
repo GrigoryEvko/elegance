@@ -363,22 +363,78 @@ fn bound_names(root: Node, src: &[u8]) -> Vec<Box<str>> {
 pub(super) fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let text = |n: Node| n.utf8_text(src).unwrap_or("");
     let (source, names) = match node.kind() {
-        "arguments" => (
-            call_specifier(node, src),
-            call_binder(node)
-                .map(|d| bound_names(d, src))
-                .unwrap_or_default(),
-        ),
-        _ => (statement_source(node), bound_names(node, src)),
-    };
-    let Some(source) = source else {
-        return Vec::new();
+        "arguments" => match call_specifier(node, src) {
+            Some(source) => (
+                source,
+                call_binder(node)
+                    .map(|d| bound_names(d, src))
+                    .unwrap_or_default(),
+            ),
+            None => {
+                return module_mention(node, src)
+                    .map(|target| super::ImportInfo {
+                        target,
+                        names: Vec::new(),
+                        reach: super::Reach::Mention,
+                    })
+                    .into_iter()
+                    .collect();
+            }
+        },
+        _ => match statement_source(node) {
+            Some(source) => (source, bound_names(node, src)),
+            None => return Vec::new(),
+        },
     };
     vec![super::ImportInfo {
         target: text(source).trim_matches(['"', '\'']).into(),
         names,
         reach: super::Reach::Anywhere,
     }]
+}
+
+/// A module of this project named as a plain string, where the
+/// language has no syntax for it. vscode starts every worker and every
+/// child process that way —
+/// `FileAccess.asBrowserUri('vs/editor/common/services/editorWebWorkerMain.js')`,
+/// `VSCODE_ESM_ENTRYPOINT` on a fork, `createModuleDescription(...)` in
+/// `build/buildfile.ts` — and 23 of its files read as depended on by
+/// nothing because the loader is a string and not an import.
+///
+/// THREE components at least, which is the whole safety of it. A path
+/// that deep can only be matched by one file, and shorter strings are
+/// where the damage is: `require('crypto')` names Node's module and
+/// there is a `crypto.ts` in the tree, `('uri')` likewise.
+///
+/// The ARGUMENT LIST carries it, for the reason `call_specifier` gives:
+/// the string keeps its own Sem and every literal check still sees it.
+fn module_mention(node: Node, src: &[u8]) -> Option<Box<str>> {
+    let mut cursor = node.walk();
+    let first = node.named_children(&mut cursor).next()?;
+    if first.kind() != "string" {
+        return None;
+    }
+    let raw = first.utf8_text(src).ok()?.trim_matches(['"', '\'']);
+    // vscode's bundler spelling is `./x.ts?esm`; the query names a
+    // loader and not a file.
+    let path = raw.split('?').next()?;
+    let segments: Vec<&str> = path
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != "." && *s != "..")
+        .collect();
+    let plain = |s: &&str| s.chars().all(|c| c.is_alphanumeric() || "._-@".contains(c));
+    if !segments.iter().all(plain) {
+        return None;
+    }
+    // A path written RELATIVE and spelled out to its extension can
+    // only mean one file, so one component is enough: docusaurus
+    // writes `require.resolve('./sidebars.js')` for its sidebar and
+    // `clientModules: [require.resolve('./docusaurus.preferredTheme.js')]`,
+    // and vscode starts three of its workers with
+    // `new Worker(new URL('./parserWorker.js', import.meta.url))`.
+    let spelled = path.starts_with("./") || path.starts_with("../");
+    let extended = super::web_extension(path);
+    (segments.len() >= 3 || (spelled && extended)).then(|| path.into())
 }
 
 /// Node's `assert` module, destructured. vscode writes
@@ -703,7 +759,12 @@ pub(super) fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         // The argument list of `require("./x")` / `import("./x")` is
         // where a call-shaped import states its specifier. It carries no
         // Sem otherwise, so this adds an edge and moves no metric.
-        Sem::None if call_specifier(node, src).is_some() => Sem::Import,
+        Sem::None
+            if node.kind() == "arguments"
+                && (call_specifier(node, src).is_some() || module_mention(node, src).is_some()) =>
+        {
+            Sem::Import
+        }
         // else if -> flat chain, exactly as in the Rust pack.
         Sem::If if node.parent().is_some_and(|p| p.kind() == "else_clause") => Sem::ElseIf,
         Sem::Else
@@ -925,6 +986,59 @@ mod tests {
             }
         }
         assert_eq!((calls, imports), (1, 1), "one call, and one edge out of it");
+    }
+
+    #[test]
+    fn a_module_path_written_as_a_string_is_named_but_not_depended_on() {
+        // vscode starts every worker and every child process by
+        // writing the path out — `build/buildfile.ts` alone does it 21
+        // times — and 23 of its files read as depended on by nothing
+        // because the loader takes a string where the language has an
+        // import.
+        //
+        // THREE components at least, which is the whole safety of it:
+        // a loose tail match let `require('crypto')` find a `crypto.ts`
+        // and `('uri')` a `uri.ts`, and 12 of that variant's 65 hits
+        // were exactly that.
+        const SRC: &str = concat!(
+            "createModuleDescription('vs/editor/common/services/editorWebWorkerMain');\n",
+            "FileAccess.asBrowserUri('vs/base/worker/workerMain.js');\n",
+            "require('crypto');\n",
+            "normalize('uri');\n",
+            "require.resolve('./sidebars.js');\n",
+            "spawn('./run.sh');\n",
+            "t('a message with spaces');\n",
+        );
+        let f = facts(Lang::TypeScript, "m.ts", SRC);
+        let mut named: Vec<&str> = f
+            .imports
+            .iter()
+            .filter(|i| i.reach == crate::lang::Reach::Mention)
+            .map(|i| &*i.target)
+            .collect();
+        named.sort_unstable();
+        assert_eq!(
+            named,
+            [
+                // A path spelled out RELATIVE to its own extension can
+                // only mean one file, so one component is enough.
+                "./sidebars.js",
+                "vs/base/worker/workerMain.js",
+                "vs/editor/common/services/editorWebWorkerMain",
+            ],
+            "a short name is a package, and prose is not a path"
+        );
+        // The claim is only that the name is USED, so it is a Mention:
+        // it supplies an edge and never a tally entry, and nothing here
+        // can move imports_external or imports_unresolved. A real
+        // `require` beside it still states a dependency and is counted.
+        let stated: Vec<&str> = f
+            .imports
+            .iter()
+            .filter(|i| i.reach != crate::lang::Reach::Mention)
+            .map(|i| &*i.target)
+            .collect();
+        assert_eq!(stated, ["crypto"], "a require is a dependency, not a hint");
     }
 
     #[test]

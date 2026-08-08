@@ -592,6 +592,7 @@ impl Index {
 
     fn web(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Class {
         let target = &*imp.target;
+        let mention = imp.reach == crate::lang::Reach::Mention;
         if !target.starts_with('.') {
             // An alias the file's own tsconfig declares comes first: a
             // workspace name is a package, and `@/components/header` is
@@ -599,7 +600,19 @@ impl Index {
             if let Class::Internal(i) = self.aliased(from, target) {
                 return Class::Internal(i);
             }
-            return self.workspace(target);
+            if let Class::Internal(i) = self.workspace(target) {
+                return Class::Internal(i);
+            }
+            // A module path written as a string is rooted at a source
+            // directory the string does not name, so it is matched by
+            // its own components against the tree. Mentions only: an
+            // ordinary bare specifier is a package name, and matching
+            // one by path suffix is how `import "crypto"` finds a
+            // `crypto.ts`.
+            return match mention {
+                true => self.web_suffix(from, target),
+                false => Class::External,
+            };
         }
         let joined = normalize(from.path.parent().unwrap_or(Path::new("")), target);
         const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
@@ -614,7 +627,64 @@ impl Index {
         {
             return Class::Internal(*i);
         }
+        // A RELATIVE specifier states where it lives, and the join
+        // above is the whole answer. Falling through to the suffix
+        // match sent `require.resolve('./sidebars.js')` in trpc's
+        // docusaurus config into immer's website — a different
+        // repository — because the global match ignores the importing
+        // file's directory entirely.
         Class::Unresolved
+    }
+
+    /// The one file whose path ends with these components, the
+    /// extension supplied by us because the string leaves it off or
+    /// spells the compiled one. Ambiguity resolves to nothing:
+    /// `path_suffix` answers only when a single file matches.
+    ///
+    /// Bounded to the importer's OWN repository, the nearest ancestor
+    /// holding a `.git`. Without it a unique match is unique across
+    /// everything scanned at once, and gold scans a hundred
+    /// repositories side by side: vscode's `normalizePath('src/
+    /// components/Button.tsx')` — a path normaliser's unit-test DATA —
+    /// resolved into trpc's website.
+    ///
+    /// Only a WEB extension is stripped, because stripping any dotted
+    /// tail turns a string that names something else into a module:
+    /// `vs/base/node/ps.ts` names `'vs/base/node/ps.sh'`, the shell
+    /// script it spawns, and that resolved the file to itself.
+    fn web_suffix(&self, from: &GraphFacts, target: &str) -> Class {
+        const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
+        let Some(repo) = repo_root(&from.path) else {
+            return Class::External;
+        };
+        let segs = segments(target.trim_start_matches("../"));
+        let Some((last, head)) = segs.split_last() else {
+            return Class::External;
+        };
+        let bare = match last.rsplit_once('.') {
+            Some((stem, _)) if crate::lang::web_extension(last) => stem,
+            _ => last,
+        };
+        for ext in EXTS {
+            let named = format!("{bare}.{ext}");
+            let mut with: Vec<&str> = head.to_vec();
+            with.push(&named);
+            if let Some(i) = self.path_suffix_within(&repo, &with) {
+                return Class::Internal(i);
+            }
+        }
+        Class::External
+    }
+
+    /// `path_suffix`, asked of one repository. Uniqueness is judged
+    /// among that repository's files alone: a name several repositories
+    /// spell is still unique inside the one that wrote the string.
+    fn path_suffix_within(&self, repo: &[Box<str>], segs: &[&str]) -> Option<usize> {
+        let mut hits = self
+            .suffix_matches(segs)
+            .filter(|(comps, _)| comps.starts_with(repo));
+        let &(_, i) = hits.next()?;
+        hits.next().is_none().then_some(i)
     }
 
     fn go(&self, target: &str) -> Class {
@@ -1901,6 +1971,32 @@ fn components(path: &Path) -> Vec<Box<str>> {
         .collect()
 }
 
+/// The repository a file belongs to, as path components: the nearest
+/// ancestor holding a `.git`. A scan is not a repository — gold puts a
+/// hundred of them side by side — and a rule that matches a path by its
+/// tail has to say which tree it is matching in.
+///
+/// Cached, because a `.git` probe is a syscall per ancestor and one
+/// directory holds thousands of files.
+fn repo_root(path: &Path) -> Option<Vec<Box<str>>> {
+    thread_local! {
+        static CACHE: std::cell::RefCell<HashMap<PathBuf, Option<Vec<Box<str>>>>> =
+            std::cell::RefCell::new(HashMap::new());
+    }
+    let dir = path.parent()?.to_path_buf();
+    CACHE.with(|c| {
+        if let Some(hit) = c.borrow().get(&dir) {
+            return hit.clone();
+        }
+        let found = dir
+            .ancestors()
+            .find(|a| a.join(".git").exists())
+            .map(components);
+        c.borrow_mut().insert(dir, found.clone());
+        found
+    })
+}
+
 /// Join and fold `.`/`..` without touching the filesystem.
 fn normalize(base: &Path, rel: &str) -> PathBuf {
     let mut out: Vec<&std::ffi::OsStr> = base.components().map(|c| c.as_os_str()).collect();
@@ -2203,6 +2299,57 @@ mod tests {
         assert_eq!((res.internal, res.external, res.unresolved), (2, 0, 0));
     }
 
+    /// A file whose imports are strings the language has no syntax for.
+    fn mentions(lang: Lang, path: &str, targets: &[&str]) -> GraphFacts {
+        let mut f = fixture(lang, path, targets);
+        for imp in &mut f.imports {
+            imp.reach = crate::lang::Reach::Mention;
+        }
+        f
+    }
+
+    #[test]
+    fn a_module_named_in_a_string_is_matched_inside_its_own_repository() {
+        let (app, other) = two_repositories("mention");
+        let named =
+            |repo: &Path, rel: &str| file(Lang::TypeScript, repo.join(rel).to_str().unwrap(), &[]);
+        let files = [
+            mentions(
+                Lang::TypeScript,
+                app.join("src/boot.ts").to_str().unwrap(),
+                &[
+                    "pkg/work/runner.js",
+                    "pkg/work/foreign.js",
+                    "pkg/work/runner.sh",
+                    "./sidebars.js",
+                ],
+            ),
+            named(&app, "pkg/work/runner.ts"),
+            named(&other, "pkg/work/runner.ts"),
+            named(&other, "pkg/work/foreign.ts"),
+            // In the SAME repository, so only the relative reading
+            // keeps the edge off it.
+            named(&app, "web/sidebars.ts"),
+        ];
+        let (r, edges) = resolve_imports(&files);
+        // A Mention supplies an EDGE and never a tally entry, so the
+        // honesty buckets cannot grow behind one.
+        assert_eq!(r, Resolution::default(), "a mention is never counted");
+        let hit = edges[0][0].expect("the in-repo runner");
+        assert_eq!(
+            files[hit].path,
+            app.join("pkg/work/runner.ts"),
+            "the edge landed in this repository, not the other's"
+        );
+        assert_eq!(
+            &edges[0][1..],
+            &[None, None, None],
+            "no cross-repository edge, no `.sh` read as a module, \
+             no relative path falling through to a global tail match"
+        );
+        let _ = std::fs::remove_dir_all(app.parent().expect("a scratch root"));
+    }
+
     #[test]
     fn a_lua_registry_entry_may_name_a_module_path_or_a_sibling() {
         // kong/db/migrations/subsystems.lua writes `namespace =
@@ -2313,6 +2460,18 @@ mod tests {
             Some(0),
             "the file's own alias says what V1 is"
         );
+    }
+
+    /// Two repositories side by side, as a scan holds them — a
+    /// hundred of them in the gold corpus — each marked by its own
+    /// `.git`. Returns the pair; the scratch root is their parent.
+    fn two_repositories(tag: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("elegance-{tag}-{}", std::process::id()));
+        let (app, other) = (root.join("app"), root.join("other"));
+        for repo in [&app, &other] {
+            let _ = std::fs::create_dir_all(repo.join(".git"));
+        }
+        (app, other)
     }
 
     #[test]
