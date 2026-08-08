@@ -451,6 +451,7 @@ impl UnitFacts {
             repurposed: 0,
             unawaited: 0,
             mut_receiver: false,
+            receiver_name: "".into(),
             self_recursive: false,
             ctrl: Vec::new(),
         }
@@ -1461,6 +1462,7 @@ impl Extractor<'_> {
                 if self.pack.lang == crate::lang::Lang::CSharp {
                     self.facts.receiver_units.push(unit.name.clone());
                 }
+                unit.receiver_name = info.name.clone();
                 receiver = Some(info.name);
                 continue;
             }

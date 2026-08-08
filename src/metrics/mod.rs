@@ -846,7 +846,17 @@ fn undeclared_params(u: &UnitFacts) -> Option<u32> {
     if u.documented_params.is_empty() || u.params.iter().any(|p| p.destructured) {
         return None;
     }
-    let receiver = |n: &str| RECEIVERS.iter().any(|r| n.eq_ignore_ascii_case(r));
+    // The receiver, under whichever name declares it. `self` and `this`
+    // are the language's word and nobody documents them; C# lets an
+    // extension method name its own — `this PolicyBuilder policyBuilder`
+    // — and the XML convention DOES carry a `<param name="policyBuilder">`
+    // for it. Dropping the receiver from the parameter list without
+    // pardoning its name put `cs doc param` in breach at 24% of gold,
+    // every hit a documented extension method.
+    let receiver = |n: &str| {
+        RECEIVERS.iter().any(|r| n.eq_ignore_ascii_case(r))
+            || (!u.receiver_name.is_empty() && n.eq_ignore_ascii_case(&u.receiver_name))
+    };
     // A LEADING underscore marks a binding as deliberately unused —
     // phoenix writes `onMessage(_event, payload, _ref)` and documents
     // `event` and `ref`, which is the same parameter under the mark the

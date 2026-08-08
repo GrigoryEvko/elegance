@@ -401,6 +401,12 @@ pub struct UnitFacts {
     pub return_arity: u16,
     /// Receiver taken mutably (`&mut self`) — a getter that mutates lies.
     pub mut_receiver: bool,
+    /// The name the receiver is DECLARED under, where the parameter list
+    /// declares it. `self` and `this` are spelled by the language and
+    /// documented by nobody, but C# names an extension method's receiver
+    /// freely and its XML docs carry a `<param>` for it, so the doc-param
+    /// check needs to know the word before it can pardon the claim.
+    pub receiver_name: Box<str>,
     pub self_recursive: bool,
     /// Control events in source order, with the cognitive nesting depth at
     /// which each occurred.
