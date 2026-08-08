@@ -202,6 +202,12 @@ struct Index {
     /// The two dune stanzas that widen where a bare OCaml module name
     /// answers from. See `DuneScopes`.
     dune: DuneScopes,
+    /// PHP's autoload map: a namespace ROOT, as its own composer.json
+    /// spells it, and every directory that manifest sends it to. A root
+    /// may have several — flysystem declares `League\Flysystem\` at the
+    /// repository root and fifteen subsplit manifests under src/ narrow
+    /// it further.
+    psr4: HashMap<Box<str>, Vec<PathBuf>>,
 }
 
 /// A dune library is a directory, and two stanzas say it is more than
@@ -264,6 +270,7 @@ impl Index {
             declared: declaring_files(files),
             members: receiver_members(files),
             dune: dune_scopes(files),
+            psr4: psr4_roots(files),
         };
         for (i, f) in files.iter().enumerate() {
             idx.paths.entry(f.path.clone()).or_insert(i);
@@ -358,6 +365,15 @@ impl Index {
             // at run time from a variable, which resolves to nothing
             // and lands in the honesty bucket where it belongs.
             Lang::Shell => self.shell(from, target),
+            // `require __DIR__ . '/x.php'` names a FILE where `use`
+            // names a class, and the two never collide: a namespace
+            // holds no separator, so the presence of one settles which
+            // of PHP's two module systems wrote this target. `__DIR__`
+            // is the including file's own directory, so the base is
+            // known — see `php::included_file`.
+            Lang::Php if target.contains('/') => self.php_file(from, target),
+            // A class name, resolved the way the autoloader resolves it.
+            Lang::Php => self.php(imp),
             // `require_relative` is a path from the requiring file, so
             // `..` climbs a directory rather than naming a namespace,
             // and a sibling means the sibling. Plain `require` searches
@@ -373,15 +389,31 @@ impl Index {
             // module at 316 dependents.
             // `dofile('pm.lua')` is a path from the calling script, the
             // way `require_relative` is in Ruby: a miss is a miss.
-            Lang::Lua if imp.reach == crate::lang::Reach::Project => {
-                match self.beside(from, &segments(target)) {
-                    Some(i) => Class::Internal(i),
-                    None => Class::Unresolved,
-                }
-            }
+            Lang::Lua if imp.reach == crate::lang::Reach::Project => self.lua_beside(from, target),
             Lang::Lua if crate::lang::preloaded(target) => Class::External,
             _ => return None,
         })
+    }
+
+    /// `require __DIR__ . '/x.php'` names a file relative to the
+    /// including one, and a miss is a miss: composer's generated
+    /// autoloader templates name `vendor/autoload.php`, which exists
+    /// only in a tree this scan does not hold.
+    fn php_file(&self, from: &GraphFacts, target: &str) -> Class {
+        let base = from.path.parent().unwrap_or(Path::new(""));
+        match self.paths.get(&normalize(base, target)) {
+            Some(&i) => Class::Internal(i),
+            None => Class::Unresolved,
+        }
+    }
+
+    /// `dofile('pm.lua')` is a path from the calling script, the way
+    /// `require_relative` is in Ruby: a miss is a miss.
+    fn lua_beside(&self, from: &GraphFacts, target: &str) -> Class {
+        match self.beside(from, &segments(target)) {
+            Some(i) => Class::Internal(i),
+            None => Class::Unresolved,
+        }
     }
 
     /// Languages whose specifier is a NAME, resolved against what the
@@ -1108,6 +1140,74 @@ impl Index {
             .map_or(Class::External, Class::Internal)
     }
 
+    /// A PHP class name: the file the AUTOLOADER would load for it.
+    ///
+    /// PSR-4 is a real, declared map from a namespace root to a source
+    /// directory, and composer.json is where every PHP project writes
+    /// it down: composer says `{"Composer\\":"src/Composer/"}`, monolog
+    /// `{"Monolog\\":"src/Monolog"}`, flysystem
+    /// `{"League\\Flysystem\\":"src"}` plus fifteen subsplit manifests.
+    /// The longest declared root that heads the name wins, and its
+    /// directory plus the rest of the name plus `.php` IS the file.
+    ///
+    /// A project declaring no root falls back to the longest tail
+    /// naming exactly one file — and that ladder stops at TWO
+    /// components, never one. At one it fabricates: monolog's
+    /// Logger.php:149 writes `protected Closure|null`, and `Closure` is
+    /// a BUILT-IN type, but the only Closure.php in the corpus is
+    /// PHP-Parser's Node/Expr/Closure.php, so a one-component tail
+    /// bound the two repositories together. Flooring at two removed 33
+    /// such edges and restored two correct findings —
+    /// composer's ClassMapGenerator.php and MetadataMinifier.php are
+    /// `@deprecated` shims for packages composer extracted, reached
+    /// only because AutoloadGenerator.php:16 and
+    /// ComposerRepository.php:45 name the EXTERNAL replacements, which
+    /// miss PSR-4 and laddered down to the unique leaf.
+    fn php(&self, imp: &crate::facts::ImportFact) -> Class {
+        let segs: Vec<&str> = imp.target.split('\\').filter(|s| !s.is_empty()).collect();
+        if segs.is_empty() {
+            return Class::External;
+        }
+        if let Some(i) = self.psr4_of(&segs) {
+            return Class::Internal(i);
+        }
+        const FLOOR: usize = 2;
+        let tail = (FLOOR..=segs.len())
+            .rev()
+            .find_map(|take| self.path_suffix_php(&segs[segs.len() - take..]));
+        match (tail, imp.reach) {
+            (Some(i), _) => Class::Internal(i),
+            (None, crate::lang::Reach::Project) => Class::Unresolved,
+            (None, _) => Class::External,
+        }
+    }
+
+    /// The file a declared PSR-4 root names, longest root first.
+    fn psr4_of(&self, segs: &[&str]) -> Option<usize> {
+        (1..=segs.len()).rev().find_map(|take| {
+            let root = segs[..take].join("\\");
+            let rest = &segs[take..];
+            self.psr4.get(root.as_str())?.iter().find_map(|dir| {
+                let base = rest.iter().fold(dir.clone(), |p, s| p.join(s));
+                self.paths.get(&base.with_added_extension("php")).copied()
+            })
+        })
+    }
+
+    /// The one PHP file whose module components end with these
+    /// segments. `None` when several do: which of them the autoloader
+    /// means is decided by a manifest, and if a manifest had said so
+    /// `psr4_of` would already have answered.
+    fn path_suffix_php(&self, segs: &[&str]) -> Option<usize> {
+        let mut hits = self
+            .by_last
+            .get(*segs.last()?)?
+            .iter()
+            .filter(|(c, i)| self.langs[*i] == Lang::Php && ends_with(c, segs));
+        let &(_, i) = hits.next()?;
+        hits.next().is_none().then_some(i)
+    }
+
     /// A dotted JVM name: the file it names, or the package directory it
     /// names when no file answers to it. 770 Java and 1018 Scala targets
     /// in the gold corpus name a package and no file — an on-demand
@@ -1785,6 +1885,64 @@ fn quoted_after<'a>(text: &'a str, field: &str) -> Option<&'a str> {
     rest.split_once('"')?.1.split_once('"').map(|(v, _)| v)
 }
 
+/// Every PSR-4 root a `composer.json` beside the scanned files
+/// declares, mapped to the directories it sends that root to. Only the
+/// ancestors of PHP files are probed, so a repository without any pays
+/// nothing.
+///
+/// `autoload-dev` is read beside `autoload` because a project's own
+/// suite is autoloaded the same way. The nine `Installer\`, `Test\` and
+/// `Symfony\...` roots that composer's PLUGIN FIXTURES declare under
+/// tests/ come along and are harmless: a root only ever answers when
+/// the file it computes is one this project actually has.
+fn psr4_roots(files: &[GraphFacts]) -> HashMap<Box<str>, Vec<PathBuf>> {
+    let mut seen: HashSet<&Path> = HashSet::new();
+    let mut out: HashMap<Box<str>, Vec<PathBuf>> = HashMap::new();
+    for f in files.iter().filter(|f| f.lang == Lang::Php) {
+        for dir in f.path.ancestors().skip(1) {
+            if !seen.insert(dir) {
+                break;
+            }
+            for (root, rel) in psr4_map(dir) {
+                out.entry(root).or_default().push(normalize(dir, &rel));
+            }
+        }
+    }
+    out
+}
+
+/// The `psr-4` entries one composer.json declares, as (root, directory
+/// relative to the manifest).
+fn psr4_map(dir: &Path) -> Vec<(Box<str>, String)> {
+    let Ok(text) = std::fs::read_to_string(dir.join("composer.json")) else {
+        return Vec::new();
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    ["autoload", "autoload-dev"]
+        .iter()
+        .filter_map(|section| json.get(section)?.get("psr-4")?.as_object())
+        .flatten()
+        .flat_map(|(root, value)| {
+            let root: Box<str> = root.trim_end_matches('\\').into();
+            psr4_dirs(value).into_iter().map(move |d| (root.clone(), d))
+        })
+        .collect()
+}
+
+/// A root maps to one directory or to a list of them.
+fn psr4_dirs(value: &serde_json::Value) -> Vec<String> {
+    let dir = |v: &serde_json::Value| {
+        let written = v.as_str()?;
+        Some(written.trim_end_matches('/').to_string())
+    };
+    match value.as_array() {
+        Some(list) => list.iter().filter_map(dir).collect(),
+        None => dir(value).into_iter().collect(),
+    }
+}
+
 /// Every package name a `package.json` beside the scanned files
 /// declares, mapped to the directory holding it. Only the ancestors of
 /// web-language files are probed, so a repository without any pays
@@ -2297,6 +2455,131 @@ mod tests {
         // Two includes, two dependencies: the extra arch rides past the
         // row without being tallied twice.
         assert_eq!((res.internal, res.external, res.unresolved), (2, 0, 0));
+    }
+
+    #[cfg(test)]
+    fn psr4_tree(tag: &str) -> (std::path::PathBuf, impl Fn(&str) -> String) {
+        // Per-test directory: both callers remove the tree when they
+        // finish, and cargo runs them concurrently.
+        let dir = std::env::temp_dir().join(format!("elegance-psr4-{tag}-{}", std::process::id()));
+        for (repo, map) in [
+            ("composer", r#"{"Composer\\":"src/Composer/"}"#),
+            ("flysystem", r#"{"League\\Flysystem\\":"src"}"#),
+        ] {
+            std::fs::create_dir_all(dir.join(repo)).unwrap();
+            let manifest = format!(r#"{{"autoload":{{"psr-4":{map}}}}}"#);
+            std::fs::write(dir.join(repo).join("composer.json"), manifest).unwrap();
+        }
+        let root = dir.clone();
+        (dir, move |p: &str| {
+            root.join(p).to_str().unwrap().to_string()
+        })
+    }
+
+    #[cfg(test)]
+    fn php_named(path: &str, target: &str, reach: crate::lang::Reach) -> GraphFacts {
+        let mut f = file(Lang::Php, path, &[]);
+        f.imports = vec![crate::facts::ImportFact {
+            target: target.into(),
+            names: Vec::new(),
+            reach,
+        }];
+        f
+    }
+
+    #[test]
+    fn a_php_class_resolves_through_the_psr4_root_its_manifest_declares() {
+        // composer.json says `{"Composer\\":"src/Composer/"}`. Url.php:15
+        // writes `use Composer\Config;` — one of 46 files that do — and
+        // the old shallowest-suffix match on the stripped tail `Config`
+        // took flysystem's Config.php in another repository, so
+        // composer's own read as depended on by nothing.
+        //
+        // `League\Flysystem\` maps to `src`, so those two segments
+        // appear nowhere in the path and NO tail of the name
+        // suffix-matches the file — that one is readable only from the
+        // manifest.
+        use crate::lang::Reach;
+        let (dir, at) = psr4_tree("root");
+        let files = [
+            php_named(
+                &at("composer/src/Composer/Util/Url.php"),
+                "Composer\\Config",
+                Reach::Project,
+            ),
+            file(Lang::Php, &at("composer/src/Composer/Config.php"), &[]),
+            file(Lang::Php, &at("flysystem/src/Config.php"), &[]),
+            php_named(
+                &at("flysystem/src/Filesystem.php"),
+                "League\\Flysystem\\Config",
+                Reach::Project,
+            ),
+        ];
+        let (_, targets) = super::resolve_imports(&files);
+        assert_eq!(targets[0][0], Some(1), "not a namesake next door");
+        assert_eq!(targets[3][0], Some(2), "a root the tree does not mirror");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_php_tail_of_one_component_names_nothing() {
+        // monolog's Logger.php:149 writes `protected Closure|null`, and
+        // `Closure` is a PHP built-in — but the only Closure.php in the
+        // corpus is PHP-Parser's, so a one-component tail bound two
+        // unrelated repositories together. 33 such edges disappeared
+        // when the ladder was floored at two.
+        use crate::lang::Reach;
+        let (dir, at) = psr4_tree("tail");
+        let files = [
+            php_named(
+                &at("monolog/src/Monolog/Logger.php"),
+                "Closure",
+                Reach::Anywhere,
+            ),
+            file(
+                Lang::Php,
+                &at("PHP-Parser/lib/PhpParser/Node/Expr/Closure.php"),
+                &[],
+            ),
+        ];
+        let (_, targets) = super::resolve_imports(&files);
+        assert_eq!(targets[0][0], None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_php_path_specifier_is_a_file_and_a_php_namespace_is_not() {
+        // PHP has two module systems and they never collide: `use`
+        // names a class for the autoloader, `require __DIR__ . '/x.php'`
+        // names a file. A namespace holds no separator, so the presence
+        // of one settles which of the two wrote the target.
+        use crate::facts::ImportFact;
+        use crate::lang::Reach;
+        let imp = |target: &str, reach| ImportFact {
+            target: target.into(),
+            names: Vec::new(),
+            reach,
+        };
+        let mut lexer = file(Lang::Php, "lib/PhpParser/Lexer.php", &[]);
+        lexer.imports = vec![
+            imp("/compatibility_tokens.php", Reach::Project),
+            imp("/../vendor/autoload.php", Reach::Project),
+            imp("Node\\Stmt", Reach::Project),
+        ];
+        let files = [
+            lexer,
+            file(Lang::Php, "lib/PhpParser/compatibility_tokens.php", &[]),
+            file(Lang::Php, "lib/PhpParser/Node/Stmt.php", &[]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[0][0], Some(idx("compatibility_tokens.php")));
+        // A path this checkout does not hold stays unresolved rather
+        // than being called a third-party package: composer's generated
+        // autoloader names `vendor/` and `vendor/` is not vendored.
+        assert_eq!(targets[0][1], None);
+        assert_eq!(targets[0][2], Some(idx("Node/Stmt.php")));
+        assert_eq!((res.internal, res.external, res.unresolved), (2, 0, 1));
     }
 
     /// A file whose imports are strings the language has no syntax for.

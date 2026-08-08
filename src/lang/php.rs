@@ -54,6 +54,14 @@ const KINDS: &[(&str, Sem)] = &[
     ("cast_expression", Sem::Cast),
     ("comment", Sem::Comment),
     ("namespace_use_declaration", Sem::Import),
+    // PHP's OTHER module system. `use` names a class for the autoloader;
+    // `include`/`require` name a FILE, and all four spellings of it were
+    // missing from this table entirely, so the pack read none of the
+    // corpus's 66 include statements. See `included_file`.
+    ("include_expression", Sem::Import),
+    ("include_once_expression", Sem::Import),
+    ("require_expression", Sem::Import),
+    ("require_once_expression", Sem::Import),
     // The file itself is asked for its imports, because most of a PHP
     // file's dependencies are not `use` statements. See
     // `class_references`.
@@ -176,8 +184,61 @@ fn name_node(node: Node) -> Option<Node> {
 fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     match node.kind() {
         "namespace_use_declaration" => namespace_uses(node, src),
+        "include_expression"
+        | "include_once_expression"
+        | "require_expression"
+        | "require_once_expression" => included_file(node, src).into_iter().collect(),
         _ => class_references(node, src),
     }
+}
+
+/// `require __DIR__ . '/compatibility_tokens.php'` — the other half of
+/// PHP's module story, and the half the autoloader never sees.
+///
+/// PHP-Parser's Lexer.php:5 is that line, and compatibility_tokens.php
+/// read as depended on by nothing; flysystem's phpunit.php:4-5 pulls in
+/// AdapterTestUtilities/test-functions.php and mocked-functions.php the
+/// same way, and phpunit.xml.dist:2 names phpunit.php as the suite
+/// bootstrap. 66 include/require statements exist in the gold corpus and
+/// the pack read zero of them, because all four node kinds were absent
+/// from the KINDS table.
+///
+/// `__DIR__` is REQUIRED, and it is what makes the rest readable. Without
+/// it the specifier is relative to the process's working directory or is
+/// built from a variable, and neither can be known without running the
+/// program. With it the base is the including file's own directory, so
+/// the string pieces of the concatenation — read in document order —
+/// spell a path this tool can check against the tree.
+fn included_file(node: Node, src: &[u8]) -> Option<super::ImportInfo> {
+    let mut here = false;
+    let mut path = String::new();
+    let mut stack = vec![node];
+    let mut pieces: Vec<(usize, Box<str>)> = Vec::new();
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "name" if n.utf8_text(src) == Ok("__DIR__") => here = true,
+            "string" | "encapsed_string" => {
+                if let Ok(text) = n.utf8_text(src) {
+                    pieces.push((n.start_byte(), text.trim_matches(['"', '\'']).into()));
+                }
+            }
+            _ => {
+                let mut cursor = n.walk();
+                stack.extend(n.named_children(&mut cursor));
+            }
+        }
+    }
+    pieces.sort_unstable();
+    for (_, piece) in pieces {
+        path.push_str(&piece);
+    }
+    // A relative path always holds a separator and a namespace never
+    // does, which is what tells the two apart at the resolver.
+    (here && path.contains('/')).then(|| super::ImportInfo {
+        target: path.into(),
+        names: Vec::new(),
+        reach: super::Reach::Project,
+    })
 }
 
 /// Node kinds every one of whose class-shaped children is a class: an
@@ -208,7 +269,7 @@ const CLASS_SITES: &[&str] = &[
 /// happens to carry the name.
 fn class_references(root: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     let mut found = Classes {
-        own: own_namespace(root, src),
+        blocks: namespace_blocks(root, src),
         bound: bound_names(root, src),
         seen: std::collections::HashSet::new(),
         out: Vec::new(),
@@ -272,7 +333,7 @@ fn names_a_class<'t>(node: Node<'t>, src: &[u8], children: &[Node<'t>]) -> Vec<N
 /// one: the file's own namespace, the short names its `use` statements
 /// already bound, and the names already recorded.
 struct Classes<'a> {
-    own: Vec<&'a str>,
+    blocks: Vec<(usize, Vec<&'a str>)>,
     bound: std::collections::HashSet<&'a str>,
     seen: std::collections::HashSet<Box<str>>,
     out: Vec<super::ImportInfo>,
@@ -300,9 +361,31 @@ impl<'a> Classes<'a> {
         // `Comment\Doc` inline and imports nothing — so it supplies an
         // edge and never a tally entry. Only the `use` statements above
         // are dependencies the file declares.
+        //
+        // PHP reads an unqualified name against the CURRENT namespace,
+        // and that is where most of these live. monolog's
+        // Handler/RotatingFileHandler.php:29 says
+        // `class RotatingFileHandler extends StreamHandler` and needs
+        // no `use` for it, because both sit in `Monolog\Handler`. A
+        // leading `\` is the one spelling that means the global
+        // namespace instead, and `qualified` has already dropped it —
+        // so the test is made on the text as written.
+        let rooted = text.starts_with('\\');
+        let own = read_against(&self.blocks, node.start_byte());
+        let relative: String = own
+            .iter()
+            .copied()
+            .chain(std::iter::once(text))
+            .collect::<Vec<&str>>()
+            .join("\\");
+        let read_as = if rooted || own.is_empty() {
+            text
+        } else {
+            &relative
+        };
         self.out.push(super::ImportInfo {
             reach: super::Reach::Mention,
-            ..qualified(text, &self.own)
+            ..qualified(read_as, own)
         });
     }
 }
@@ -342,7 +425,8 @@ fn bound_names<'a>(root: Node, src: &'a [u8]) -> std::collections::HashSet<&'a s
 /// `use Foo\{Bar, Baz};` whose clauses hang off a `namespace_use_group`
 /// and were invisible to a search of the declaration's own children.
 fn namespace_uses(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    let own = own_namespace(node, src);
+    let blocks = namespace_blocks(node, src);
+    let own = read_against(&blocks, node.start_byte()).to_vec();
     let mut cursor = node.walk();
     let kids: Vec<Node> = node.named_children(&mut cursor).collect();
     let group = kids.iter().find(|c| c.kind() == "namespace_use_group");
@@ -378,55 +462,81 @@ fn namespace_uses(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
         .collect()
 }
 
-/// One dependency, with the namespace root the importer shares with it
-/// removed.
+/// One dependency, under the FULL name PHP reads it as.
 ///
-/// PSR-4 maps a namespace ROOT onto a source directory, and the two need
-/// not be spelled alike: composer.json says `GuzzleHttp\` is `src/` and
-/// `League\Flysystem\` is `src`, so matching the written namespace
-/// against path components resolved 0 of guzzle's 818 and 0 of
-/// flysystem's 787 `use` statements, and both repositories produced no
-/// module graph at all. What the two ends do share is the root itself —
-/// the importer's own namespace names it — so dropping the prefix they
-/// have in common leaves the part PSR-4 spells as directories.
+/// PSR-4 maps a namespace ROOT onto a source directory and the two need
+/// not be spelled alike — composer.json says `GuzzleHttp\` is `src/`
+/// and `League\Flysystem\` is `src` — so the pack used to drop the
+/// prefix the importer's own namespace shared with the target and let
+/// the resolver suffix-match what was left. That works until two
+/// projects share a leaf name, and then it takes the WRONG one:
+/// composer/src/Composer/Util/Url.php:15 writes `use Composer\Config;`,
+/// one of 46 files that do, and the stripped tail `Config` matched
+/// flysystem/src/Config.php in an unrelated repository, so
+/// composer's own Config.php read as depended on by nothing. Utils.php,
+/// StreamHandler.php and ErrorHandler.php collided the same way.
 ///
-/// A name that shares nothing is a third-party package and is left
-/// whole; one that shares the root named something inside this project,
-/// so a miss there is a miss.
+/// Keeping the whole name costs nothing and lets `Index::php` resolve
+/// it the way PHP does: through the PSR-4 root a manifest declares.
+///
+/// The reach is still decided by the shared root, because that is the
+/// only thing the SOURCE says about whether the name is this project's:
+/// a name sharing the importer's namespace root is here or it is a
+/// miss, and one sharing nothing is a package.
 fn qualified(text: &str, own: &[&str]) -> super::ImportInfo {
     let segs: Vec<&str> = text
         .trim_start_matches('\\')
         .split('\\')
         .filter(|s| !s.is_empty())
         .collect();
-    let mut shared = 0;
-    while shared < own.len() && shared + 1 < segs.len() && own[shared] == segs[shared] {
-        shared += 1;
-    }
+    let shared = own.first().is_some_and(|root| segs.first() == Some(root));
     super::ImportInfo {
-        target: segs[shared..].join("\\").into(),
+        target: segs.join("\\").into(),
         names: Vec::new(),
         reach: match shared {
-            0 => super::Reach::Anywhere,
-            _ => super::Reach::Project,
+            false => super::Reach::Anywhere,
+            true => super::Reach::Project,
         },
     }
 }
 
-/// The namespace the file declares, which is the only statement in the
-/// source about where PSR-4 has rooted it.
-fn own_namespace<'a>(node: Node, src: &'a [u8]) -> Vec<&'a str> {
+/// The namespace blocks the file declares, by the byte at which each
+/// opens — the only statement in the source about where PSR-4 has
+/// rooted it.
+///
+/// A file may declare more than one. monolog's
+/// tests/Monolog/Processor/IntrospectionProcessorTest.php opens
+/// `namespace Acme;` at line 12 and `namespace Monolog\Processor;` at
+/// line 27, and reading the first for the whole file made every name
+/// below line 27 an `Acme\` name. Eight files in gold do this, two of
+/// them composer production code.
+fn namespace_blocks<'a>(node: Node, src: &'a [u8]) -> Vec<(usize, Vec<&'a str>)> {
     let mut root = node;
     while let Some(parent) = root.parent() {
         root = parent;
     }
     let mut cursor = root.walk();
     root.named_children(&mut cursor)
-        .find(|c| c.kind() == "namespace_definition")
-        .and_then(|n| n.child_by_field_name("name"))
-        .and_then(|n| n.utf8_text(src).ok())
-        .map(|text| text.split('\\').filter(|s| !s.is_empty()).collect())
-        .unwrap_or_default()
+        .filter(|c| c.kind() == "namespace_definition")
+        .map(|n| {
+            let segs = n
+                .child_by_field_name("name")
+                .and_then(|x| x.utf8_text(src).ok())
+                .map(|t| t.split('\\').filter(|s| !s.is_empty()).collect())
+                .unwrap_or_default();
+            (n.start_byte(), segs)
+        })
+        .collect()
+}
+
+/// The namespace a name at this byte is read against: the last block
+/// opened above it.
+fn read_against<'a, 'b>(blocks: &'b [(usize, Vec<&'a str>)], at: usize) -> &'b [&'a str] {
+    blocks
+        .iter()
+        .rev()
+        .find(|(start, _)| *start <= at)
+        .map_or(&[][..], |(_, segs)| segs.as_slice())
 }
 
 /// A parameter carries a declared type or it does not, and that is the
@@ -651,4 +761,99 @@ fn record_keys(node: Node, src: &[u8]) -> Option<Vec<Box<str>>> {
         .map(|k| k.trim_matches(['"', '\'']).into())
         .collect();
     (!keys.is_empty()).then_some(keys)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    fn targets(src: &str) -> Vec<String> {
+        let pack = super::Lang::Php.pack();
+        let mut parser = pack.make_parser();
+        let facts =
+            crate::facts::extract(pack, &mut parser, Path::new("lib/PhpParser/Lexer.php"), src);
+        facts.imports.iter().map(|i| i.target.to_string()).collect()
+    }
+
+    #[test]
+    fn an_unqualified_class_carries_the_namespace_it_is_read_against() {
+        // monolog's Handler/RotatingFileHandler.php:29 writes
+        // `class RotatingFileHandler extends StreamHandler` and needs
+        // no `use`, because PHP reads an unqualified name against the
+        // current namespace. A leading `\\` is the one spelling that
+        // means the global namespace instead.
+        let pack = super::Lang::Php.pack();
+        let mut parser = pack.make_parser();
+        let facts = crate::facts::extract(
+            pack,
+            &mut parser,
+            Path::new("src/Monolog/Handler/RotatingFileHandler.php"),
+            "<?php\nnamespace Monolog\\Handler;\n\
+             use Monolog\\Level;\n\
+             class RotatingFileHandler extends StreamHandler {\n\
+               public function f(\\Closure $c, Level $l): void {}\n\
+             }\n",
+        );
+        let got: Vec<String> = facts.imports.iter().map(|i| i.target.to_string()).collect();
+        assert!(
+            got.iter().any(|t| t == "Monolog\\Handler\\StreamHandler"),
+            "{got:?}"
+        );
+        // A `use` keeps its full name, so it cannot collide with a leaf
+        // of the same name in another repository.
+        assert!(got.iter().any(|t| t == "Monolog\\Level"), "{got:?}");
+        // The global namespace stays global.
+        assert!(got.iter().any(|t| t == "Closure"), "{got:?}");
+        assert!(
+            !got.iter().any(|t| t == "Monolog\\Handler\\Closure"),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn a_php_suite_directory_is_named_freely() {
+        // flysystem writes `test_files/`, PHP-Parser `test_old/`, and
+        // monolog ships its harness base class as `src/Monolog/Test/`.
+        // The old exact `/test/` and `/tests/` match saw none of them.
+        let is_test = super::pack().test_path;
+        for p in [
+            "flysystem/test_files/adapter.php",
+            "PHP-Parser/test_old/run.php",
+            "monolog/src/Monolog/Test/TestCase.php",
+            "flysystem/src/AdapterTestUtilities/Adapter.php",
+            "composer/tests/Composer/Test/AllFunctionalTest.php",
+        ] {
+            assert!(is_test(p), "{p}");
+        }
+        for p in [
+            "composer/src/Composer/Config.php",
+            "flysystem/src/Filesystem.php",
+        ] {
+            assert!(!is_test(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn a_dir_relative_include_names_a_file_and_a_variable_one_names_nothing() {
+        // PHP-Parser's Lexer.php:5 and flysystem's phpunit.php:4-5 are
+        // production includes of files nothing else reaches. All four
+        // node kinds were absent from KINDS, so the pack read none of
+        // the corpus's 66 include statements.
+        let got = targets(
+            "<?php\n\
+             require __DIR__ . '/compatibility_tokens.php';\n\
+             include_once __DIR__.'/../src/bootstrap.php';\n\
+             require_once $base . '/runtime.php';\n\
+             include 'plain.php';\n",
+        );
+        assert!(
+            got.iter().any(|t| t == "/compatibility_tokens.php"),
+            "{got:?}"
+        );
+        assert!(got.iter().any(|t| t == "/../src/bootstrap.php"), "{got:?}");
+        // Without `__DIR__` the base is the process's working directory
+        // or a variable, and neither is readable from the source.
+        assert!(!got.iter().any(|t| t.contains("runtime.php")), "{got:?}");
+        assert!(!got.iter().any(|t| t.contains("plain.php")), "{got:?}");
+    }
 }
