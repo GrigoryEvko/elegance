@@ -894,6 +894,7 @@ fn entryish(path: &Path) -> bool {
         || gem_entry(path, name)
         || manifest_entry(path)
         || tool_driver(path)
+        || built_by_name(path, name)
 }
 
 /// A header whose only caller is outside this repository, because the
@@ -1270,6 +1271,101 @@ fn declares_target(text: &str, rel: &str) -> bool {
     false
 }
 
+/// The build descriptions that name a FILE rather than a library, and
+/// are read only for a file sitting in the same directory as one.
+const BUILD_FILES: &[&str] = &[
+    "Makefile",
+    "Makefile.am",
+    "Makefile.in",
+    "GNUmakefile",
+    "CMakeLists.txt",
+    "meson.build",
+    "Rakefile",
+    "build.zig",
+];
+
+/// A file the build description in its OWN directory spells by name.
+///
+/// `dune_root` already makes this argument for `(name containers)`;
+/// this is the same argument for the build systems that name a file
+/// instead of a library. curl's lib/Makefile.am:182 runs
+/// `@PERL@ $(srcdir)/optiontable.pl` over `include/curl/curl.h` into
+/// `easyoptions.c`, git's Makefile:2812 builds git-instaweb from
+/// `unimplemented.sh`, and curl's src/CMakeLists.txt names mkhelp.pl
+/// and mk-file-embed.pl. A generator nothing imports is not
+/// unreferenced; it is invoked.
+///
+/// OWN DIRECTORY, never an ancestor. The widening was tried and
+/// rejected on one case: fmt's CMakeLists.txt lists every header as a
+/// source, so `include/fmt/core.h` would be exempted — and core.h IS
+/// included by format.h, so the exemption would HIDE a resolver defect
+/// rather than report it. The own-directory restriction is what keeps
+/// an install manifest from being read as an entry-point claim across a
+/// whole repository.
+///
+/// Two filters, both of which fire in gold and both of which cost
+/// nothing that is not a false positive.
+///
+/// A COMMENTED line names nothing. ghostty's pkg/libintl/build.zig
+/// opens with `//! ... I generated the config.h on my own machine (a
+/// Mac) and then copied it here`, and that prose was the whole reason
+/// config.h read as built. Its identical sibling libgnuintl.h, same
+/// directory and same status, was not exempted — because the prose does
+/// not happen to mention it. A rule that can be moved by an anecdote is
+/// not reading the build.
+///
+/// A SHIPPING MANIFEST is not an invocation. `EXTRA_DIST` says "put
+/// this in the tarball" and `*_HEADERS` / `*_DATA` say "install this";
+/// none of the three says anything runs. curl's projects/vms/Makefile.am
+/// lists vms_eco_level.h under EXTRA_DIST at line 59, and that file is
+/// genuinely dead — make_pcsi_curl_kit_name.com:106-108 opens it as a
+/// TEXT file to read a version stamp out of it. Same shape for curl's
+/// Dockerfile and docs/libcurl/symbols.pl.
+///
+/// The manifest is followed THROUGH ITS VARIABLES, because that is
+/// where the corpus's largest instance hides: curl's
+/// tests/Makefile.am:26 opens `TESTSCRIPTS = \` with eighteen
+/// `test*.pl` under it, and TESTSCRIPTS is referenced exactly once, at
+/// line 85, as the last entry of EXTRA_DIST. Reading only the literal
+/// left-hand side exempted all eighteen — a third of this rule's whole
+/// gain — on a claim no stronger than the one that was rejected for
+/// vms_eco_level.h.
+fn built_by_name(path: &Path, name: &str) -> bool {
+    let Some(dir) = path.parent() else {
+        return false;
+    };
+    BUILD_FILES.iter().any(|build| {
+        std::fs::read_to_string(dir.join(build)).is_ok_and(|text| names_whole(&text, name))
+    })
+}
+
+/// Does this build text spell the filename, on a line that claims
+/// something is done with it?
+///
+/// A make assignment continues across a trailing backslash, so the
+/// variable a line belongs to is carried forward: curl's
+/// projects/vms/Makefile.am opens `EXTRA_DIST = \` at line 24 and
+/// reaches vms_eco_level.h at line 59.
+fn names_whole(text: &str, name: &str) -> bool {
+    const COMMENT: &[&str] = &["#", "//", "--"];
+    let ship = shipping_vars(text);
+    let mut lhs: Option<&str> = None;
+    let mut continued = false;
+    for line in text.lines() {
+        if !continued {
+            lhs = assigned(line);
+        }
+        continued = line.trim_end().ends_with('\\');
+        let head = line.trim_start();
+        let inert =
+            COMMENT.iter().any(|c| head.starts_with(c)) || lhs.is_some_and(|v| ship.contains(&v));
+        if !inert && spells(line, name) {
+            return true;
+        }
+    }
+    false
+}
+
 /// What one `package.json` declares: files that exist as written,
 /// wildcard (prefix, suffix) pairs, and the (name, depth) of the rest.
 #[derive(Default)]
@@ -1460,6 +1556,84 @@ fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
         serde_json::Value::Object(o) => o.values().for_each(|v| collect_strings(v, out)),
         _ => {}
     }
+}
+
+/// The variables of this build file whose contents only ever get
+/// shipped or installed: the three names that say so outright, plus
+/// every variable spliced into one of them, to a fixed point.
+fn shipping_vars(text: &str) -> HashSet<&str> {
+    let manifest = |v: &str| v == "EXTRA_DIST" || v.ends_with("_HEADERS") || v.ends_with("_DATA");
+    let mut ship: HashSet<&str> = HashSet::new();
+    // (variable referenced, variable whose value references it).
+    let mut spliced: Vec<(&str, &str)> = Vec::new();
+    let mut lhs: Option<&str> = None;
+    let mut continued = false;
+    for line in text.lines() {
+        if !continued {
+            lhs = assigned(line);
+        }
+        continued = line.trim_end().ends_with('\\');
+        let Some(var) = lhs else { continue };
+        if manifest(var) {
+            ship.insert(var);
+        }
+        spliced.extend(expansions(line).map(|used| (used, var)));
+    }
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for &(used, by) in &spliced {
+            if ship.contains(&by) {
+                grew |= ship.insert(used);
+            }
+        }
+    }
+    ship
+}
+
+/// The variable names a line expands: `$(TESTSCRIPTS)`, `${SOURCES}`.
+fn expansions(line: &str) -> impl Iterator<Item = &str> {
+    line.match_indices('$').filter_map(|(at, _)| {
+        let rest = &line[at + 1..];
+        let close = match rest.chars().next()? {
+            '(' => ')',
+            '{' => '}',
+            _ => return None,
+        };
+        let inner = rest[1..].split(close).next()?;
+        let plain = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        (!inner.is_empty() && inner.chars().all(plain)).then_some(inner)
+    })
+}
+
+/// The make variable a line assigns, if it assigns one. `:=`, `+=` and
+/// `?=` are the same statement as `=`.
+fn assigned(line: &str) -> Option<&str> {
+    let var = line
+        .split_once('=')?
+        .0
+        .trim()
+        .trim_end_matches([':', '+', '?']);
+    let plain = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    (!var.is_empty() && var.chars().all(plain)).then_some(var)
+}
+
+/// The name must stand on its own. A rule for `unittest.sh` says
+/// nothing about `test.sh`, and `easyoptions.c` is not `options.c`. A
+/// leading `/` is a path prefix and still names the file, which is how
+/// `$(srcdir)/optiontable.pl` is read.
+fn spells(line: &str, name: &str) -> bool {
+    line.match_indices(name).any(|(at, _)| {
+        let before = line[..at].chars().next_back();
+        let after = line[at + name.len()..].chars().next();
+        free(before) && free(after)
+    })
+}
+
+/// A delimiter, or the end of the line. `/` is one, which is how
+/// `$(srcdir)/optiontable.pl` reads as naming optiontable.pl.
+fn free(neighbour: Option<char>) -> bool {
+    !neighbour.is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
 /// The root module of a dune library or executable, which the `dune`
@@ -2028,6 +2202,49 @@ mod tests {
     /// detection stays out of the way of the structural assertions.
     fn seen(names: &[&str]) -> Mentions {
         names.iter().map(|n| ((*n).into(), 2)).collect()
+    }
+
+    #[test]
+    fn a_build_file_names_a_generator_and_a_shipping_list_names_nothing() {
+        // curl's lib/Makefile.am:33 lists optiontable.pl and :182 runs
+        // it; its projects/vms/Makefile.am reaches vms_eco_level.h only
+        // through EXTRA_DIST, and that file is genuinely dead. Its
+        // tests/Makefile.am hides eighteen more behind one indirection:
+        // TESTSCRIPTS is spliced into EXTRA_DIST and nothing else.
+        // ghostty's pkg/libintl/build.zig mentions config.h only inside
+        // a `//!` doc comment.
+        let dir = std::env::temp_dir().join(format!("elegance-built-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Makefile.am"),
+            "# a comment naming commented.pl and nothing else\n\
+             TESTSCRIPTS = \\\n  shipped.pl\n\
+             EXTRA_DIST = \\\n  vms_eco_level.h \\\n  $(TESTSCRIPTS)\n\
+             noinst_HEADERS = installed.h\n\
+             optiontable:\n\t@PERL@ $(srcdir)/optiontable.pl > easyoptions.c\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("build.zig"), "//! I generated config.h myself.\n").unwrap();
+        let is_entry = |n: &str| entryish(&dir.join(n));
+
+        assert!(is_entry("optiontable.pl"), "a recipe invokes it");
+        // A distribution list, an install list, a variable spliced into
+        // one, and a comment are all things that name a file without
+        // anything happening to it.
+        for quiet in [
+            "vms_eco_level.h",
+            "installed.h",
+            "shipped.pl",
+            "commented.pl",
+            "config.h",
+        ] {
+            assert!(!is_entry(quiet), "{quiet} is named but not invoked");
+        }
+        // The name must stand on its own: a rule for `optiontable.pl`
+        // says nothing about `table.pl`.
+        assert!(is_entry("easyoptions.c"), "the recipe writes it");
+        assert!(!is_entry("table.pl"), "optiontable.pl is not table.pl");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
