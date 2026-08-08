@@ -924,9 +924,39 @@ fn judgeable(files: &[&GraphFacts], fan_in: &[u32]) -> Vec<bool> {
         .zip(fan_in)
         .map(|(f, &reached)| {
             let sink = f.lang.is_sink(&f.path) || declares_types_only(f);
-            !(sink || reached == 0 && (runs_once(&f.path) || package_private(f)))
+            let unnameable = package_private(f) || assembly_metadata(f);
+            !(sink || reached == 0 && (runs_once(&f.path) || unnameable))
         })
         .collect()
+}
+
+/// A C# file of nothing but `[assembly: ...]`.
+///
+/// `Lang::is_sink` already makes this argument for the file NAMED
+/// `AssemblyInfo.cs`; the content is what that name was standing in for,
+/// because FluentValidation writes `AssemblyInfo.FluentValidation.cs`
+/// and `CommonAssemblyInfo.cs` and Dapper writes `Global.cs`. Eight
+/// files in the gold C# corpus carry an assembly attribute and no type
+/// keyword and five of them the name test already caught.
+///
+/// Zero-fan-in gated and NOT a sink, though a sink is what the shape
+/// argues for: `is_sink` is wrong wherever any instance has fan-in, and
+/// one does. Dapper's `Global.cs` is answered from the file-stem index
+/// on the bare word `Global`, so a sink would drop a measurable file out
+/// of the population to remove the two orphans this removes anyway. The
+/// weakest mechanism that gets the same number is the one that ships.
+///
+/// The read is reached only for a file that exports nothing and that
+/// nothing references, so an ordinary module is never opened.
+fn assembly_metadata(f: &GraphFacts) -> bool {
+    f.lang == crate::lang::Lang::CSharp
+        && f.exports.is_empty()
+        && std::fs::read_to_string(&f.path).is_ok_and(|text| {
+            text.contains("[assembly")
+                && !["class ", "struct ", "interface ", "record ", "enum "]
+                    .iter()
+                    .any(|kw| text.contains(kw))
+        })
 }
 
 /// A Java file that declares nothing another package can name.
@@ -1400,6 +1430,36 @@ mod tests {
         std::fs::remove_file(dir.join("build.properties")).unwrap();
         assert!(!runs_once(&dir.join("BuildHelper.scala")));
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn a_csharp_file_of_nothing_but_assembly_attributes_states_no_module() {
+        // `Lang::is_sink` already makes this argument for the file NAMED
+        // `AssemblyInfo.cs`; the content is what that name stood in for,
+        // because FluentValidation writes `AssemblyInfo.FluentValidation
+        // .cs` and Dapper writes `Global.cs`.
+        let dir = std::env::temp_dir().join("elegance-assembly-attrs");
+        let _ = std::fs::create_dir_all(&dir);
+        let write = |name: &str, text: &str| {
+            std::fs::write(dir.join(name), text).unwrap();
+            dir.join(name).display().to_string()
+        };
+        let meta = write("Global.cs", "[assembly: InternalsVisibleTo(\"Tests\")]\n");
+        let live = write(
+            "Live.cs",
+            "[assembly: CLSCompliant(true)]\npublic class Live { }\n",
+        );
+        let used = write("Used.cs", "public class Used { }\n");
+        let mut kept = fixture(Lang::CSharp, &live, &["Used"]);
+        kept.exports = vec!["Live".into()];
+        let mut target = fixture(Lang::CSharp, &used, &[]);
+        target.exports = vec!["Used".into()];
+        let arch = arch(&[fixture(Lang::CSharp, &meta, &[]), kept, target]);
+        // A file that also declares a type is an ordinary module and
+        // stays measurable.
+        assert_eq!(arch.orphans, [live]);
+        assert_eq!(arch.judged_modules, 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

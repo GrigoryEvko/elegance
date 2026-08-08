@@ -668,6 +668,7 @@ impl Agg {
                 is_test: facts.is_test_file,
                 imports: facts.imports.clone(),
                 exports: Vec::new(),
+                receiver_units: Vec::new(),
                 mass: 0,
                 surface_cost: 0,
             })
@@ -1213,6 +1214,7 @@ fn graph_facts(facts: &FileFacts) -> crate::graph::GraphFacts {
         is_test: facts.is_test_file,
         imports: facts.imports.clone(),
         exports: facts.exports.clone(),
+        receiver_units: facts.receiver_units.clone(),
         mass: facts.mass,
         surface_cost: unit_cost + type_exports,
     }

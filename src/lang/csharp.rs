@@ -276,12 +276,21 @@ const TYPE_LISTS: &[&str] = &[
 /// — `ReflectionHelper.GetMap(x)` reaches another file's static member
 /// without naming a type anywhere else.
 fn type_references(root: Node, src: &[u8]) -> Vec<super::ImportInfo> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
+    let mut uses = Uses::default();
     let mut stack = vec![(root, false)];
     while let Some((node, in_type)) = stack.pop() {
         if let Some(name) = names_a_type(node, in_type) {
-            take(name, src, &mut seen, &mut out);
+            uses.take(name, src, super::Reach::Mention);
+        }
+        if let Some(member) = called_member(node, src) {
+            uses.take(member, src, super::Reach::Member);
+        }
+        // `[DynamicDependency(...)]` names the type
+        // `DynamicDependencyAttribute`: the compiler appends the suffix
+        // when the short form does not resolve, and 13 of the C#
+        // corpus's remaining orphans are the file that declares one.
+        if let Some(long) = attribute_type(node, src) {
+            uses.name(long, super::Reach::Mention);
         }
         if sealed(node.kind(), in_type) {
             continue;
@@ -292,7 +301,42 @@ fn type_references(root: Node, src: &[u8]) -> Vec<super::ImportInfo> {
             stack.push((child, in_type || typed.contains(&child.id())));
         }
     }
-    out
+    uses.out
+}
+
+/// The names one file uses, each recorded once.
+#[derive(Default)]
+struct Uses {
+    seen: std::collections::HashSet<Box<str>>,
+    out: Vec<super::ImportInfo>,
+}
+
+impl Uses {
+    /// One type reference, if the name can be a type at all. A lowercase
+    /// name is a local or a member; `T`, `TKey`, `TResult` are the
+    /// generic parameters the .NET naming guidelines spell exactly that
+    /// way, and a declared type never does.
+    fn take(&mut self, node: Node, src: &[u8], reach: super::Reach) {
+        let Ok(text) = node.utf8_text(src) else {
+            return;
+        };
+        let generic_param = text
+            .strip_prefix('T')
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_uppercase()));
+        if text.starts_with(char::is_uppercase) && !generic_param {
+            self.name(text.into(), reach);
+        }
+    }
+
+    fn name(&mut self, target: Box<str>, reach: super::Reach) {
+        if self.seen.insert(target.clone()) {
+            self.out.push(super::ImportInfo {
+                target,
+                names: Vec::new(),
+                reach,
+            });
+        }
+    }
 }
 
 /// The node naming a type, where this one names one.
@@ -302,11 +346,87 @@ fn names_a_type<'t>(node: Node<'t>, in_type: bool) -> Option<Node<'t>> {
         // qualifier is the namespace it lives in.
         ("qualified_name", true) => node.child_by_field_name("name"),
         ("identifier", true) => Some(node),
-        ("member_access_expression", false) => node
-            .child_by_field_name("expression")
-            .filter(|qualifier| qualifier.kind() == "identifier"),
+        ("member_access_expression", false) => qualifying_type(node),
         _ => None,
     }
+}
+
+/// The TYPE a member access is qualified by, where it is one.
+///
+/// `CollectionPropertyRule<T, TElement>.Create(...)` is a static call on
+/// a generic type, and the grammar spells the qualifier `generic_name`
+/// rather than `identifier` — so the only two references FluentValidation
+/// makes to `CollectionPropertyRule.cs` and `IncludeRule.cs`, both on
+/// AbstractValidator.cs, named nothing.
+fn qualifying_type<'t>(access: Node<'t>) -> Option<Node<'t>> {
+    bare_name(access.child_by_field_name("expression")?)
+}
+
+/// The identifier a node NAMES, with any generic wrapper taken off.
+///
+/// The text of a `generic_name` carries the type arguments too, and no
+/// file answers to `Rule<T, TElement>` or to `CastResult<DbDataReader,
+/// IDataReader>`. Written kind-agnostically because the grammar does not
+/// field `CollectionPropertyRule<T, TElement>.Create` as a `generic_name`
+/// consistently: matching on that kind scored 0 and the first-identifier-
+/// child reading scored 5.
+fn bare_name(node: Node<'_>) -> Option<Node<'_>> {
+    if node.kind() == "identifier" {
+        return Some(node);
+    }
+    node.child_by_field_name("name")
+        .or_else(|| node.named_child(0))
+        .filter(|n| n.kind() == "identifier")
+}
+
+/// The full type name an attribute usage means, where it is written in
+/// the short form. `[Ignore]` and `[IgnoreAttribute]` are the same
+/// attribute, and only the second spelling names the file.
+fn attribute_type(node: Node, src: &[u8]) -> Option<Box<str>> {
+    if node.kind() != "attribute" {
+        return None;
+    }
+    let text = node.child_by_field_name("name")?.utf8_text(src).ok()?;
+    let short = text.rsplit('.').next()?;
+    (short.starts_with(char::is_uppercase) && !short.ends_with("Attribute"))
+        .then(|| format!("{short}Attribute").into())
+}
+
+/// The member an invocation calls on a VALUE.
+///
+/// `policyBuilder.CircuitBreaker(n, t)` names no type at all: an
+/// extension method is invoked on its receiver and the declaring class
+/// is spelled nowhere, so the member is the only name the call writes.
+///
+/// A receiver that is a bare capitalized IDENTIFIER is a type, and the
+/// qualifier arm has already taken it — `Constants.OptionsValidation`
+/// states a dependency on Constants and not on a namesake of the field.
+/// Anything else is a value, INCLUDING a fluent chain that started at a
+/// type: `Policy.Handle<T>().FallbackAsync(...)` is a call on the
+/// builder the first call returned, and reading the whole chain's text
+/// for a leading capital lost every extension method Polly's tests
+/// reach that way.
+///
+/// The member is unwrapped the way `qualifying_type` unwraps a generic
+/// qualifier — a GENERIC extension call named nothing otherwise. Dapper
+/// writes `....CastResult<DbDataReader, IDataReader>()` at
+/// SqlMapper.Async.cs:1098, :1124 and :1146 against `Dapper/
+/// Extensions.cs`, and Polly's specs write
+/// `nonGenericPolicy.AsPolicy<ResultClass>()` against
+/// `ISyncPolicyExtensions.cs` — a file this hunt had reported as
+/// genuinely dead on the strength of the unfixed reading.
+fn called_member<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let access = call.child_by_field_name("function")?;
+    if access.kind() != "member_access_expression" {
+        return None;
+    }
+    let receiver = access.child_by_field_name("expression")?;
+    let names_a_type = receiver.kind() == "identifier"
+        && receiver
+            .utf8_text(src)
+            .is_ok_and(|t| t.starts_with(char::is_uppercase));
+    (!names_a_type).then_some(())?;
+    bare_name(access.child_by_field_name("name")?)
 }
 
 /// Nodes holding no further type reference: a using directive names a
@@ -342,32 +462,6 @@ fn type_positions(node: Node) -> Vec<usize> {
     .collect()
 }
 
-/// One type reference, if the name can be a type at all. A lowercase
-/// name is a local or a member; `T`, `TKey`, `TResult` are the generic
-/// parameters the .NET naming guidelines spell exactly that way, and a
-/// declared type never does.
-fn take(
-    node: Node,
-    src: &[u8],
-    seen: &mut std::collections::HashSet<Box<str>>,
-    out: &mut Vec<super::ImportInfo>,
-) {
-    let Ok(text) = node.utf8_text(src) else {
-        return;
-    };
-    let generic_param = text
-        .strip_prefix('T')
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_uppercase()));
-    if !text.starts_with(char::is_uppercase) || generic_param || !seen.insert(text.into()) {
-        return;
-    }
-    out.push(super::ImportInfo {
-        target: text.into(),
-        names: Vec::new(),
-        reach: super::Reach::Mention,
-    });
-}
-
 fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     // `params string[] names` gets NO parameter node of its own: the
     // grammar inlines the type and the name into the parameter list as
@@ -387,6 +481,16 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
     if node.kind() != "parameter" {
         return None;
     }
+    // `this PolicyBuilder policyBuilder` is the RECEIVER of an
+    // extension method, not an argument: `builder.CircuitBreaker(n, t)`
+    // passes two. Counting it made every extension method read one
+    // parameter wider than it is, and it is what says the method is
+    // reached through a value rather than through its declaring class.
+    let receiver = node
+        .utf8_text(src)
+        .unwrap_or("")
+        .trim_start()
+        .starts_with("this ");
     let ty = node.child_by_field_name("type");
     let type_text = ty.and_then(|t| t.utf8_text(src).ok()).unwrap_or("");
     let name = node.child_by_field_name("name")?.utf8_text(src).ok()?;
@@ -397,6 +501,7 @@ fn param_info(node: Node, src: &[u8]) -> Option<ParamInfo> {
         boolish: type_text.starts_with("bool"),
         optional: node.child_by_field_name("default_value").is_some(),
         type_name: type_text.into(),
+        selfish: receiver,
         ..Default::default()
     })
 }
@@ -621,4 +726,115 @@ fn is_override(node: Node, src: &[u8]) -> bool {
         .filter(|c| c.kind() == "modifier")
         .filter_map(|m| m.utf8_text(src).ok())
         .any(|m| m == "override" || m == "virtual" || m == "abstract")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::lang::{Lang, Reach};
+
+    fn facts(src: &str) -> crate::facts::FileFacts {
+        let pack = Lang::CSharp.pack();
+        let mut parser = pack.make_parser();
+        crate::facts::extract(pack, &mut parser, std::path::Path::new("A.cs"), src)
+    }
+
+    /// The names one source reaches for, by the reach that took them.
+    fn named(src: &str, want: Reach) -> Vec<String> {
+        let mut out: Vec<String> = facts(src)
+            .imports
+            .iter()
+            .filter(|i| i.reach == want)
+            .map(|i| i.target.to_string())
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn a_generic_name_is_the_type_it_is_built_on_at_both_ends_of_the_dot() {
+        // FluentValidation/src/FluentValidation/AbstractValidator.cs:226
+        // writes `CollectionPropertyRule<T, TElement>.Create(...)` and
+        // :347 `IncludeRule<T>.Create(...)`. Those are the ONLY
+        // references either file receives, and the qualifier arm
+        // required a bare `identifier`, so both named nothing — the
+        // wrapper's own text is `CollectionPropertyRule<T, TElement>`,
+        // which no file answers to.
+        //
+        // The member side carried the same bug. Dapper writes
+        // `....CastResult<DbDataReader, IDataReader>()` at
+        // SqlMapper.Async.cs:1098 against `Dapper/Extensions.cs`, and
+        // Polly's specs `nonGenericPolicy.AsPolicy<ResultClass>()`
+        // against `ISyncPolicyExtensions.cs` — a file this hunt first
+        // reported as genuinely dead on the strength of the unfixed
+        // reading, and which its own suite calls twice.
+        let src = "class C { void M(System.Data.IDataReader r) {\n\
+                     CollectionPropertyRule<T, TElement>.Create(x);\n\
+                     r.CastResult<DbDataReader, IDataReader>();\n\
+                   } }\n";
+        assert!(named(src, Reach::Mention).contains(&"CollectionPropertyRule".to_string()));
+        assert!(named(src, Reach::Member).contains(&"CastResult".to_string()));
+        // `T`, `TKey`, `TResult` are the generic PARAMETERS the .NET
+        // naming guidelines spell exactly that way, and no declared type
+        // does.
+        for name in named(src, Reach::Mention) {
+            assert_ne!(name, "TElement");
+        }
+    }
+
+    #[test]
+    fn a_fluent_chain_is_a_value_and_a_bare_capital_is_a_type() {
+        // Polly's tests write
+        // `Policy.Handle<DivideByZeroException>().FallbackAsync(...)`
+        // forty times over against `Fallback/AsyncFallbackSyntax.cs`,
+        // which declares `FallbackAsync` as an extension on
+        // PolicyBuilder. Reading the whole chain's TEXT for a leading
+        // capital saw `Policy...` and refused it, losing every extension
+        // method reached through a builder.
+        let src = "class C { void M() {\n\
+                     Policy.Handle<E>().FallbackAsync(a);\n\
+                     Constants.Check(b);\n\
+                   } }\n";
+        assert!(named(src, Reach::Member).contains(&"FallbackAsync".to_string()));
+        // A bare capitalized receiver is a TYPE and the qualifier arm has
+        // already taken it: `Constants.Check(b)` states a dependency on
+        // Constants, not on a namesake of the member.
+        assert!(named(src, Reach::Mention).contains(&"Constants".to_string()));
+        assert!(!named(src, Reach::Member).contains(&"Check".to_string()));
+    }
+
+    #[test]
+    fn an_attribute_names_the_type_with_the_suffix_the_compiler_appends() {
+        // Polly/src/Polly.Core/Registry/ResiliencePipelineRegistry.cs:64
+        // writes `[NotNullWhen(true)]` and Polly/src/LegacySupport/
+        // NullableAttributes.cs:71 declares `internal sealed class
+        // NotNullWhenAttribute`. Counted across production files:
+        // DynamicallyAccessedMembers 22 uses, NotNullWhen 20,
+        // UnconditionalSuppressMessage 19 — every one against a file
+        // that read as an orphan.
+        let src = "class C { [NotNullWhen(true)] [SerializableAttribute] void M() {} }\n";
+        let seen = named(src, Reach::Mention);
+        assert!(seen.contains(&"NotNullWhenAttribute".to_string()));
+        // Only the SHORT form is completed; the long one already names
+        // the file, and doubling the suffix would name nothing.
+        assert!(!seen.contains(&"SerializableAttributeAttribute".to_string()));
+    }
+
+    #[test]
+    fn a_this_parameter_is_the_receiver_and_not_an_argument() {
+        // CircuitBreakerSyntax.cs:26 declares `CircuitBreaker(this
+        // PolicyBuilder policyBuilder, int, TimeSpan)` and
+        // CircuitBreakerTResultSyntax.cs:28 calls
+        // `policyBuilder.CircuitBreaker(...)` — the declaring class is
+        // spelled NOWHERE in the call, so the member name is the only
+        // handle on the file. 40 of gold C#'s 86 orphans declared
+        // nothing but extension methods.
+        let f = facts(
+            "static class S {\n\
+               public static int CircuitBreaker(this PolicyBuilder b, int n) => n;\n\
+               public static int Plain(PolicyBuilder b) => 1;\n\
+             }\n",
+        );
+        let got: Vec<&str> = f.receiver_units.iter().map(|u| &**u).collect();
+        assert_eq!(got, ["CircuitBreaker"]);
+    }
 }

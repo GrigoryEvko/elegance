@@ -168,6 +168,7 @@ mod tests {
                 })
                 .collect(),
             exports: Vec::new(),
+            receiver_units: Vec::new(),
             mass: 10,
             surface_cost: 1,
         }

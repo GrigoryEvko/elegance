@@ -527,6 +527,15 @@ pub enum Reach {
     /// the other twenty-one languages — a module from outside, not a
     /// type name the compiler found somewhere else.
     Mention,
+    /// A MEMBER name, with no type written anywhere: `x.Foo()`. It
+    /// resolves to the file declaring `Foo` and only when exactly ONE
+    /// does — the same refusal `path_suffix` makes, and for the same
+    /// reason. Which `ToString` a call means is decided by the
+    /// receiver's type, which is not in the text; 2220 of the C#
+    /// corpus's 14542 name uses have two or more declarers, and
+    /// `ToString`, `Add`, `Equals` and `Select` head the list.
+    /// Otherwise a `Mention`: an edge, never a tally entry.
+    Member,
 }
 
 #[derive(Default)]

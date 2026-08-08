@@ -84,6 +84,7 @@ fn blank_facts(pack: &Pack, path: &Path, lines: u32, blank_lines: u32) -> FileFa
         record_shapes: Vec::new(),
         imports: Vec::new(),
         exports: Vec::new(),
+        receiver_units: Vec::new(),
         mentioned: Vec::new(),
         step_refs: (0, 0),
         pub_order: (0, 0),
@@ -1454,6 +1455,12 @@ impl Extractor<'_> {
             };
             if i == 0 && unit.is_method && info.selfish {
                 unit.mut_receiver = info.mut_receiver;
+                // A receiver the parameter list DECLARES, in a language
+                // whose call site names no type, is the only handle on
+                // this unit: see `FileFacts::receiver_units`.
+                if self.pack.lang == crate::lang::Lang::CSharp {
+                    self.facts.receiver_units.push(unit.name.clone());
+                }
                 receiver = Some(info.name);
                 continue;
             }

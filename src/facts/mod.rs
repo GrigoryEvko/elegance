@@ -106,6 +106,11 @@ pub struct FileFacts {
     /// Parnas: a module is a decision-hiding unit with a declared
     /// interface — depth metrics need the interface.
     pub exports: Vec<Box<str>>,
+    /// Names of units this file declares as reachable through a RECEIVER
+    /// it takes as its first parameter — a C# extension method. Nothing
+    /// names the declaring class at the call site, so the member name is
+    /// the only statement about where the call lands.
+    pub receiver_units: Vec<Box<str>>,
     /// Every distinct identifier this file mentions, definitions and
     /// member names included. An export's consumers cannot be found from
     /// import lists alone: Go and C never import names, and Rust and

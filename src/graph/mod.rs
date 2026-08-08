@@ -28,6 +28,9 @@ pub struct GraphFacts {
     pub imports: Vec<crate::facts::ImportFact>,
     /// Names of the module's declared surface (public units and types).
     pub exports: Vec<Box<str>>,
+    /// Members reached through a receiver rather than through a type
+    /// name. See `FileFacts::receiver_units`.
+    pub receiver_units: Vec<Box<str>>,
     /// Named-node mass — the volume a module hides behind its surface.
     pub mass: u32,
     /// Ousterhout surface cost: Σ over exported units of
@@ -98,7 +101,7 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
             // A mention states no dependency, so it reaches the graph
             // without reaching the tally.
             let target = match imp.reach {
-                crate::lang::Reach::Mention => class.module(),
+                crate::lang::Reach::Mention | crate::lang::Reach::Member => class.module(),
                 _ => r.count(class),
             };
             extra.extend(named.map(Some));
@@ -184,6 +187,10 @@ struct Index {
     /// (3843 tsx specifiers name one) and a SwiftPM target whose
     /// `path:` moves it off the Sources/<name> convention.
     workspaces: HashMap<Box<str>, PathBuf>,
+    /// Member name -> the files declaring it as an extension method.
+    /// Separate from `declared` so a call on a value can never land on a
+    /// TYPE of the same name. See `Reach::Member`.
+    members: HashMap<Box<str>, Vec<usize>>,
     /// Each file's language. A module name binds a file of the language
     /// that named it: the OCaml corpus ships util.h, config.h and
     /// sha256.c beside OCaml modules of the same stem.
@@ -219,6 +226,7 @@ impl Index {
                 m
             },
             declared: declaring_files(files),
+            members: receiver_members(files),
         };
         for (i, f) in files.iter().enumerate() {
             idx.paths.entry(f.path.clone()).or_insert(i);
@@ -261,6 +269,12 @@ impl Index {
     }
 
     fn classify(&self, i: usize, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Class {
+        // A member name is not a module specifier: `named_modules` has
+        // already asked the only index that can answer for one, and the
+        // component matcher would read `ToString` as a path.
+        if imp.reach == crate::lang::Reach::Member {
+            return Class::External;
+        }
         match self.by_language(i, from, imp) {
             Some(class) => class,
             // Everything else resolves the same way: split the target on
@@ -994,13 +1008,71 @@ impl Index {
             }
             Lang::Lua | Lang::Ruby | Lang::Python => self.glob_modules(from, imp),
             Lang::C | Lang::Cpp | Lang::Cuda => self.nearest_includes(from, &imp.target),
-            _ if imp.reach == crate::lang::Reach::Mention => self
-                .declared
-                .get(&(from.lang, imp.target.clone()))
-                .cloned()
-                .unwrap_or_default(),
+            // A member name answers from the extension-method index
+            // alone; see `Reach::Member`.
+            // A member name answers from the extension-method index
+            // alone; see `Reach::Member`. Deliberately WITHOUT the
+            // proximity tie-break `nearest_declarers` makes for a type:
+            // C# spreads one extension method's overloads across sibling
+            // files and each calls the others, so the calling file is
+            // its own nearest declarer and the real edge would go with
+            // the self-edge. `CircuitBreakerTResultSyntax.cs:28` calls
+            // the `CircuitBreaker` that `CircuitBreakerSyntax.cs:26`
+            // declares while declaring a `CircuitBreaker<TResult>` of
+            // its own. Measured: the tie-break here costs 63 C# edges
+            // and buys 0 orphans in any of the 22 corpora.
+            _ if imp.reach == crate::lang::Reach::Member => {
+                self.members.get(&imp.target).cloned().unwrap_or_default()
+            }
+            _ if imp.reach == crate::lang::Reach::Mention => {
+                let hits = self
+                    .declared
+                    .get(&(from.lang, imp.target.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+                self.nearest_declarers(from, hits)
+            }
             _ => Vec::new(),
         }
+    }
+
+    /// Of the files declaring one name, the ones NEAREST the file that
+    /// wrote it — the tie-break `nearest_includes` already makes for a
+    /// C header, for the same reason.
+    ///
+    /// A C# type reference is scoped to an ASSEMBLY, and a scan of the
+    /// gold corpus is six unrelated assemblies in one directory. Ten of
+    /// its non-test file stems are declared in more than one repository
+    /// — `Extensions` in AutoMapper, Dapper, FluentValidation and
+    /// Newtonsoft.Json, `Program`, `TypeExtensions`,
+    /// `ServiceCollectionExtensions` and four of the .NET polyfill
+    /// attributes — and with no tie-break the bare word edged to all of
+    /// them. That is 558 of 7823 C# edges, 7.1%, every one naming a
+    /// project the referencing file cannot even link against.
+    ///
+    /// Three files stop being reachable when the fabricated edges go,
+    /// and two are then reached TRULY by rules in the same commit:
+    /// Dapper's `Extensions.cs` through the generic `CastResult<...>()`
+    /// that `called_member` now unwraps, and Newtonsoft's
+    /// `VersionConverter.cs` once a test's own nested copy stops
+    /// answering. The third is a real finding: Polly's
+    /// `DynamicallyAccessedMembersAttribute.cs` was held up entirely by
+    /// Newtonsoft.Json, because Polly writes all seven of its own
+    /// `[DynamicallyAccessedMembers]` uses on a TYPE PARAMETER and
+    /// `sealed()` does not enter a `type_parameter_list`.
+    fn nearest_declarers(&self, from: &GraphFacts, hits: Vec<usize>) -> Vec<usize> {
+        if from.lang != Lang::CSharp || hits.len() < 2 {
+            return hits;
+        }
+        let mine = components(&from.path);
+        let near = |&i: &usize| shared(&mine, &self.file_comps[i]);
+        let Some(nearest) = hits.iter().map(near).max() else {
+            return hits;
+        };
+        hits.iter()
+            .filter(|i| near(i) == nearest)
+            .copied()
+            .collect()
     }
 
     /// The module of this name sitting beside `from`, if one does.
@@ -1138,12 +1210,67 @@ impl Index {
 fn declaring_files(files: &[GraphFacts]) -> HashMap<(Lang, Box<str>), Vec<usize>> {
     let mut out: HashMap<(Lang, Box<str>), Vec<usize>> = HashMap::new();
     let named = |f: &GraphFacts| matches!(f.lang, Lang::Rust | Lang::CSharp);
-    for (i, f) in files.iter().enumerate().filter(|(_, f)| named(f)) {
-        for sym in &f.exports {
+    // A TEST file's declaration must not answer for a production name,
+    // for the reason `dirs` already skips one: production code cannot
+    // depend on a test, so the edge lands on a file the production
+    // graph then drops and the real target keeps its zero. Polly
+    // declares `public static class Constants` in
+    // `test/Polly.Specs/Helpers` and `internal static class Constants`
+    // in `src/Polly.Core/Utils`.
+    //
+    // Load-bearing only once `nearest_declarers` is in: while every
+    // declarer answered, the production one answered too and the filter
+    // was worth nothing. With the proximity tie-break a test's copy can
+    // WIN — it is 12 orphans and 7276 C# edges with this filter and 13
+    // and 7265 without.
+    for (i, f) in files
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| named(f) && !f.is_test)
+    {
+        let stem = csharp_stem(f).filter(|s| !f.exports.contains(s));
+        for sym in f.exports.iter().chain(stem.iter()) {
             out.entry((f.lang, sym.clone())).or_default().push(i);
         }
     }
     out
+}
+
+/// Which files declare each extension method, so a call written on a
+/// VALUE can find them. A test's declaration is skipped for the reason
+/// `declaring_files` skips one.
+fn receiver_members(files: &[GraphFacts]) -> HashMap<Box<str>, Vec<usize>> {
+    let mut out: HashMap<Box<str>, Vec<usize>> = HashMap::new();
+    for (i, f) in files.iter().enumerate().filter(|(_, f)| !f.is_test) {
+        for name in &f.receiver_units {
+            out.entry(name.clone()).or_default().push(i);
+        }
+    }
+    out
+}
+
+/// The type a C# file's NAME declares, which its exports need not.
+///
+/// `internal` is assembly-wide, so an internal type is referenced from
+/// other files exactly as a public one is — and `exports` holds the
+/// public surface, by design, so nothing in the index answered for
+/// `Polly.Utils.Constants` or `Newtonsoft.Json.Utilities.
+/// DynamicallyAccessedMemberTypes`. The file name is the statement that
+/// survives the accessibility modifier, and it is the rule the pack's
+/// own resolver docstring states: 907 of the gold corpus's 962
+/// production C# files are named after the type they declare.
+///
+/// The FIRST dot-segment, because that is where a `partial` type's
+/// continuation files put it: `JsonReader.Async.cs` continues
+/// `JsonReader`, and its class header carries a `#if` in the base-list
+/// position that costs the declaration its name in the parse.
+fn csharp_stem(f: &GraphFacts) -> Option<Box<str>> {
+    if f.lang != Lang::CSharp {
+        return None;
+    }
+    let name = f.path.file_name()?.to_str()?;
+    let stem = name.split('.').next()?;
+    stem.starts_with(char::is_uppercase).then(|| stem.into())
 }
 
 /// Leading components two files share — how near one is to the other.
@@ -1388,6 +1515,7 @@ pub(super) fn fixture(lang: Lang, path: &str, imports: &[&str]) -> GraphFacts {
             })
             .collect(),
         exports: Vec::new(),
+        receiver_units: Vec::new(),
         mass: 0,
         surface_cost: 0,
     }
@@ -1859,6 +1987,125 @@ mod tests {
         // keeps counting modules from outside rather than every type
         // name the compiler found somewhere else.
         assert_eq!((res.internal, res.external, res.unresolved), (0, 1, 0));
+    }
+
+    #[test]
+    fn an_extension_method_is_reached_through_the_value_it_is_called_on() {
+        // `policyBuilder.CircuitBreaker(n, t)` names no type at all: the
+        // declaring class is spelled nowhere in the call, and the member
+        // is the only handle on the file. 40 of gold C#'s 86 orphans
+        // declare nothing but extension methods, all eight of Polly's
+        // `*Syntax.cs` among them.
+        //
+        // It answers from its OWN index, so a call on a value can never
+        // land on a type of the same name, and a test's declaration is
+        // skipped for the reason `declaring_files` skips one.
+        use crate::facts::ImportFact;
+        use crate::lang::Reach;
+        let imp = |target: &str, reach| ImportFact {
+            target: target.into(),
+            names: Vec::new(),
+            reach,
+        };
+        let mut caller = file(Lang::CSharp, "src/Polly/Retry.cs", &[]);
+        caller.imports = vec![
+            imp("CircuitBreaker", Reach::Member),
+            imp("ToString", Reach::Member),
+            imp("IgnoreAttribute", Reach::Mention),
+        ];
+        let mut syntax = file(Lang::CSharp, "src/Polly/CircuitBreakerSyntax.cs", &[]);
+        syntax.receiver_units = vec!["CircuitBreaker".into()];
+        // A namesake TYPE is not what a member call reaches.
+        let mut namesake = file(Lang::CSharp, "src/Polly/CircuitBreaker.cs", &[]);
+        namesake.exports = vec!["CircuitBreaker".into()];
+        // `[Ignore]` is the short form the compiler completes.
+        let mut attr = file(Lang::CSharp, "src/Polly/IgnoreAttribute.cs", &[]);
+        attr.exports = vec!["IgnoreAttribute".into()];
+        let files = [caller, syntax, namesake, attr];
+        let (_, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert!(targets[0].contains(&Some(idx("CircuitBreakerSyntax.cs"))));
+        assert!(
+            !targets[0].contains(&Some(idx("CircuitBreaker.cs"))),
+            "a member call must not land on a type of the same name"
+        );
+        assert!(targets[0].contains(&Some(idx("IgnoreAttribute.cs"))));
+        // A member nothing declares as an extension resolves to nothing
+        // rather than to a path that happens to end that way.
+        assert_eq!(targets[0].iter().filter(|t| t.is_some()).count(), 2);
+    }
+
+    #[test]
+    fn a_csharp_file_name_declares_a_type_and_the_nearest_assembly_answers() {
+        // `internal` is assembly-wide, so an internal type is referenced
+        // by name exactly as a public one is — and `exports` is the
+        // PUBLIC surface by design, so nothing answered for
+        // `Polly.Utils.Constants` or `Newtonsoft.Json.Utilities.
+        // DynamicallyAccessedMemberTypes`. The file NAME is the
+        // statement that survives the accessibility modifier: 907 of the
+        // gold corpus's 962 production C# files carry the name of the
+        // type they declare.
+        //
+        // A scan is several assemblies, and 13 of the corpus's stems are
+        // declared in more than one repository — `Extensions` in
+        // AutoMapper, Dapper, FluentValidation and Newtonsoft.Json alike.
+        // With no tie-break the bare word edged to all four, 661 of 7823
+        // C# edges naming a project the caller cannot link against.
+        use crate::facts::ImportFact;
+        use crate::lang::Reach;
+        let mention = |target: &str| ImportFact {
+            target: target.into(),
+            names: Vec::new(),
+            reach: Reach::Mention,
+        };
+        let mut caller = file(Lang::CSharp, "Dapper/src/SqlMapper.cs", &[]);
+        caller.imports = vec![mention("JsonReader"), mention("Extensions")];
+        // `JsonReader.Async.cs` continues `public abstract partial class
+        // JsonReader` and carries a `#if` in the base-list position that
+        // costs the declaration its name in the parse. Only the FIRST
+        // dot-segment answers: no path component spells `JsonReader`,
+        // because the basename is `JsonReader.Async`, so the component
+        // matcher cannot reach it and 49 production files mention it.
+        let partial = file(Lang::CSharp, "Dapper/src/JsonReader.Async.cs", &[]);
+        // Neither declarer states its name in `exports`: one is
+        // `internal`, the other a `partial` continuation.
+        let near = file(Lang::CSharp, "Dapper/src/Extensions.cs", &[]);
+        let far = file(Lang::CSharp, "AutoMapper/src/Extensions.cs", &[]);
+        // And a TEST's declaration must not answer even when it IS the
+        // nearest: Newtonsoft declares `VersionConverter` once in
+        // `Src/Newtonsoft.Json/Converters/` and once, nested in a
+        // documentation sample, under `Src/Newtonsoft.Json.Tests/`.
+        // `VersionConverterTests.cs` sits beside the second, so the
+        // proximity tie-break hands it the sample and the production
+        // converter keeps its zero — 12 orphans with this filter and 13
+        // without.
+        let mut suite = file(
+            Lang::CSharp,
+            "Json/Tests/Converters/VersionConverterTests.cs",
+            &[],
+        );
+        suite.is_test = true;
+        suite.imports = vec![mention("VersionConverter")];
+        let mut sample = file(Lang::CSharp, "Json/Tests/Samples/CustomConverter.cs", &[]);
+        sample.is_test = true;
+        sample.exports = vec!["VersionConverter".into()];
+        let prod = file(Lang::CSharp, "Json/Src/Converters/VersionConverter.cs", &[]);
+        let files = [caller, partial, near, far, suite, sample, prod];
+        let (_, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        let hit = |row: usize, p: &str| targets[row].contains(&Some(idx(p)));
+        assert!(hit(0, "Dapper/src/JsonReader.Async.cs"));
+        assert!(hit(0, "Dapper/src/Extensions.cs"));
+        assert!(
+            !hit(0, "AutoMapper/src/Extensions.cs"),
+            "an assembly the caller cannot link against"
+        );
+        let tests = idx("Json/Tests/Converters/VersionConverterTests.cs");
+        assert!(hit(tests, "Json/Src/Converters/VersionConverter.cs"));
+        assert!(
+            !hit(tests, "Json/Tests/Samples/CustomConverter.cs"),
+            "a test's declaration must not answer for a name"
+        );
     }
 
     #[test]
