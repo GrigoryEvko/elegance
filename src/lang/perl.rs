@@ -58,6 +58,12 @@ const KINDS: &[(&str, Sem)] = &[
     ("pod", Sem::Comment),
     ("use_statement", Sem::Import),
     ("require_expression", Sem::Import),
+    // The file itself is asked once, for the namespaces its strings
+    // name. Asked of the FILE rather than of each string so a namespace
+    // name stays a StrLit for the secret, repetition and clone checks —
+    // promoting the string would cost it whatever the table said it
+    // was. See `namespaces`.
+    ("source_file", Sem::Import),
     ("identifier", Sem::Ident),
     ("varname", Sem::Ident),
     ("scalar", Sem::Ident),
@@ -235,8 +241,80 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
     match node.kind() {
         "require_expression" => require_target(node, src),
         "use_statement" => use_targets(node, src),
+        "source_file" => namespaces(node, src),
         _ => composed(node, src),
     }
+}
+
+/// A namespace a STRING names, and the modules underneath it.
+///
+/// Perl's fifth way of stating a dependency, and the one no `use` line
+/// records: a namespace is handed to a loader as data and the leaf is
+/// decided at run time. Plack/lib/Plack/Builder.pm:20 and :31 write
+/// `Plack::Util::load_class($mw, 'Plack::Middleware')`, Runner.pm:194
+/// and :222 the same with `'Plack::Loader'`, and Loader.pm:41 with
+/// `'Plack::Handler'` — Util.pm:401 documents the two-argument form as
+/// `load_class($class [, $prefix ])`. Test.pm:14 writes
+/// `my $subclass = "Plack::Test::$Impl";`, where the literal head IS
+/// the namespace and the leaf is a variable. mojo's Plugins.pm:7 says
+/// `has namespaces => sub { ['Mojolicious::Plugin'] };` and Dancer2's
+/// CLI.pm:10 `subcommand gen => 'Dancer2::CLI::Gen'`. Structurally the
+/// same claim kong's `namespace = "kong.db.migrations.core"` makes.
+///
+/// 25 orphans across Plack, mojo, PPI and Dancer2 are a module under
+/// one of the 491 namespaces this finds.
+///
+/// `use` and `require` subtrees are skipped: they name their module
+/// directly and are read at the declaration, and reading the same name
+/// again here would double every one of them.
+fn namespaces(root: Node, src: &[u8]) -> Vec<super::ImportInfo> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if matches!(node.kind(), "use_statement" | "require_expression") {
+            continue;
+        }
+        if node.kind() == "string_content" {
+            let fresh = named_namespace(node, src)
+                .into_iter()
+                .filter(|t| seen.insert(t.clone()));
+            out.extend(fresh.map(|target| super::ImportInfo {
+                target: target.into(),
+                names: Vec::new(),
+                reach: super::Reach::Mention,
+            }));
+            continue;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+    }
+    out
+}
+
+/// The namespace a string OPENS with, and the glob under it.
+///
+/// The string must open with the name — one in the middle of a sentence
+/// is prose — and carry two or more `::`-joined segments, so a single
+/// bareword-shaped word cannot fire.
+///
+/// The exact name is stated only when the literal IS the whole string.
+/// `"Plack::Test::$Impl"` interpolates its leaf, so it names the
+/// namespace and no module called `Plack::Test`.
+fn named_namespace(node: Node, src: &[u8]) -> Vec<String> {
+    let text = node.utf8_text(src).unwrap_or("");
+    let namey = |c: &char| c.is_ascii_alphanumeric() || *c == '_' || *c == ':';
+    let head: String = text.chars().take_while(namey).collect();
+    let segs: Vec<&str> = head.split("::").filter(|s| !s.is_empty()).collect();
+    if segs.len() < 2 {
+        return Vec::new();
+    }
+    let name = segs.join("::");
+    let whole = head == text && node.parent().is_some_and(|p| p.named_child_count() == 1);
+    [format!("{name}::*")]
+        .into_iter()
+        .chain(whole.then_some(name))
+        .collect()
 }
 
 /// A module name is the only thing `use` and `require` can reach that a
@@ -614,6 +692,34 @@ mod tests {
         ] {
             assert!(got.iter().any(|t| t == want), "{want} missing from {got:?}");
         }
+    }
+
+    #[test]
+    fn a_namespace_a_string_names_reaches_the_modules_under_it() {
+        // Plack/lib/Plack/Builder.pm:20 hands 'Plack::Middleware' to a
+        // loader and the leaf is decided at run time; Test.pm:14 builds
+        // "Plack::Test::$Impl" the same way with the leaf interpolated.
+        let got = targets(
+            "my $c = Plack::Util::load_class($mw, 'Plack::Middleware');\n\
+             my $subclass = \"Plack::Test::$Impl\";\n\
+             use parent qw( App::Base );\n\
+             warn 'failed to load Plack::Middleware here';\n\
+             my $one = 'Bareword';\n",
+        );
+        // The namespace, and everything under it.
+        assert!(got.iter().any(|t| t == "Plack::Middleware"), "{got:?}");
+        assert!(got.iter().any(|t| t == "Plack::Middleware::*"), "{got:?}");
+        // An interpolated leaf names no module called Plack::Test, so
+        // only the glob is stated.
+        assert!(got.iter().any(|t| t == "Plack::Test::*"), "{got:?}");
+        assert!(!got.iter().any(|t| t == "Plack::Test"), "{got:?}");
+        // A `use` names its module at the declaration; reading the
+        // string again here would double every one in the file.
+        let named = got.iter().filter(|t| *t == "App::Base").count();
+        assert_eq!(named, 1, "{got:?}");
+        // The string must OPEN with the name and carry two segments.
+        assert!(!got.iter().any(|t| t.starts_with("failed")), "{got:?}");
+        assert!(!got.iter().any(|t| t.starts_with("Bareword")), "{got:?}");
     }
 
     #[test]

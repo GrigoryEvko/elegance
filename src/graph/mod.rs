@@ -81,6 +81,11 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
     let index = Index::build(files);
     let mut r = Resolution::default();
     let mut targets = Vec::with_capacity(files.len());
+    // Namespace glob -> the first file that named it. See
+    // `once_per_namespace`. Ordered so the second pass is deterministic
+    // whichever way two namespaces share an owner.
+    let mut claimed: std::collections::BTreeMap<&str, (usize, &crate::facts::ImportFact)> =
+        std::collections::BTreeMap::new();
     for (i, f) in files.iter().enumerate() {
         let mut row: Vec<Option<usize>> = Vec::with_capacity(f.imports.len());
         // A require assembled at run time still states the DIRECTORY it
@@ -91,6 +96,11 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
         // without disturbing the alignment.
         let mut extra: Vec<Option<usize>> = Vec::new();
         for imp in &f.imports {
+            if once_per_namespace(f, imp) {
+                claim(&mut claimed, files, i, imp);
+                row.push(None);
+                continue;
+            }
             let mut named = index.named_modules(f, imp).into_iter();
             // A prefix that names modules of this project is not a
             // third-party dependency, whatever the rest of its name
@@ -111,7 +121,53 @@ pub fn resolve_imports(files: &[GraphFacts]) -> (Resolution, Vec<Vec<Option<usiz
         row.extend(extra);
         targets.push(row);
     }
+    for (_, (owner, imp)) in claimed {
+        let hits = index.glob_modules(&files[owner], imp);
+        targets[owner].extend(hits.into_iter().map(Some));
+    }
     (r, targets)
+}
+
+/// A namespace glob is ONE claim about the corpus, filed once.
+///
+/// `Plack::Middleware` is loaded by name, so the modules under it are
+/// reached — but that is a fact about the namespace, not a fact about
+/// each file that happens to write the string. Emitting it once per
+/// mentioning file gave `PPI::Token` 750 edges out of 30 unrelated
+/// files, none of which depends on all 25 of its modules; it takes the
+/// perl corpus to 2438 edges where filing the claim once takes it to
+/// 1356. Measured both ways over all 22 corpora: the orphan count is
+/// IDENTICAL, because orphanhood needs one incoming edge and no more,
+/// so the other 1082 edges buy nothing and are pure fabrication.
+///
+/// The owner is the first mentioning file in path order. Any one of
+/// them would do — they are all loaders, and Plack's are literally
+/// `Builder.pm`, `Runner.pm` and `Loader.pm` — but the choice must not
+/// depend on the order the tree was walked in, or the report would not
+/// reproduce.
+///
+/// Deliberately NOT the namespace's own root module, which reads
+/// better and is false: `Plack/Middleware.pm` is the BASE CLASS its
+/// subclasses inherit from, and it loads none of them. Filing the
+/// claim there manufactures a cycle per subclass — measured, cycle
+/// mass +22.4pp against +14.8pp for the loader.
+fn claim<'a>(
+    claimed: &mut std::collections::BTreeMap<&'a str, (usize, &'a crate::facts::ImportFact)>,
+    files: &[GraphFacts],
+    i: usize,
+    imp: &'a crate::facts::ImportFact,
+) {
+    let nearer = |&(owner, _): &(usize, _)| files[i].path < files[owner].path;
+    match claimed.get(&*imp.target) {
+        Some(held) if !nearer(held) => {}
+        _ => {
+            claimed.insert(&imp.target, (i, imp));
+        }
+    }
+}
+
+fn once_per_namespace(f: &GraphFacts, imp: &crate::facts::ImportFact) -> bool {
+    f.lang == Lang::Perl && imp.reach == crate::lang::Reach::Mention && imp.target.ends_with("::*")
 }
 
 /// Deduplicated internal edges (importer, target), self-edges dropped.
@@ -1383,7 +1439,7 @@ impl Index {
             Lang::Lua if imp.reach == crate::lang::Reach::Mention && !imp.target.contains('*') => {
                 self.listed(from, &imp.target)
             }
-            Lang::Lua | Lang::Ruby | Lang::Python => self.glob_modules(from, imp),
+            Lang::Lua | Lang::Ruby | Lang::Python | Lang::Perl => self.glob_modules(from, imp),
             // A name Elixir builds at run time; everything else this
             // language names resolves through `elixir` above.
             Lang::Elixir => self.glob_modules(from, imp),
@@ -1506,7 +1562,7 @@ impl Index {
     fn glob_modules(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Vec<usize> {
         if !matches!(
             from.lang,
-            Lang::Lua | Lang::Ruby | Lang::Python | Lang::Elixir
+            Lang::Lua | Lang::Ruby | Lang::Python | Lang::Elixir | Lang::Perl
         ) {
             return Vec::new();
         }
@@ -2455,6 +2511,43 @@ mod tests {
         // Two includes, two dependencies: the extra arch rides past the
         // row without being tallied twice.
         assert_eq!((res.internal, res.external, res.unresolved), (2, 0, 0));
+    }
+
+    #[test]
+    fn a_perl_namespace_reaches_its_modules_and_says_so_once() {
+        // Plack's Builder.pm, Runner.pm and Loader.pm all hand
+        // 'Plack::Middleware' to the same loader. The namespace is
+        // reached; each of the three does not separately depend on
+        // every middleware under it.
+        use crate::facts::ImportFact;
+        use crate::lang::Reach;
+        let glob = |p: &str| {
+            let mut f = file(Lang::Perl, p, &[]);
+            f.imports = vec![ImportFact {
+                target: "Plack::Middleware::*".into(),
+                names: Vec::new(),
+                reach: Reach::Mention,
+            }];
+            f
+        };
+        let files = [
+            glob("lib/Plack/Runner.pm"),
+            glob("lib/Plack/Builder.pm"),
+            file(Lang::Perl, "lib/Plack/Middleware/JSONP.pm", &[]),
+            file(Lang::Perl, "lib/Plack/Middleware/Runtime.pm", &[]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        let hits = |row: &Vec<Option<usize>>| row.iter().flatten().count();
+        let total: usize = targets.iter().map(hits).sum();
+        assert_eq!(total, 2, "both middlewares, once each");
+        // Path order decides the owner, so the result does not depend
+        // on the order the tree was walked in.
+        let owner = files.iter().position(|f| f.path.ends_with("Builder.pm"));
+        let filed = hits(&targets[owner.expect("Builder.pm present")]);
+        assert_eq!(filed, 2, "the claim is filed against Builder.pm");
+        // A mention states no dependency, so none of it reaches the
+        // tally.
+        assert_eq!((res.internal, res.external, res.unresolved), (0, 0, 0));
     }
 
     #[cfg(test)]
