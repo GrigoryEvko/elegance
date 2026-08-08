@@ -1050,6 +1050,33 @@ fn entryish(path: &Path) -> bool {
         || manifest_entry(path)
         || tool_driver(path)
         || built_by_name(path, name)
+        || ci_container(path)
+}
+
+/// A build DESCRIPTION is not a module.
+///
+/// `ci.rs` reads the shell out of a Dockerfile's `RUN` lines and a
+/// workflow's `run:` blocks so that the commands in them are measured,
+/// which is right and is the whole point of that module. But the file
+/// holding them then entered the module graph as a Shell file and was
+/// asked who imports it, and no language has syntax that can name a
+/// Dockerfile or a workflow YAML — the question has one answer by
+/// construction, whatever the repository does.
+///
+/// 24 of the gold corpus's orphans are one, and they are 24 of Shell's
+/// 52: netty's ENTIRE shell population is five `Dockerfile.*`. The tell
+/// that the question was wrong is that `built_by_name` had to rescue
+/// curl's Dockerfile by finding it named in a Makefile.
+///
+/// Only the two build descriptions. A `.vue` component is imported like
+/// any module, and a notebook is a document that RUNS — the same claim,
+/// but a different one, and its six instances in gold sit in `docs/` and
+/// `testWorkspace` trees that other rules answer for.
+fn ci_container(path: &Path) -> bool {
+    matches!(
+        crate::ci::Container::of(path),
+        Some(crate::ci::Container::Workflow | crate::ci::Container::Dockerfile)
+    )
 }
 
 /// A header whose only caller is outside this repository, because the
@@ -2914,6 +2941,25 @@ mod tests {
         std::fs::remove_file(dir.join("build.properties")).unwrap();
         assert!(!runs_once(&dir.join("BuildHelper.scala")));
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn a_build_description_is_not_a_module_and_is_never_asked_who_imports_it() {
+        // netty's whole shell population is five `Dockerfile.*`, and
+        // mojo's is five `.github/workflows/*.yml`. Nothing in any
+        // language can name either, so the orphan question has one
+        // answer by construction.
+        assert!(entryish(Path::new("netty/docker/Dockerfile.centos6")));
+        assert!(entryish(Path::new("curl/Dockerfile")));
+        assert!(entryish(Path::new("mojo/.github/workflows/linux.yml")));
+        // A workflow is only one inside `.github/workflows`; an
+        // ordinary YAML elsewhere states nothing about being an entry.
+        assert!(!ci_container(Path::new("kong/kong.yml")));
+        // A component IS imported, and a notebook is a separate claim.
+        assert!(!ci_container(Path::new("app/src/Widget.vue")));
+        assert!(!ci_container(Path::new(
+            "docs/externals/00_basic_gemm.ipynb"
+        )));
     }
 
     #[test]
