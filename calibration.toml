@@ -52,7 +52,7 @@
 "returns" = { hi = 2.0 }
 "magic strings" = { hi = 2.0 }
 "cohesion" = { hi = 5.0 }
-# 178 runs is under the 200 a percentile needs: borrowed from rs's pooled doc p99
+# 179 runs is under the 200 a percentile needs: borrowed from rs's pooled doc p99
 "module doc" = { hi = 322.0 }
 "type doc" = { hi = 322.0 }
 "fn doc" = { hi = 258.0 }
@@ -345,8 +345,8 @@
 "loop depth" = { hi = 1.0 }
 "interface width" = { hi = 26.0 }
 # 15 runs is under the 200 a percentile needs: borrowed from cs's pooled doc p99
-"module doc" = { hi = 209.0 }
-"type doc" = { hi = 95.0 }
+"module doc" = { hi = 210.0 }
+"type doc" = { hi = 96.0 }
 "fn doc" = { hi = 315.0 }
 "field doc" = { hi = 78.0 }
 "inline doc" = { hi = 168.0 }
