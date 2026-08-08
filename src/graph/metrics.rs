@@ -1365,14 +1365,24 @@ fn package_private(f: &GraphFacts) -> bool {
     f.lang == crate::lang::Lang::Java && f.exports.is_empty()
 }
 
-/// A LuaCATS declaration file: `---@meta` on line one marks a file as
-/// TYPES for a runtime, never loaded as code.
+/// A LuaCATS declaration file: `---@meta` marks a file as TYPES for a
+/// runtime, never loaded as code.
 ///
 /// The same argument `is_sink` already makes for a `.d.ts`, and the
-/// marker is the language server's own. 36 files carry it, 35 of them
-/// Lua, and 19 read as orphans -- lua-language-server's
-/// `meta/template/*.lua`, which are declarations for `debug`, `ffi` and
-/// the rest of the standard library.
+/// marker is the language server's own. 50 files in gold carry it, 48
+/// of them Lua -- lua-language-server's `meta/template/*.lua`, which
+/// are declarations for `debug`, `ffi` and the rest of the standard
+/// library.
+///
+/// The marker opens a COMMENT RUN rather than the file. `ffi.lua` line
+/// one is `---#if not JIT then DISABLE() end` and `---@meta ffi` is
+/// line two; `bit.lua`, `bit32.lua`, `jit*.lua`, `utf8.lua`,
+/// `table.new/clear.lua` and `string.buffer.lua` are written the same
+/// way, and reading line one alone missed all ten: 30 Lua files in gold
+/// open a comment run holding the marker and only 20 of them open the
+/// FILE with it. Only that leading run is scanned, so a `---@meta`
+/// written below a line of code is that line's neighbour and not a
+/// claim about the file.
 fn declares_types_only(f: &GraphFacts) -> bool {
     use crate::lang::Lang;
     if f.lang != Lang::Lua {
@@ -1380,8 +1390,9 @@ fn declares_types_only(f: &GraphFacts) -> bool {
     }
     std::fs::read_to_string(&f.path).is_ok_and(|text| {
         text.lines()
-            .next()
-            .is_some_and(|l| l.starts_with("---@meta"))
+            .map(str::trim)
+            .take_while(|l| l.is_empty() || l.starts_with("--"))
+            .any(|l| l.starts_with("---@meta"))
     })
 }
 
@@ -1641,6 +1652,40 @@ mod tests {
     /// detection stays out of the way of the structural assertions.
     fn seen(names: &[&str]) -> Mentions {
         names.iter().map(|n| ((*n).into(), 2)).collect()
+    }
+
+    #[test]
+    fn a_meta_marker_may_open_a_comment_run_rather_than_the_file() {
+        // lua-language-server/meta/template/ffi.lua line one is
+        // `---#if not JIT then DISABLE() end` and `---@meta ffi` is
+        // line two; bit.lua, jit*.lua, utf8.lua, table.new/clear.lua
+        // and string.buffer.lua are written the same way, and reading
+        // line one alone missed all ten.
+        let dir = std::env::temp_dir().join("elegance-lua-meta");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let stub = "---#if not JIT then DISABLE() end\n---@meta ffi\n\nlocal ffi = {}\n";
+        std::fs::write(dir.join("ffi.lua"), stub).unwrap();
+        // A marker below the first line of CODE is a neighbour of that
+        // code, not a claim about the file.
+        std::fs::write(
+            dir.join("mid.lua"),
+            "local x = 1\n---@meta something\nreturn x\n",
+        )
+        .unwrap();
+        let facts = |name: &str| GraphFacts {
+            path: dir.join(name),
+            lang: crate::lang::Lang::Lua,
+            is_test: false,
+            imports: Vec::new(),
+            exports: Vec::new(),
+            receiver_units: Vec::new(),
+            mass: 0,
+            surface_cost: 0,
+        };
+        assert!(declares_types_only(&facts("ffi.lua")));
+        assert!(!declares_types_only(&facts("mid.lua")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

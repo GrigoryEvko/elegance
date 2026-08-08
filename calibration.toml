@@ -223,7 +223,7 @@
 "fn doc" = { hi = 151.0 }
 # 0 runs is under the 200 a percentile needs: borrowed from lua's pooled doc p99
 "field doc" = { hi = 118.0 }
-"inline doc" = { hi = 79.0 }
+"inline doc" = { hi = 80.0 }
 "asserts" = { rate = 0.08 }
 "public docs" = { rate = 0.19 }
 

@@ -204,6 +204,28 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
             })
             .collect();
     }
+    // An argument list is an unmapped kind, so reading one costs the
+    // call around it nothing: `fmt` goes on being a call and `dofile`
+    // goes on being spooky.
+    if node.kind() == "arguments" {
+        return templated(node, src)
+            .map(|t| super::ImportInfo {
+                target: t.into(),
+                names: Vec::new(),
+                reach: super::Reach::Mention,
+            })
+            .or_else(|| {
+                loaded_file(node, src).map(|t| super::ImportInfo {
+                    target: t.into(),
+                    // A path from the calling script, which is what a
+                    // miss has to be measured against.
+                    reach: super::Reach::Project,
+                    names: Vec::new(),
+                })
+            })
+            .into_iter()
+            .collect();
+    }
     let built = node.kind() == "binary_expression";
     let target = match built {
         true => concatenated(node, src),
@@ -300,19 +322,116 @@ fn first_string(call: Node, src: &[u8]) -> Option<String> {
 /// the 39 its plugins ship read as depended on by nothing. A registry
 /// is a LIST, and asking for two is what separates one from a lone
 /// string that happens to share a sibling's name.
+/// A field's VALUE is its last named child, whatever precedes it.
+/// Reading the first instead read `["migrations"] = "..."` as the name
+/// `migrations` and `name = "core"` as the name `name`, so the whole
+/// keyed half of the corpus's registries said nothing:
+/// `kong/db/migrations/subsystems.lua` returns
+/// `{ name = "core", namespace = "kong.db.migrations.core" }` and
+/// `db/migrations/state.lua:98` does `require(ss.namespace)`.
+///
+/// A dot is allowed for the same reason. `luarocks/src/bin/luarocks`
+/// maps its 22 commands to `luarocks.cmd.<name>` and `cmd.lua:570`
+/// loads each with `pcall(require, module)`; `kong/pdk/init.lua:193`
+/// lists `service.request` for the `require("kong.pdk." .. module_name)`
+/// on line 263. Where a dotted name reaches nothing it states nothing,
+/// which is the same bargain the bare form already made.
 fn listed_names(table: Node, src: &[u8]) -> Vec<String> {
     let mut cursor = table.walk();
     let names: Vec<String> = table
         .named_children(&mut cursor)
         .filter(|f| f.kind() == "field")
-        .filter_map(|f| f.named_child(0).filter(|v| v.kind() == "string"))
+        .filter_map(|f| f.named_child(f.named_child_count().checked_sub(1)? as u32))
+        .filter(|v| v.kind() == "string")
         .map(|v| quoted(v, src).to_string())
-        .filter(|t| !t.is_empty() && !t.contains(['/', '.', ' ']))
+        .filter(|t| !t.is_empty() && !t.contains(['/', ' ']))
         .collect();
-    match names.len() >= 2 {
+    match names.len() >= 2 || is_the_module(table) {
         true => names,
         false => Vec::new(),
     }
+}
+
+/// Is this table the whole thing the chunk returns?
+///
+/// The two-entry threshold keeps a lone incidental string from claiming
+/// a sibling file, and a module's own export is where that risk is
+/// absent: `kong/plugins/ai-proxy/migrations/init.lua` is exactly
+/// `return { "001_360_to_370" }`, six more plugins ship the same
+/// one-line index, and `db/migrations/state.lua:107` builds
+/// `fmt("%s.%s", subsys.namespace, mig_name)` out of the names in it.
+fn is_the_module(table: Node) -> bool {
+    let Some(list) = table.parent().filter(|p| p.kind() == "expression_list") else {
+        return false;
+    };
+    list.named_child_count() == 1
+        && list
+            .parent()
+            .filter(|r| r.kind() == "return_statement")
+            .and_then(|r| r.parent())
+            .is_some_and(|c| c.kind() == "chunk")
+}
+
+/// The module name a format template builds, with `*` where the source
+/// stops being able to say — the same reading `..` already gets, for
+/// the spelling `string.format` gives it.
+///
+/// `kong/db/strategies/init.lua:24` is
+/// `require(fmt("kong.db.strategies.%s.connector", database))`, `:27`
+/// drops the leaf, and `:63` builds `"kong.db.strategies.%s.%s"` for
+/// the `load_module_if_exists` that `kong/tools/module.lua:18` defines
+/// as `xpcall(require, debug.traceback, module_name)`. Which function
+/// formats is deliberately not read: kong's is `fmt`, luarocks writes
+/// `("luarocks.fs.%s.tools"):format(...)`, and the template says the
+/// same thing either way.
+///
+/// The separator before the first hole is the whole filter. 67 strings
+/// in 30 files pass it, and the ones that are not module paths cost
+/// nothing: kong's URL patterns `"/%s"` and `"/%s/:%s"`
+/// (api/endpoints.lua:747,755) reduce to a leading star, which
+/// `glob_modules` refuses outright, and `"lambda.%s.amazonaws.com"`
+/// states a prefix no module answers to.
+fn templated(args: Node, src: &[u8]) -> Option<String> {
+    let call = args.parent()?;
+    // A literal template written straight into a `require` is already
+    // read as the target it states; reading it twice would say it twice.
+    if requires(call, src) {
+        return None;
+    }
+    let mut cursor = args.walk();
+    let text = quoted(
+        args.named_children(&mut cursor)
+            .find(|c| c.kind() == "string")?,
+        src,
+    );
+    let (before, _) = text.split_once("%s")?;
+    before
+        .ends_with(['.', '/'])
+        .then(|| text.replace("%s", "*"))
+}
+
+/// The file a `dofile` or `loadfile` names, relative to the script
+/// holding the call.
+///
+/// `c/lua/testes/all.lua` is 28 `dofile('...')` lines — `dofile('main.lua')`,
+/// `assert(dofile('attrib.lua') == 27)` — and is the only file naming
+/// any of them, so Lua's own test suite read as 29 files nothing
+/// referenced. The `.lua` requirement is what separates a module from
+/// the suite's other arguments to the same call: gold's literals also
+/// include `"nomenaoexistente"` and `"# a non-ending comment"`, which
+/// are inputs to an error path rather than files.
+fn loaded_file(args: Node, src: &[u8]) -> Option<String> {
+    let call = args.parent()?;
+    if !matches!(callee_text(call, src), Some("dofile" | "loadfile")) {
+        return None;
+    }
+    let mut cursor = args.walk();
+    let text = quoted(
+        args.named_children(&mut cursor)
+            .find(|c| c.kind() == "string")?,
+        src,
+    );
+    Some(text.strip_suffix(".lua")?.to_string())
 }
 
 /// The module name a concatenation builds, with `*` where the source
@@ -330,10 +449,16 @@ fn listed_names(table: Node, src: &[u8]) -> Vec<String> {
 fn concatenated(node: Node, src: &[u8]) -> Option<String> {
     // `..` is RIGHT-associative, so the two literals sit at the ends of
     // the two spines rather than as children of the outermost node.
-    let (prefix, suffix) = (
-        quoted(spine(node, "left"), src),
-        quoted(spine(node, "right"), src),
-    );
+    let head = spine(node, "left");
+    let bound;
+    let prefix = match head.kind() {
+        "identifier" => {
+            bound = file_scope_string(head, src)?;
+            bound.as_str()
+        }
+        _ => quoted(head, src),
+    };
+    let suffix = quoted(spine(node, "right"), src);
     if !prefix.ends_with(['.', '/']) {
         return None;
     }
@@ -341,6 +466,35 @@ fn concatenated(node: Node, src: &[u8]) -> Option<String> {
     // would stand for part of a name rather than a whole one.
     let tail = suffix.starts_with(['.', '/']).then_some(suffix);
     Some(format!("{prefix}*{}", tail.unwrap_or("")))
+}
+
+/// The string a file-scope `local` binds to this name.
+///
+/// `kong/observability/tracing/propagation/init.lua:16` writes
+/// `local INJECTORS_PATH = "kong.observability.tracing.propagation.injectors."`
+/// and `:148` writes `require(INJECTORS_PATH .. injector_m)`; the eight
+/// injectors it loads are named nowhere else. This is the narrow form
+/// of a rule that was already rejected in its broad shape — "a
+/// standalone string ending in a separator is a glob prefix" covered
+/// 218 files for the same 8 orphans — and narrowing it to a name a load
+/// actually concatenates leaves one call site in the whole corpus.
+fn file_scope_string(name: Node, src: &[u8]) -> Option<String> {
+    let wanted = name.utf8_text(src).ok()?;
+    let mut chunk = name;
+    while let Some(parent) = chunk.parent() {
+        chunk = parent;
+    }
+    let mut cursor = chunk.walk();
+    chunk
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() == "variable_declaration")
+        .filter_map(|d| d.named_child(0))
+        .find_map(|assign| {
+            let bound = assign.named_child(0)?.named_child(0)?;
+            let value = assign.named_child(1)?.named_child(0)?;
+            (bound.utf8_text(src).ok()? == wanted && value.kind() == "string")
+                .then(|| quoted(value, src).to_string())
+        })
 }
 
 /// The far end of a concatenation's spine — the outermost literal on
@@ -435,6 +589,22 @@ fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
     super::doc_run(node, &["comment"], &["---", "--[["], src)
 }
 
+/// The nodes this pack reads a module name out of that are not calls.
+///
+/// A table LISTING names is how Lua writes a registry, and the names
+/// are not otherwise said anywhere; an argument list holds a format
+/// template or a `dofile` path. Both kinds are unmapped, so promoting
+/// either costs nothing — the table's strings stay strings for the
+/// secret, repetition and clone checks, and `dofile` stays a call for
+/// the spooky one.
+fn states_a_module(node: Node, src: &[u8]) -> bool {
+    match node.kind() {
+        "table_constructor" => !listed_names(node, src).is_empty(),
+        "arguments" => templated(node, src).is_some() || loaded_file(node, src).is_some(),
+        _ => false,
+    }
+}
+
 /// Two normalizations. `elseif` is its own kind here rather than a
 /// nested if, so it needs no flattening — but `and`/`or` share the
 /// binary kind with every arithmetic operator, and only those two
@@ -454,13 +624,7 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
             Some("..") if concatenated(node, src).is_some() => Sem::Import,
             _ => Sem::None,
         },
-        // A table LISTING names is how Lua writes a registry, and the
-        // names are not otherwise said anywhere. Promoting the table
-        // rather than its strings leaves every literal to the checks
-        // that read literals.
-        Sem::None if node.kind() == "table_constructor" && !listed_names(node, src).is_empty() => {
-            Sem::Import
-        }
+        Sem::None if states_a_module(node, src) => Sem::Import,
         // Lua's import is a CALL, and the core asks about imports at
         // `Sem::Import` nodes — so until this arm existed the pack's
         // `imports` hook was written, tested and never once asked, and
@@ -480,6 +644,97 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
 
 #[cfg(test)]
 mod tests {
+    use crate::lang::{Lang, Reach};
+
+    fn imports_of(src: &str) -> Vec<(String, Reach)> {
+        let pack = Lang::Lua.pack();
+        let f = crate::facts::extract(
+            pack,
+            &mut pack.make_parser(),
+            std::path::Path::new("kong/db/init.lua"),
+            src,
+        );
+        f.imports
+            .iter()
+            .map(|i| (i.target.to_string(), i.reach))
+            .collect()
+    }
+
+    #[test]
+    fn a_registry_reads_a_fields_value_and_keeps_its_dots() {
+        // kong/db/migrations/subsystems.lua returns exactly this, and
+        // db/migrations/state.lua:98 does `require(ss.namespace)`.
+        // Reading the field's FIRST child took the key `name`, and
+        // rejecting a dot dropped the namespace itself, so the whole
+        // keyed half of the corpus's registries said nothing.
+        let src = "return {\n  { name = \"core\", namespace = \"kong.db.migrations.core\" },\n  { name = \"acl\", namespace = \"kong.plugins.acl.migrations\" },\n}\n";
+        assert_eq!(
+            imports_of(src),
+            [
+                ("core".to_string(), Reach::Mention),
+                ("kong.db.migrations.core".to_string(), Reach::Mention),
+                ("acl".to_string(), Reach::Mention),
+                ("kong.plugins.acl.migrations".to_string(), Reach::Mention),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_table_a_chunk_returns_may_hold_one_name() {
+        // kong/plugins/ai-proxy/migrations/init.lua is exactly this,
+        // and six more plugins ship the same one-line index. The
+        // two-entry threshold keeps a lone incidental string from
+        // claiming a sibling; a module's whole export is not one.
+        assert_eq!(
+            imports_of("return {\n  \"001_360_to_370\",\n}\n"),
+            [("001_360_to_370".to_string(), Reach::Mention)]
+        );
+        // A lone string inside an ordinary table still states nothing.
+        assert!(imports_of("local t = { \"001_360_to_370\" }\nreturn t\n").is_empty());
+    }
+
+    #[test]
+    fn a_format_template_and_a_dofile_are_read_without_costing_the_call() {
+        // kong/db/strategies/init.lua:24 and :63; c/lua/testes/all.lua
+        // is 28 `dofile` lines and is the only file naming any of them.
+        let src = "local a = require(fmt(\"kong.db.strategies.%s.connector\", db))\n\
+                   local b = load_module_if_exists(fmt(\"kong.db.strategies.%s.%s\", db, s))\n\
+                   dofile('main.lua')\n\
+                   local c = fmt(\"lambda.%s.amazonaws.com\", region)\n\
+                   local d = fmt(\"%s.%s\", a, b)\n";
+        assert_eq!(
+            imports_of(src),
+            [
+                ("kong.db.strategies.*.connector".to_string(), Reach::Mention),
+                ("kong.db.strategies.*.*".to_string(), Reach::Mention),
+                // A path from the calling script, so a miss is a miss.
+                ("main".to_string(), Reach::Project),
+                // A hostname is shaped like a dotted path and is read
+                // as one; no file answers to it, so it costs nothing.
+                ("lambda.*.amazonaws.com".to_string(), Reach::Mention),
+            ],
+            "a template whose hole opens the string states no prefix at all"
+        );
+    }
+
+    #[test]
+    fn a_prefix_a_file_scope_local_holds_is_still_a_prefix() {
+        // kong/observability/tracing/propagation/init.lua binds the
+        // path at :16 and concatenates it at :148; the eight injectors
+        // it loads are named nowhere else.
+        let src = "local INJECTORS_PATH = \"kong.observability.tracing.propagation.injectors.\"\n\
+                   local function f(m) return require(INJECTORS_PATH .. m) end\n";
+        assert_eq!(
+            imports_of(src),
+            [(
+                "kong.observability.tracing.propagation.injectors.*".to_string(),
+                Reach::Anywhere
+            )]
+        );
+        // A name the file never binds to a string says nothing.
+        assert!(imports_of("local function f(m) return require(NOPE .. m) end\n").is_empty());
+    }
+
     #[test]
     fn a_tests_directory_is_test_code_like_a_test_directory() {
         // Penlight files its suite under tests/, and matching only

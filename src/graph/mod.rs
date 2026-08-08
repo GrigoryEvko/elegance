@@ -357,6 +357,14 @@ impl Index {
             // from `require 'ffi'` in kong, and made
             // meta/template/debug.lua the corpus's 4th most load-bearing
             // module at 316 dependents.
+            // `dofile('pm.lua')` is a path from the calling script, the
+            // way `require_relative` is in Ruby: a miss is a miss.
+            Lang::Lua if imp.reach == crate::lang::Reach::Project => {
+                match self.beside(from, &segments(target)) {
+                    Some(i) => Class::Internal(i),
+                    None => Class::Unresolved,
+                }
+            }
             Lang::Lua if crate::lang::preloaded(target) => Class::External,
             _ => return None,
         })
@@ -1129,7 +1137,7 @@ impl Index {
             // place a bare name written as data can mean anything is
             // beside the file listing it.
             Lang::Lua if imp.reach == crate::lang::Reach::Mention && !imp.target.contains('*') => {
-                self.beside(from, &imp.target).into_iter().collect()
+                self.listed(from, &imp.target)
             }
             Lang::Lua | Lang::Ruby | Lang::Python => self.glob_modules(from, imp),
             // A name Elixir builds at run time; everything else this
@@ -1203,12 +1211,34 @@ impl Index {
             .collect()
     }
 
-    /// The module of this name sitting beside `from`, if one does.
-    fn beside(&self, from: &GraphFacts, name: &str) -> Option<usize> {
+    /// The module a name a table LISTED denotes.
+    ///
+    /// A bare name is still only the file beside the listing one: the
+    /// one place a word written as data can mean anything is where it
+    /// was written, and kong ships `000_base.lua` in twelve
+    /// directories. A DOTTED name is a module path and says more, so it
+    /// is asked of the load root first — `kong.db.migrations.core` from
+    /// `subsystems.lua`, `luarocks.cmd.init` from the `luarocks` script
+    /// — and only then of the listing file's own directory, which is
+    /// how `kong/pdk/init.lua` reaches `service.request` beside it.
+    fn listed(&self, from: &GraphFacts, name: &str) -> Vec<usize> {
+        let segs = segments(name);
+        if segs.len() > 1
+            && let Some(i) = self.suffix(&segs)
+        {
+            return vec![i];
+        }
+        self.beside(from, &segs).into_iter().collect()
+    }
+
+    /// The module these path components name beside `from`.
+    fn beside(&self, from: &GraphFacts, segs: &[&str]) -> Option<usize> {
         let dir = from.path.parent().unwrap_or(Path::new(""));
-        let file = dir.join(name);
+        let file = segs.iter().fold(dir.to_path_buf(), |p, s| p.join(s));
+        let mut named = file.clone().into_os_string();
+        named.push(".lua");
         self.paths
-            .get(&file.with_extension("lua"))
+            .get(Path::new(&named))
             .or_else(|| self.paths.get(&file.join("init.lua")))
             .copied()
     }
@@ -1257,13 +1287,20 @@ impl Index {
             return Vec::new();
         }
         let rooted = self.glob_root(from, imp, before);
-        // One unknown component, so the prefix ends at a known offset
-        // from the end and there is exactly one place to look.
+        // The prefix ends at a known offset from the end, because every
+        // hole stands for exactly one component — a star AFTER the first
+        // matches one component the same way the first does.
+        // `kong.db.strategies.%s.%s` needs the second, and so does
+        // sequel's `sequel/adapters/#{subdir}/#{scheme}`.
         let fits = |c: &[Box<str>]| {
             let Some(k) = c.len().checked_sub(1 + after.len()) else {
                 return false;
             };
-            rooted(&c[..k]) && c[k + 1..].iter().zip(after).all(|(a, b)| &**a == *b)
+            rooted(&c[..k])
+                && c[k + 1..]
+                    .iter()
+                    .zip(after)
+                    .all(|(a, b)| *b == "*" || &**a == *b)
         };
         self.file_comps
             .iter()
@@ -1974,6 +2011,53 @@ mod tests {
         // Two includes, two dependencies: the extra arch rides past the
         // row without being tallied twice.
         assert_eq!((res.internal, res.external, res.unresolved), (2, 0, 0));
+    }
+
+    #[test]
+    fn a_lua_registry_entry_may_name_a_module_path_or_a_sibling() {
+        // kong/db/migrations/subsystems.lua writes `namespace =
+        // "kong.db.migrations.core"` and state.lua:98 requires it;
+        // kong/pdk/init.lua lists `service.request` for the
+        // `require("kong.pdk." .. module_name)` beside it. A bare name
+        // still only means the file beside the listing one, because
+        // kong ships `000_base.lua` in twelve directories.
+        let mut files = [
+            file(
+                Lang::Lua,
+                "kong/db/migrations/subsystems.lua",
+                &["kong.db.migrations.core", "000_base", "service.request"],
+            ),
+            file(Lang::Lua, "kong/db/migrations/core/init.lua", &[]),
+            file(Lang::Lua, "kong/db/migrations/000_base.lua", &[]),
+            file(Lang::Lua, "kong/db/migrations/service/request.lua", &[]),
+            file(Lang::Lua, "elsewhere/000_base.lua", &[]),
+        ];
+        for imp in &mut files[0].imports {
+            imp.reach = crate::lang::Reach::Mention;
+        }
+        let (_, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(targets[0][0], Some(idx("migrations/core/init.lua")));
+        assert_eq!(targets[0][1], Some(idx("kong/db/migrations/000_base.lua")));
+        assert_eq!(targets[0][2], Some(idx("service/request.lua")));
+    }
+
+    #[test]
+    fn a_dofile_names_a_file_beside_the_script_that_runs_it() {
+        // c/lua/testes/all.lua is 29 `dofile('...')` lines and is the
+        // only file naming any of them. A path from the calling script,
+        // so a miss is a miss rather than a third-party dependency.
+        let mut files = [
+            fixture(Lang::Lua, "testes/all.lua", &["main", "gone"]),
+            file(Lang::Lua, "testes/main.lua", &[]),
+        ];
+        for imp in &mut files[0].imports {
+            imp.reach = crate::lang::Reach::Project;
+        }
+        let (res, targets) = super::resolve_imports(&files);
+        assert_eq!(targets[0][0], Some(1));
+        assert_eq!(targets[0][1], None);
+        assert_eq!((res.internal, res.external, res.unresolved), (1, 0, 1));
     }
 
     #[test]

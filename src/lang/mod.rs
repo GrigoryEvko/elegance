@@ -308,6 +308,12 @@ pub fn shebang(source: &str) -> Option<Lang> {
         "perl" => Some(Lang::Perl),
         "python" | "python2" | "python3" => Some(Lang::Python),
         "ruby" => Some(Lang::Ruby),
+        // `luarocks/src/bin/luarocks` is `#!/usr/bin/env lua`, and it is
+        // the only file naming any of the 22 command modules it maps —
+        // `commands = { init = "luarocks.cmd.init", ... }`, which
+        // `cmd.lua:570` loads with `pcall(require, module)`. Eight
+        // extensionless Lua files in gold say what they are this way.
+        "lua" | "luajit" => Some(Lang::Lua),
         _ => None,
     }
 }
@@ -3608,5 +3614,57 @@ fn beta(items: Vec<i64>) -> i64 {
             .filter(|s| f.clone_sites.iter().filter(|t| t.hash == s.hash).count() >= 2)
             .collect();
         assert!(!dup.is_empty(), "renamed twin functions must collide");
+    }
+}
+
+#[cfg(test)]
+mod installed {
+    use super::{Lang, shebang};
+
+    #[test]
+    fn an_installed_script_says_which_language_it_is() {
+        // `luarocks/src/bin/luarocks` has no extension and is
+        // `#!/usr/bin/env lua`. It is the only file naming any of the
+        // 22 command modules it maps -- `commands = { init =
+        // "luarocks.cmd.init", ... }` -- which `cmd.lua:570` loads with
+        // `pcall(require, module)`, so 20 shipped commands read as
+        // depended on by nothing while the script listed every one.
+        assert_eq!(
+            shebang(
+                "#!/usr/bin/env lua
+local x = 1
+"
+            ),
+            Some(Lang::Lua)
+        );
+        assert_eq!(
+            shebang(
+                "#!/usr/bin/luajit
+"
+            ),
+            Some(Lang::Lua)
+        );
+        // The interpreters the walk already knew, unchanged.
+        assert_eq!(
+            shebang(
+                "#!/bin/sh
+"
+            ),
+            Some(Lang::Shell)
+        );
+        assert_eq!(
+            shebang(
+                "#!/usr/bin/env ruby
+"
+            ),
+            Some(Lang::Ruby)
+        );
+        assert_eq!(
+            shebang(
+                "#!/usr/bin/env node
+"
+            ),
+            None
+        );
     }
 }
