@@ -3420,6 +3420,36 @@ pub(crate) fn rooted(path: &str) -> String {
 /// rather than of the code — 54 of the gold Python corpus's 104 orphans
 /// live in one of these.
 pub(crate) fn one_shot_dir(norm: &str) -> bool {
+    let lower = norm.to_ascii_lowercase();
+    let Some((dirs, _)) = lower.rsplit_once('/') else {
+        return false;
+    };
+    // A SPACE separates the words of a directory name exactly as a dash
+    // does, and Xcode is where a name gets one: Alamofire ships
+    // `watchOS Example/watchOS Example WatchKit Extension/`, whose four
+    // files are what `Example/` means everywhere else. Audited all 37
+    // spaced directory names in gold against the list -- `Test Data`,
+    // `Preview Content`, `Concurrency Primitives`, `System Calls`,
+    // `Command Palette`, `deep purple` and the rest -- and the watchOS
+    // family is the only match. 4 orphans.
+    dirs.split(['/', ' ']).any(one_shot_name)
+}
+
+/// One directory component, matched case-insensitively: C# and Swift
+/// capitalise a directory name where every other ecosystem does not, and
+/// Polly keeps its 22 documentation snippets under `src/Snippets`.
+///
+/// A whole component, or one suffixed onto a module name: `zio-examples`,
+/// `rayon-demo` and `cuda-samples` are the same thing as `examples/`
+/// spelled the way a build tool names a module. `_` joins `-` as the
+/// separator, because a leading underscore is the Go toolchain's own way
+/// of saying "not part of the build" and toml keeps `_example/` and chi
+/// `_examples/` exactly so. Audited every directory component in all 22
+/// gold corpora that the underscore spelling admits and the hyphen one
+/// does not: exactly six -- `_example`, `_examples`, `build_tools`,
+/// `dune_bench`, `memo_bench` and `44_multi_gemm_ir_and_codegen` -- and
+/// all six are demos, benchmarks or build tooling.
+fn one_shot_name(seg: &str) -> bool {
     const ONE_SHOT: &[&str] = &[
         "build",
         "scripts",
@@ -3453,48 +3483,32 @@ pub(crate) fn one_shot_dir(norm: &str) -> bool {
         "codegen",
         "tools",
         "snippets",
+        // Sample source in a language the project PARSES rather than
+        // writes. vscode keeps Go, shell, Perl and Swift under
+        // `colorize-fixtures/` to exercise its highlighter, and
+        // `terminal-suggest/fixtures/shell-parser/*/input.sh` to
+        // exercise a parser -- none of it is code of any project in
+        // that language, and three of the corpus's five Go orphans
+        // were vscode fixtures wearing a `.go` extension.
+        //
+        // Audited all 44 directories in gold whose name is `fixtures`
+        // or carries it as a suffix. Every one holds fixture material:
+        // 38 sit under a `test`/`tests`/`spec`/`__tests__` path
+        // outright, and the six that do not -- junit5's `testFixtures`
+        // source set, kong's `scripts/explain_manifest`, composer's
+        // `doc`, vscode's `.github/skills`, its typescriptContext
+        // serverPlugin projects and terminal-suggest -- are fixtures by
+        // name and by content. There is no production directory in the
+        // corpus with this name.
+        "fixtures",
     ];
-    // Matched case-insensitively: C# and Swift capitalise a directory
-    // name where every other ecosystem does not, and Polly keeps its 22
-    // documentation snippets under `src/Snippets`.
-    //
-    // A whole DIRECTORY component, or one suffixed onto a module name:
-    // `zio-examples`, `rayon-demo` and `cuda-samples` are the same thing
-    // as `examples/` spelled the way a build tool names a module. The
-    // file's own name is never tested, or `parse-demo.rs` would qualify.
-    //
-    // `_` joins `-` as the separator, because a leading underscore is the
-    // Go toolchain's own way of saying "not part of the build" and toml
-    // keeps `_example/` and chi `_examples/` exactly so. Audited every
-    // directory component in all 22 gold corpora that the underscore
-    // spelling newly admits and the hyphen one does not: there are
-    // exactly six — `_example`, `_examples`, `build_tools`, `dune_bench`,
-    // `memo_bench` and `44_multi_gemm_ir_and_codegen` — and all six are
-    // demos, benchmarks or build tooling.
-    let lower = norm.to_ascii_lowercase();
-    let Some((dirs, _)) = lower.rsplit_once('/') else {
-        return false;
-    };
-    // A SPACE separates the words of a directory name exactly as a dash
-    // does, and Xcode is where a name gets one: Alamofire ships
-    // `watchOS Example/watchOS Example WatchKit Extension/`, whose four
-    // files are what `Example/` means everywhere else. Audited all 37
-    // spaced directory names in gold against the list above -- `Test
-    // Data`, `Preview Content`, `Concurrency Primitives`, `System
-    // Calls`, `Command Palette`, `deep purple` and the rest -- and the
-    // watchOS family is the only match. 4 orphans.
-    // An UNDERSCORE joins them: the Go toolchain's own way of saying a
-    // directory is not part of the build is a leading `_`, and gold
-    // writes `_example`, `_examples`, `build_tools`, `dune_bench` and
-    // `memo_bench`. All six such names are demos, benchmarks or build
-    // tooling. 6 orphans.
-    dirs.split(['/', ' ']).any(|seg| {
-        ONE_SHOT.iter().any(|d| {
-            seg == *d
-                || seg
-                    .strip_suffix(d)
-                    .is_some_and(|head| head.ends_with(['-', '_']))
-        })
+    // The file's own name is never read, or `parse-demo.rs` would
+    // qualify — the caller has already cut the basename off.
+    ONE_SHOT.iter().any(|d| {
+        seg == *d
+            || seg
+                .strip_suffix(d)
+                .is_some_and(|head| head.ends_with(['-', '_']))
     })
 }
 
@@ -4170,6 +4184,25 @@ mod tests {
         // separator is what says the name was suffixed onto a module.
         assert!(!one_shot_dir("/netty/common/src/rebuild/Thing.java"));
         assert!(one_shot_dir("/kong/tools/module.lua"));
+    }
+
+    #[test]
+    fn a_fixture_is_sample_source_the_project_parses_rather_than_writes() {
+        // vscode exercises its highlighter on Go, shell, Perl and Swift
+        // it does not otherwise contain.
+        assert!(one_shot_dir(
+            "/vscode/extensions/vscode-colorize-tests/test/colorize-fixtures/test.go"
+        ));
+        assert!(one_shot_dir(
+            "/vscode/extensions/terminal-suggest/fixtures/shell-parser/basic/input.sh"
+        ));
+        // The hyphen and underscore suffixes the list already accepts.
+        assert!(one_shot_dir("/primer/src/__tests__/fixtures/a.ts"));
+        assert!(one_shot_dir("/pkg/test_fixtures/sample.rb"));
+        // A word merely ending in it is not one, and the file's own name
+        // is never read — `fixtures.ts` is an ordinary module.
+        assert!(!one_shot_dir("/src/loadfixtures/loader.ts"));
+        assert!(!one_shot_dir("/src/fixtures.ts"));
     }
 
     #[test]
