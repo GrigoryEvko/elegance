@@ -821,15 +821,30 @@ impl Index {
     /// any one-component match makes 131 of them wrong -- transformer-
     /// engine's `<cuda_runtime.h>`, `<math.h>` and `<cudnn.h>` bind to
     /// its own util/ headers, llm.c's `<unistd.h>` to a Windows shim.
+    ///
+    /// The anchor is applied BEFORE the uniqueness test, not after it.
+    /// Testing uniqueness first let one homonym anywhere in the tree veto
+    /// the bind: musl ships `arch/generic/bits/dirent.h` beside
+    /// `include/dirent.h`, and `#include <dirent.h>` -- which can only
+    /// mean the second, since the first is spelled `<bits/dirent.h>` --
+    /// resolved to nothing at all. Run over musl ALONE, so this is no
+    /// cross-repository artefact, filtering first takes it from 72
+    /// orphans to 59 and from 4218 edges to 4671. Across the corpus it
+    /// adds 611 c-corpus edges and drops `imports_external` from 1745 to
+    /// 1120; twelve musl headers and git's `compat/vcbuild/include/
+    /// utime.h` stop being orphans by being DEPENDED ON rather than by
+    /// being exempted. It shares the exemption's known weakness -- that
+    /// last edge binds git's `<utime.h>` to an MSVC shim, the same shape
+    /// as llm.c's `<unistd.h>` above.
     fn include_root_suffix(&self, segs: &[&str]) -> Option<usize> {
+        let rooted = |c: &[Box<str>]| c.len() >= 2 && &*c[c.len() - 2] == "include";
         let mut hits = self
             .basenames
             .get(*segs.last()?)?
             .iter()
-            .filter(|(c, _)| ends_with(c, segs));
+            .filter(|(c, _)| ends_with(c, segs) && rooted(c));
         let (comps, i) = hits.next()?;
-        (hits.next().is_none() && comps.len() >= 2 && &*comps[comps.len() - 2] == "include")
-            .then_some(*i)
+        (hits.next().is_none() && rooted(comps)).then_some(*i)
     }
 
     /// `alias Plug.Conn` names a module, and a module's file is its
@@ -1878,6 +1893,37 @@ mod tests {
         // Two includes, two dependencies: the extra arch rides past the
         // row without being tallied twice.
         assert_eq!((res.internal, res.external, res.unresolved), (2, 0, 0));
+    }
+
+    #[test]
+    fn a_bare_angled_include_is_anchored_before_it_is_counted() {
+        // The `include/` anchor used to be applied AFTER the uniqueness
+        // test, so one homonym anywhere in the tree vetoed the bind.
+        // musl ships arch/generic/bits/dirent.h beside include/dirent.h,
+        // and `#include <dirent.h>` — which can only mean the second,
+        // since the first is spelled `<bits/dirent.h>` — resolved to
+        // nothing at all. Twelve musl headers and one of git's read as
+        // included by nobody for that reason; run over musl alone the
+        // filter-first order is 4218 edges to 4671.
+        let files = [
+            file(Lang::C, "musl/include/dirent.h", &[]),
+            file(Lang::C, "musl/arch/generic/bits/dirent.h", &[]),
+            file(Lang::C, "musl/src/dirent/readdir.c", &["<dirent.h>"]),
+            // The case the anchor exists for is untouched: a bare
+            // `<cuda_runtime.h>` is the toolkit's, not the file of that
+            // name the project happens to keep under util/.
+            file(Lang::Cuda, "util/cuda_runtime.h", &[]),
+            file(Lang::Cuda, "util/kernel.cu", &["<cuda_runtime.h>"]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        let idx = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert_eq!(
+            targets[2][0],
+            Some(idx("musl/include/dirent.h")),
+            "a sibling under bits/ is not on the include path"
+        );
+        assert_eq!(targets[4][0], None, "one component means the toolkit");
+        assert_eq!((res.internal, res.external, res.unresolved), (1, 1, 0));
     }
 
     #[test]

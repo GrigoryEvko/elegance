@@ -886,9 +886,128 @@ fn entryish(path: &Path) -> bool {
         || routed(path, name, stem)
         || dune_root(path, name, stem)
         || mix_task(path)
+        || header_the_build_names(path, name)
         || xcode_app(path)
         || swift_leaf_target(path)
         || cargo_target(path, name)
+}
+
+/// A header whose only caller is outside this repository, because the
+/// build DESCRIPTION is what reaches it and not any source in the tree.
+///
+/// Three separate readings, kept as three functions because they are
+/// three different claims: `include/` is a toolchain constant, an
+/// `addIncludePath` is a per-package declaration, and a `-I` with a
+/// variable in it is a per-repository configuration. Only the extension
+/// test is shared.
+fn header_the_build_names(path: &Path, name: &str) -> bool {
+    const HEADER: &[&str] = &["h", "hpp", "hh", "hxx", "h++", "cuh", "inc", "inl"];
+    name.rsplit_once('.')
+        .is_some_and(|(_, ext)| HEADER.contains(&ext))
+        && (published_header(path) || declared_include_root(path) || configured_header(path))
+}
+
+/// A header inside an `include/` tree: the directory a build puts on the
+/// CONSUMER's search path, so the specifier naming one is written
+/// relative to it and whoever writes that specifier is outside this
+/// repository.
+///
+/// Every repository in gold that ships such a tree says so itself.
+/// musl's Makefile installs the whole of it —
+/// `$(DESTDIR)$(includedir)/%: $(srcdir)/include/%` at :210, reached
+/// from `install-headers` at :218 — curl's CMakeLists.txt:2366 writes
+/// `install(DIRECTORY "${PROJECT_SOURCE_DIR}/include/curl" …)`,
+/// magic_enum's :100 `target_include_directories(…
+/// $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)` and cutlass's :718
+/// globs `include/cutlass/*.h`. Their own sources write the specifier
+/// the same way: musl's syslog.c says `#include <stdio.h>` for
+/// `include/stdio.h`, fmt's os.cc `#include "fmt/os.h"` for
+/// `include/fmt/os.h`.
+///
+/// An entry point and not a sink, because the tree is mostly NOT
+/// unreferenced. Gold holds 1374 headers under an `include/` directory
+/// and 66 of them have no includer here; musl/include alone ships 183 of
+/// which 127 are included in the tree, so a sink would drop the lot from
+/// the judged population to describe a twentieth of it. 66 orphans
+/// across six corpora.
+fn published_header(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str() == "include")
+}
+
+/// A header under an include root the build CHOOSES BETWEEN.
+///
+/// musl's Makefile:51 writes
+/// `CFLAGS_ALL += -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic …`,
+/// so `#include "ksigaction.h"` names one of seven real files and which
+/// one is settled by `$(ARCH)`. The generic copy is what the nearest
+/// match answers with — see `Index::nearest_includes`, which says so —
+/// and the six per-architecture copies read as included by nobody while
+/// each is included in its own configuration, exactly as a translation
+/// unit is linked in its own.
+///
+/// A make VARIABLE BELOW the first component is what marks the root, and
+/// it is the only shape in gold that does: of the 44 `-I` flags in the
+/// corpus's makefiles that mention a variable at all, 43 spell it only
+/// as a `$(srcdir)`-style prefix, which selects nothing. Deliberately
+/// entryish and not an edge: handing all seven copies of ksigaction.h an
+/// edge would manufacture six dependencies where the build takes one.
+/// 9 orphans, all musl's.
+fn configured_header(path: &Path) -> bool {
+    path.ancestors().skip(1).any(|dir| {
+        let Ok(rel) = path.strip_prefix(dir) else {
+            return false;
+        };
+        ["Makefile", "makefile"].iter().any(|mk| {
+            std::fs::read_to_string(dir.join(mk)).is_ok_and(|text| {
+                let mut flags = text.split_whitespace().filter_map(|t| t.strip_prefix("-I"));
+                flags.any(|root| under_variant(rel, root))
+            })
+        })
+    })
+}
+
+/// Does the path lie under `arch/<anything>` where the makefile wrote
+/// `$(srcdir)/arch/$(ARCH)`? The leading source-tree variable is dropped
+/// and each remaining one matches a single component.
+fn under_variant(rel: &Path, root: &str) -> bool {
+    fn chosen(component: &str) -> bool {
+        component.starts_with("$(") || component.starts_with("${")
+    }
+    let pattern: Vec<&str> = root.split('/').skip_while(|c| chosen(c)).collect();
+    if !pattern.iter().any(|c| chosen(c)) {
+        return false;
+    }
+    let mut here = rel.components().filter_map(|c| c.as_os_str().to_str());
+    let matched = pattern
+        .iter()
+        .all(|want| here.next().is_some_and(|got| chosen(want) || got == *want));
+    matched && here.next().is_some()
+}
+
+/// A header under a directory a `build.zig` DECLARES as an include path
+/// under some name other than `include`.
+///
+/// ghostty vendors seven C libraries under `pkg/`, each with its own
+/// `build.zig`, and each names the directory holding the headers it
+/// substitutes for upstream's: `libxml2/build.zig` writes
+/// `addIncludePath(b.path("override/config/posix"))`, glslang's
+/// `b.path("override")`, and libintl's and freetype's `b.path("")` for
+/// the package directory itself. The sources those headers answer are
+/// FETCHED rather than vendored, so nothing in this repository includes
+/// one and the declaration is the only statement there is. 5 orphans.
+fn declared_include_root(path: &Path) -> bool {
+    const DECL: &str = "addIncludePath(b.path(\"";
+    path.ancestors().skip(1).any(|dir| {
+        let Ok(rel) = path.strip_prefix(dir) else {
+            return false;
+        };
+        std::fs::read_to_string(dir.join("build.zig")).is_ok_and(|text| {
+            text.split(DECL)
+                .skip(1)
+                .filter_map(|call| call.split('"').next())
+                .any(|root| rel.starts_with(root))
+        })
+    })
 }
 
 /// A source of a SwiftPM target that produces something nothing can
@@ -1522,6 +1641,69 @@ mod tests {
     /// detection stays out of the way of the structural assertions.
     fn seen(names: &[&str]) -> Mentions {
         names.iter().map(|n| ((*n).into(), 2)).collect()
+    }
+
+    #[test]
+    fn a_published_header_is_named_from_outside_the_repository() {
+        // musl's Makefile installs every `$(srcdir)/include/%` and its
+        // own syslog.c writes `#include <stdio.h>` for include/stdio.h,
+        // so the specifier that reaches one is written relative to a
+        // root the CONSUMER is handed. 66 orphans across six corpora.
+        assert!(entryish(Path::new("musl/include/sys/vt.h")));
+        assert!(entryish(Path::new("cutlass/include/cute/numeric/real.hpp")));
+        // The tree is the claim, not the extension: a translation unit
+        // under it is a sink already, and a header outside it is
+        // published by nothing.
+        assert!(!entryish(Path::new("musl/src/locale/big5.h")));
+        assert!(!entryish(Path::new("vscode/src/vs/base/include.ts")));
+    }
+
+    #[test]
+    fn a_variable_below_the_first_component_selects_between_include_roots() {
+        // `-I$(srcdir)/arch/$(ARCH)`: the source cannot say which of the
+        // seven ksigaction.h an include names, and `$(ARCH)` does.
+        let arch = Path::new("arch/x32/ksigaction.h");
+        assert!(under_variant(arch, "$(srcdir)/arch/$(ARCH)"));
+        assert!(under_variant(
+            Path::new("arch/arm/bits/ioctl_fix.h"),
+            "$(srcdir)/arch/$(ARCH)"
+        ));
+        // A variable that is only the source-tree PREFIX selects
+        // nothing, and 43 of the corpus's 44 variable-bearing `-I`
+        // flags are exactly that. The plain root is the case that
+        // matters: `-I$(srcdir)/arch` reaches the same files and states
+        // nothing about which of them a build sees, and admitting it
+        // would exempt every header under every `-I` in every C
+        // repository rather than nine.
+        assert!(!under_variant(arch, "$(srcdir)/arch"));
+        assert!(!under_variant(arch, "$(srcdir)/include"));
+        assert!(!under_variant(arch, "$(top_srcdir)/lib"));
+        // A different root, and the root itself rather than a file in it.
+        assert!(!under_variant(arch, "$(srcdir)/src/$(SUB)"));
+        assert!(!under_variant(
+            Path::new("arch/x32"),
+            "$(srcdir)/arch/$(ARCH)"
+        ));
+    }
+
+    #[test]
+    fn a_build_file_declares_the_include_root_a_vendored_header_answers() {
+        // ghostty's pkg/libintl/build.zig:42 writes
+        // `addIncludePath(b.path(""))` for the package directory itself
+        // and pkg/libxml2's for `override/config/posix`. The upstream
+        // sources those headers substitute for are FETCHED, so nothing
+        // in the repository includes one and the declaration is the
+        // only statement there is. 5 orphans.
+        let dir = std::env::temp_dir().join("elegance-zig-include-root");
+        let _ = std::fs::create_dir_all(dir.join("override/config/posix"));
+        let build = "pub fn build(b: *std.Build) void {\n    lib.addIncludePath(b.path(\"override/config/posix\"));\n}\n";
+        std::fs::write(dir.join("build.zig"), build).unwrap();
+        assert!(entryish(&dir.join("override/config/posix/config.h")));
+        assert!(
+            !entryish(&dir.join("override/config/win32/config.h")),
+            "a root the build file does not name"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
