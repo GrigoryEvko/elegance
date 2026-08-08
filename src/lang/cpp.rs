@@ -283,6 +283,7 @@ fn is_destructor(def: Node) -> bool {
 /// `&&`/`||` from the shared binary kind; `else if` flattens as in C.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
+        Sem::None if super::c::spliced_include(node, src) => Sem::Import,
         Sem::If if node.parent().is_some_and(|p| p.kind() == "else_clause") => Sem::ElseIf,
         Sem::Else
             if node

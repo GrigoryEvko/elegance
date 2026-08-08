@@ -187,25 +187,53 @@ fn imports(node: Node, src: &[u8]) -> Vec<super::ImportInfo> {
 /// `#include FOO` stays invisible, as the module caveat states: the
 /// argument is a macro name and expansion is not run.
 pub(super) fn include_target<'a>(node: Node, src: &'a [u8]) -> Option<&'a str> {
+    if spliced_include(node, src) {
+        // The specifier stands beside the ERROR node as a plain string.
+        let beside = node.next_sibling()?;
+        return specifier(beside.utf8_text(src).ok()?);
+    }
     if let Some(path) = node.child_by_field_name("path") {
         return path.utf8_text(src).ok().map(|t| t.trim_matches('"'));
     }
-    let directive = node.child_by_field_name("directive")?.utf8_text(src).ok()?;
+    let directive = super::field_text_is(node, "directive", src)?;
     if !matches!(directive, "#include" | "#include_next" | "#import") {
         return None;
     }
     // A `preproc_arg` runs to end of line, so it carries any trailing
     // comment with it; the specifier ends at its own closing delimiter.
-    let arg = node
-        .child_by_field_name("argument")?
-        .utf8_text(src)
-        .ok()?
-        .trim_start();
+    specifier(super::field_text_is(node, "argument", src)?)
+}
+
+/// The header a specifier names, quotes stripped and angle brackets kept.
+fn specifier(arg: &str) -> Option<&str> {
+    let arg = arg.trim_start();
     match arg.as_bytes().first()? {
         b'"' => arg[1..].split('"').next(),
         b'<' => arg.split_once('>').map(|(head, _)| &arg[..head.len() + 1]),
         _ => None,
     }
+}
+
+/// An `#include` the grammar could not place.
+///
+/// A directive is a declaration, and no declaration may stand inside an
+/// ARRAY INITIALIZER — so tree-sitter emits the `#include` token itself
+/// as an ERROR node and leaves the specifier beside it as an ordinary
+/// string literal. musl splices every one of its character tables in
+/// that way: `iswalpha.c:3` is `static const unsigned char table[] = {`,
+/// then `#include "alpha.h"`, then `};`, and `iconv.c` does it nine
+/// times over. Thirteen musl headers read as included by nobody while
+/// the two files that splice them sat right beside them.
+///
+/// Promoted from `Sem::None`, and the ENCLOSING error node rather than
+/// the string, so the node gives nothing up: the specifier keeps its own
+/// `StrLit` classification and the secret, repetition and clone checks
+/// go on seeing it. Only a real file is ever named. 13 orphans.
+pub(super) fn spliced_include(node: Node, src: &[u8]) -> bool {
+    node.is_error()
+        && node
+            .utf8_text(src)
+            .is_ok_and(|t| matches!(t.trim(), "#include" | "#include_next" | "#import"))
 }
 
 /// abort() is C's panic; exit() is judgment we don't make.
@@ -219,6 +247,7 @@ fn panicky(call: Node, src: &[u8]) -> bool {
 /// `&&`/`||` from the shared binary kind; `else if` flattens as in Rust.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
+        Sem::None if spliced_include(node, src) => Sem::Import,
         Sem::If if node.parent().is_some_and(|p| p.kind() == "else_clause") => Sem::ElseIf,
         Sem::Else
             if node
@@ -346,6 +375,30 @@ mod tests {
         );
         let targets: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
         assert_eq!(targets, ["<stdio.h>", "codes.h", "fields.h"]);
+    }
+
+    #[test]
+    fn an_include_spliced_into_an_initializer_is_still_an_include() {
+        // A directive is a declaration and no declaration may stand
+        // inside an array initializer, so tree-sitter emits the
+        // `#include` token as an ERROR node and leaves the specifier
+        // beside it as an ordinary string. musl builds every character
+        // table that way, and thirteen of its headers read as included
+        // by nobody while the files splicing them sat right beside.
+        let pack = Lang::C.pack();
+        let mut parser = pack.make_parser();
+        let f = extract(
+            pack,
+            &mut parser,
+            Path::new("iswalpha.c"),
+            "static const unsigned char table[] = {\n#include \"alpha.h\"\n};\nstatic const unsigned char b[] = {\n#include \"nonspacing.h\"\n};\n",
+        );
+        let targets: Vec<&str> = f.imports.iter().map(|i| &*i.target).collect();
+        assert_eq!(targets, ["alpha.h", "nonspacing.h"]);
+        // It really is an ERROR node -- the grammar could not place the
+        // directive, which is why the ENCLOSING node and not the string
+        // is what gets promoted.
+        assert!(f.parse_errors > 0, "the grammar could not place it");
     }
 
     #[test]
