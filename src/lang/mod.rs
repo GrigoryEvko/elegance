@@ -1458,6 +1458,52 @@ pub(crate) fn c_header(target: &str) -> bool {
     )
 }
 
+/// A directory whose name CONTAINS "test", for the two languages whose
+/// suites are named freely rather than by a framework.
+///
+/// A Rust crate writes `tests/` and a Go file writes `_test.go`, so an
+/// exact-segment match is the whole rule there. A shell suite is named
+/// by whoever wrote the runner: swift-nio's
+/// `IntegrationTests/run-tests.sh:102-108` globs `for f in tests_*` and
+/// then `for t in test_*.sh` over its own 33 integration scripts, and
+/// transformer-engine files 21 CI stages as `qa/L0_pytorch_unittest/`
+/// with CONTRIBUTING.rst spelling the invocation
+/// `bash n0_<framework>_lint/test.sh`. PHP is the same story one tier
+/// out: flysystem keeps `test_files/` and PHP-Parser `test_old/`.
+///
+/// Case-insensitive, because `IntegrationTests` is 42 of the shell files
+/// this reaches and no other ecosystem here capitalises.
+///
+/// THE ONE EXCLUSION, and it is audited rather than guessed. I read
+/// every directory in all 22 gold corpora whose name holds "test" —
+/// 1307 distinct names, 29 of them holding a `.sh` or a `.php` the exact
+/// match did not already cover — and exactly one is not a suite:
+/// `ts/vscode/extensions/vscode-test-resolver`, a SHIPPED extension
+/// whose package.json declares `"main": "./out/extension"`. What tells
+/// it apart is that `test` sits BETWEEN two hyphenated words: the head
+/// names a product and `test` merely qualifies it, where a name that
+/// OPENS or CLOSES with the word says what the directory holds. Twelve
+/// directories in gold have that sandwich shape and the only other one
+/// carrying a shell file, swift-nio's
+/// `IntegrationTests/allocation-counter-tests-framework`, is claimed by
+/// its parent anyway — so the exclusion costs nothing and removes the
+/// corpus's only false positive.
+pub(crate) fn test_dir(path: &str) -> bool {
+    let Some((dirs, _)) = path.rsplit_once('/') else {
+        return false;
+    };
+    dirs.split('/').any(|seg| {
+        let lower = seg.to_ascii_lowercase();
+        let words: Vec<&str> = lower.split('-').collect();
+        let qualifier = |k: usize| 0 < k && k + 1 < words.len();
+        lower.contains("test")
+            && !words
+                .iter()
+                .enumerate()
+                .any(|(k, w)| matches!(*w, "test" | "tests") && qualifier(k))
+    })
+}
+
 pub(crate) fn field_text_is<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
     node.child_by_field_name(field)?.utf8_text(src).ok()
 }

@@ -247,14 +247,23 @@ fn doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)> {
 /// project vendors it into, and matching the last segment filed
 /// bats-core's own bin/bats and libexec/bats-core/bats — the two
 /// scripts that source its whole library — as tests, dropping every
-/// edge they carry out of the production graph.
+/// edge they carry out of the production graph. `bats` therefore stays
+/// an EXACT segment; only the "test" family widens.
+///
+/// `test.sh` is the other spelling, and it is a whole FILENAME rather
+/// than a stem — a rule about `test.sh` says nothing about
+/// `unittest.sh`. All 24 files so named in gold are the entry script of
+/// a suite: 19 transformer-engine CI stages, curl's cmake harness,
+/// redis's and vscode's `scripts/test.sh`, phoenix's integration
+/// driver, and one colorize FIXTURE already inside a `test/` tree.
 fn test_path(p: &str) -> bool {
     p.ends_with("_test.sh")
         || p.ends_with(".test.sh")
-        || p.rsplit_once('/').is_some_and(|(dirs, _)| {
-            dirs.split('/')
-                .any(|seg| matches!(seg, "test" | "tests" | "bats"))
-        })
+        || p.rsplit_once('/')
+            .is_some_and(|(_, name)| name == "test.sh")
+        || p.rsplit_once('/')
+            .is_some_and(|(dirs, _)| dirs.split('/').any(|seg| seg == "bats"))
+        || super::test_dir(p)
 }
 
 /// `eval` is the shell's own name for the gap between the text and the
@@ -287,6 +296,39 @@ mod tests {
             "bats-core/libexec/bats-core/bats",
             "bats-core/lib/bats-core/common.bash",
             "git/ci/lib.sh",
+        ] {
+            assert!(!is_test(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn a_suite_directory_is_named_freely_and_a_product_is_not() {
+        // swift-nio's IntegrationTests/run-tests.sh:102-108 globs
+        // `for f in tests_*` then `for t in test_*.sh`, and
+        // transformer-engine files 21 CI stages as
+        // `qa/L0_pytorch_unittest/test.sh`. 45 shell orphans across
+        // cuda, swift and java were one of those two shapes.
+        let is_test = super::pack().test_path;
+        for p in [
+            "swift-nio/IntegrationTests/tests_01_http/run.sh",
+            "transformer-engine/qa/L0_pytorch_unittest/test.sh",
+            "bats-core/blackbox-tests/run.sh",
+            "vscode/extensions/vscode-colorize-tests/colorize.sh",
+            "netty/testsuite-native-image/x.sh",
+            "flysystem/test_files/gen.sh",
+        ] {
+            assert!(is_test(p), "{p}");
+        }
+        // `test` BETWEEN two hyphenated words qualifies a product name
+        // rather than saying what the directory holds:
+        // vscode-test-resolver is a shipped extension whose
+        // package.json declares `"main": "./out/extension"`, and it is
+        // the only non-suite among the 29 test-bearing directories in
+        // gold that carry a shell or PHP file.
+        for p in [
+            "vscode/extensions/vscode-test-resolver/scripts/terminateProcess.sh",
+            "bats-core/lib/bats-core/common.bash",
+            "curl/scripts/latest.sh",
         ] {
             assert!(!is_test(p), "{p}");
         }

@@ -145,7 +145,10 @@ pub fn pack() -> Pack {
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
-        test_path: |p| p.contains("/tests/") || p.contains("/test/") || p.ends_with("Test.php"),
+        // A suite here is named freely — flysystem writes `test_files/`
+        // and PHP-Parser `test_old/` — so the directory is matched by
+        // what its name CONTAINS. See `lang::test_dir`.
+        test_path: |p| super::test_dir(p) || p.ends_with("Test.php"),
         asserty: |call, src| callee_text(call, src).is_some_and(super::assertish),
         is_hook: |_, _| false,
         return_arity,
