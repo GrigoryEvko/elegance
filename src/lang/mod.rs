@@ -1426,6 +1426,16 @@ pub(crate) fn config_file(path: &str) -> bool {
     stem.ends_with(".config") || stem == "config"
 }
 
+/// Does this specifier name a C header? Zig's `@cInclude` carries one,
+/// and so does a `b.path("….h")` in a build file, and the C resolver is
+/// what answers for both.
+pub(crate) fn c_header(target: &str) -> bool {
+    matches!(
+        target.trim_end_matches('>').rsplit_once('.'),
+        Some((_, "h" | "hpp" | "hh" | "hxx" | "cuh"))
+    )
+}
+
 pub(crate) fn field_text_is<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
     node.child_by_field_name(field)?.utf8_text(src).ok()
 }

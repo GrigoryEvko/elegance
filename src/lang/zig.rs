@@ -242,8 +242,14 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         // defer/errdefer/comptime indent only in block form; expression
         // forms (`defer x.deinit();`, `comptime T == u8`) add no depth.
         Sem::With if !has_block_child(node) => Sem::None,
-        // @import is the module system, not a call.
-        Sem::Call if builtin_name(node, src) == Some("@import") => Sem::Import,
+        // @import is the module system, not a call. `@cInclude` is the
+        // same statement about a C header, and it is how a Zig binding
+        // module names the header it wraps: ghostty's `pkg/freetype/
+        // c.zig:2` says `@cInclude("freetype-zig.h")` of the file beside
+        // it, and `src/stb/main.zig:2` the same of two more.
+        Sem::Call if matches!(builtin_name(node, src), Some("@import" | "@cInclude")) => {
+            Sem::Import
+        }
         // And so is `b.path("x.zig")`: the core asks about imports at
         // Sem::Import nodes only.
         Sem::Call if build_path(node, src).is_some() => Sem::Import,

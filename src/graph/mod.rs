@@ -685,7 +685,30 @@ impl Index {
     /// one of its executables that way from `src/build/Ghostty*.zig`,
     /// three directories below its root, and 42 of the corpus's 113
     /// `b.path` targets miss on the file-relative reading alone.
+    /// A C header is routed to C's own resolver, because that is what
+    /// `@cInclude` names and the include roots `addIncludePath` puts
+    /// there are the ones a quoted include already searches. ghostty's
+    /// `pkg/freetype/c.zig:2` says `@cInclude("freetype-zig.h")` of the
+    /// file beside it and `src/stb/main.zig` the same of two more.
+    ///
+    /// The routing keys on the TARGET's extension and not on the node,
+    /// so the seven `b.path("….h")` sites in ghostty's build files go
+    /// the same way — which is what reaches `include/ghostty.h`, not the
+    /// `include/` exemption.
+    ///
+    /// A miss is EXTERNAL, never unresolved. Zig has no angled spelling
+    /// to mark a system header with, and 22 of the corpus's 25
+    /// `@cInclude` sites name one (`unistd.h`, `errno.h`, `stdlib.h`);
+    /// routing a miss through C's quoted arm instead put all 22 into the
+    /// honesty bucket, taking the zig corpus from 57 unresolved to 79
+    /// for no gain at all.
     fn zig(&self, from: &GraphFacts, target: &str) -> Class {
+        if crate::lang::c_header(target) {
+            return match self.c(from, target) {
+                Class::Unresolved => Class::External,
+                bound => bound,
+            };
+        }
         if !target.ends_with(".zig") {
             return Class::External; // std, builtin, build packages
         }
@@ -1855,6 +1878,34 @@ mod tests {
         // Two includes, two dependencies: the extra arch rides past the
         // row without being tallied twice.
         assert_eq!((res.internal, res.external, res.unresolved), (2, 0, 0));
+    }
+
+    #[test]
+    fn a_zig_binding_names_the_c_header_it_wraps() {
+        // `@cInclude` is Zig's import statement for a C header, and a
+        // binding module is where it names the header beside it:
+        // ghostty's pkg/freetype/c.zig:2 says
+        // `@cInclude("freetype-zig.h")`. A MISS is external and never
+        // unresolved — Zig has no angled spelling to mark a system
+        // header with, and 22 of the corpus's 25 @cInclude sites name
+        // one, so routing a miss through C's quoted arm put all 22 into
+        // the honesty bucket for no gain.
+        let files = [
+            file(
+                Lang::Zig,
+                "pkg/freetype/c.zig",
+                &["freetype-zig.h", "stdio.h"],
+            ),
+            file(Lang::C, "pkg/freetype/freetype-zig.h", &[]),
+        ];
+        let (res, targets) = super::resolve_imports(&files);
+        assert_eq!(targets[0][0], Some(1), "the header beside it");
+        assert_eq!(targets[0][1], None);
+        assert_eq!(
+            (res.internal, res.external, res.unresolved),
+            (1, 1, 0),
+            "a system header is external, not a failure to resolve"
+        );
     }
 
     #[test]
