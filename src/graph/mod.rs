@@ -195,6 +195,28 @@ struct Index {
     /// that named it: the OCaml corpus ships util.h, config.h and
     /// sha256.c beside OCaml modules of the same stem.
     langs: Vec<Lang>,
+    /// The two dune stanzas that widen where a bare OCaml module name
+    /// answers from. See `DuneScopes`.
+    dune: DuneScopes,
+}
+
+/// A dune library is a directory, and two stanzas say it is more than
+/// that.
+///
+/// `(include_subdirs unqualified)` folds every SUBDIRECTORY of the
+/// library into one flat module namespace, so `dune_rules/gen_rules.ml`
+/// writing `Cram_rules.rules` means `dune_rules/cram/cram_rules.ml`.
+/// `src/dune_lang/dune`, `src/dune_rules/dune` and `src/dune_tui/dune`
+/// all declare it.
+///
+/// `(wrapped false)` drops the `Libname__` prefix, which makes every one
+/// of the library's modules a top-level compilation unit its CONSUMERS
+/// name bare: containers' `src/data/dune` declares it, and
+/// `tests/data/t_bv.ml:3` says `open CCBV` with no qualification at all.
+#[derive(Default)]
+struct DuneScopes {
+    flat: Vec<Vec<Box<str>>>,
+    unwrapped: HashSet<Vec<Box<str>>>,
 }
 
 /// What separates one component of an import target from the next.
@@ -227,6 +249,7 @@ impl Index {
             },
             declared: declaring_files(files),
             members: receiver_members(files),
+            dune: dune_scopes(files),
         };
         for (i, f) in files.iter().enumerate() {
             idx.paths.entry(f.path.clone()).or_insert(i);
@@ -852,7 +875,7 @@ impl Index {
             .iter()
             .filter_map(|stem| self.by_last.get(*stem))
             .flatten()
-            .filter(|(c, j)| self.langs[*j] == Lang::OCaml && visible(c, here))
+            .filter(|(c, j)| self.langs[*j] == Lang::OCaml && self.dune.visible(c, here))
             .min_by_key(|(c, _)| (std::cmp::Reverse(shared(c, here)), c.len()));
         match best {
             // Ties keep path order, which puts `foo.ml` before
@@ -1278,25 +1301,72 @@ fn shared(a: &[Box<str>], b: &[Box<str>]) -> usize {
     a.iter().zip(b).take_while(|(x, y)| x == y).count()
 }
 
-/// Can a module name written bare reach this file? A dune library is a
-/// DIRECTORY, so its modules see each other by name; every other
-/// library is reached through its root module, the file dune names
-/// after the library and its users spell `open Stdune`.
-///
-/// A name that answers from neither is the standard library wearing a
-/// name this project also uses, or another library's private module.
-/// otherlibs/dyn/dyn.ml says `Float.to_string` and means Stdlib's;
-/// binding it to otherlibs/stdune/src/float.ml put 697 of dune's 886
-/// modules into a single cycle, and OCaml has no such thing — a cycle
-/// between compilation units does not compile, and dune refuses to
-/// build one.
-fn visible(cand: &[Box<str>], here: &[Box<str>]) -> bool {
-    let (Some((stem, dir)), Some((_, own))) = (cand.split_last(), here.split_last()) else {
-        return false;
-    };
-    // `<lib>/<lib>.ml` and `<lib>/src/<lib>.ml` are both how a library
-    // names its root module.
-    dir == own || dir.iter().rev().take(2).any(|d| d == stem)
+impl DuneScopes {
+    /// Can a module name written bare reach this file? A dune library is
+    /// a DIRECTORY, so its modules see each other by name; every other
+    /// library is reached through its root module, the file dune names
+    /// after the library and its users spell `open Stdune`.
+    ///
+    /// A name that answers from neither is the standard library wearing
+    /// a name this project also uses, or another library's private
+    /// module. otherlibs/dyn/dyn.ml says `Float.to_string` and means
+    /// Stdlib's; binding it to otherlibs/stdune/src/float.ml put 697 of
+    /// dune's 886 modules into a single cycle, and OCaml has no such
+    /// thing — a cycle between compilation units does not compile, and
+    /// dune refuses to build one.
+    ///
+    /// The two stanzas widen exactly that, and only where the build file
+    /// says so. A flat library is ONE directory spelled over several:
+    /// 19 orphans and 627 edges, and the file-level cycle mass and
+    /// largest cycle do not move at all — the directory cycle it does
+    /// create has all six members inside `dune/src/dune_rules`, which is
+    /// the single library `(include_subdirs unqualified)` flattens. An
+    /// unwrapped library publishes every module under its own bare name:
+    /// no orphan moves for it, but it earns 64 edges and reclassifies
+    /// 1050 imports from external to internal, and every unwrapped
+    /// library in gold uses a prefixed namespace (`CC*`, `cmdliner_*`,
+    /// `opam*`, `lwd*`, `sha*`, `notty*`) so the "a common stem captures
+    /// an unrelated bare reference" hazard has no instance here.
+    fn visible(&self, cand: &[Box<str>], here: &[Box<str>]) -> bool {
+        let (Some((stem, dir)), Some((_, own))) = (cand.split_last(), here.split_last()) else {
+            return false;
+        };
+        // `<lib>/<lib>.ml` and `<lib>/src/<lib>.ml` are both how a
+        // library names its root module.
+        dir == own
+            || dir.iter().rev().take(2).any(|d| d == stem)
+            || self.unwrapped.contains(dir)
+            || self
+                .flat
+                .iter()
+                .any(|root| dir.starts_with(root) && own.starts_with(root))
+    }
+}
+
+/// Which directories the `dune` files beside the scanned OCaml modules
+/// declare flat or unwrapped. Only the ancestors of OCaml files are
+/// probed, so a repository without any pays nothing.
+fn dune_scopes(files: &[GraphFacts]) -> DuneScopes {
+    let mut seen: HashSet<&Path> = HashSet::new();
+    let mut out = DuneScopes::default();
+    for f in files.iter().filter(|f| f.lang == Lang::OCaml) {
+        for dir in f.path.ancestors().skip(1) {
+            if !seen.insert(dir) {
+                break;
+            }
+            let Ok(text) = std::fs::read_to_string(dir.join("dune")) else {
+                continue;
+            };
+            let comps = components(dir);
+            if text.contains("(include_subdirs unqualified)") {
+                out.flat.push(comps.clone());
+            }
+            if text.contains("(wrapped false)") {
+                out.unwrapped.insert(comps);
+            }
+        }
+    }
+    out
 }
 
 /// Go writes a major version into the module path from v2 on, so `v1`
@@ -1785,6 +1855,41 @@ mod tests {
         // Two includes, two dependencies: the extra arch rides past the
         // row without being tallied twice.
         assert_eq!((res.internal, res.external, res.unresolved), (2, 0, 0));
+    }
+
+    #[test]
+    fn a_dune_stanza_widens_where_a_bare_module_name_answers() {
+        // `(include_subdirs unqualified)` folds every SUBDIRECTORY of a
+        // library into one flat namespace, so dune_rules/gen_rules.ml
+        // writing `Cram_rules.rules` means dune_rules/cram/cram_rules.ml.
+        // `(wrapped false)` publishes each module under its own bare
+        // name, which is why containers/tests/data/t_bv.ml can say
+        // `open CCBV` with no qualification at all. 49 orphans and 691
+        // edges between them, and the file-level cycle mass does not
+        // move: an illegal compilation-unit cycle is the failure mode
+        // `visible` exists to prevent.
+        let comps = |p: &str| -> Vec<Box<str>> { p.split('/').map(Box::from).collect() };
+        let mut scopes = DuneScopes::default();
+        scopes.flat.push(comps("dune/src/dune_rules"));
+        scopes.unwrapped.insert(comps("containers/src/data"));
+        let here = comps("dune/src/dune_rules/gen_rules");
+        let cand = comps("dune/src/dune_rules/cram/cram_rules");
+        assert!(scopes.visible(&cand, &here), "one flattened library");
+        let bv = comps("containers/src/data/CCBV");
+        let test = comps("containers/tests/data/t_bv");
+        assert!(scopes.visible(&bv, &test), "an unwrapped module is global");
+        // Neither stanza reaches a directory that declares neither, and
+        // the flat scope does not leave the library that declared it.
+        let float = comps("dune/otherlibs/stdune/src/float");
+        let dyn_ml = comps("dune/otherlibs/dyn/dyn");
+        assert!(
+            !scopes.visible(&float, &dyn_ml),
+            "Float.to_string means Stdlib's"
+        );
+        assert!(
+            !DuneScopes::default().visible(&cand, &here),
+            "without the stanza the subdirectory is another library"
+        );
     }
 
     #[test]
