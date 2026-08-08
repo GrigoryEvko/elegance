@@ -1844,11 +1844,29 @@ fn dune_root(path: &Path, name: &str, stem: &str) -> bool {
     let Ok(text) = std::fs::read_to_string(dir.join("dune")) else {
         return false;
     };
+    // An IMPLEMENTATION of a virtual library is chosen by the linker,
+    // not named by an import: `dune-site/src/plugins/linker/dynlink/dune`
+    // says `(implements dune-site.linker)` and `linker.ml` sits beside
+    // it. Whoever links the executable decides which implementation is
+    // in the binary, so no file in the tree can reference one.
+    if ml && field_open(&text, "(implements") {
+        return true;
+    }
+    // A dune file that spells the file's own basename WHOLE has named
+    // it: `dune/src/dune_rules/dune:64` writes `(copy# setup.defaults.ml
+    // setup.ml)`, which renames a module at build time, and
+    // `setup.defaults.ml` is reachable under no other name. Delimited on
+    // both sides, so a rule for `setup.ml` says nothing about
+    // `setup.defaults.ml`; only 54 dune files in the corpus name a `.ml`
+    // at all.
+    if ml && text.lines().any(|line| spells(line, name)) {
+        return true;
+    }
     // `(names ...)` is the plural: core's `bench-bin/dune` declares
     // twelve executables in one stanza, and each is an entry point.
     let fields: &[&str] = match ml {
-        true => &["(name ", "(public_name ", "(names "],
-        false => &["(javascript_files ", "(wasm_files "],
+        true => &["(name", "(public_name", "(names"],
+        false => &["(javascript_files", "(wasm_files"],
     };
     // A stub is listed under its FULL name, a module under its stem.
     let wanted = match ml {
@@ -1857,13 +1875,37 @@ fn dune_root(path: &Path, name: &str, stem: &str) -> bool {
     };
     fields
         .iter()
-        .flat_map(|field| text.match_indices(field).map(|(at, f)| at + f.len()))
-        .filter_map(|at| text[at..].split(')').next())
+        .flat_map(|field| field_args(&text, field))
         .flat_map(str::split_whitespace)
         .any(|declared| match ml {
             true => declared.rsplit('.').next() == Some(wanted),
             false => declared == wanted,
         })
+}
+
+/// Does this dune text open the named field at all?
+fn field_open(text: &str, field: &str) -> bool {
+    field_args(text, field).next().is_some()
+}
+
+/// The arguments of a dune field, wherever it appears — everything from
+/// the whitespace after its name to the closing paren.
+///
+/// ANY whitespace. `containers/fuzz/dune` writes `(names` and then a
+/// NEWLINE before its three crowbar targets, and matching the literal
+/// `"(names "` with a trailing space missed the stanza outright. The
+/// whitespace is also what keeps the field names apart: `(names` cannot
+/// be read as `(name` followed by an argument, because what follows the
+/// shorter match is the letter `s`.
+fn field_args<'a>(text: &'a str, field: &str) -> impl Iterator<Item = &'a str> {
+    let starts: Vec<usize> = text
+        .match_indices(field)
+        .map(|(at, f)| at + f.len())
+        .filter(|&at| text[at..].starts_with(char::is_whitespace))
+        .collect();
+    starts
+        .into_iter()
+        .filter_map(|at| text[at..].split(')').next())
 }
 
 /// A Mix task, which `mix` resolves from the MODULE name — running
@@ -2950,6 +2992,47 @@ mod tests {
         std::fs::remove_file(dir.join("build.properties")).unwrap();
         assert!(!runs_once(&dir.join("BuildHelper.scala")));
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn a_dune_file_names_a_module_across_a_newline_a_linker_and_a_rename() {
+        // Its OWN directory: `a_manifest_names_the_module_its_library_
+        // _is_reached_through` writes a different `dune` to
+        // `elegance-dune-root`, and sharing one made both flaky.
+        let dir = std::env::temp_dir().join("elegance-dune-fields");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dune = dir.join("dune");
+        let root = |f: &str| {
+            let p = dir.join(f);
+            let name = f;
+            dune_root(&p, name, name.rsplit_once('.').unwrap().0)
+        };
+        // `(names` and then a NEWLINE: containers/fuzz/dune declares its
+        // three crowbar targets that way, and a literal `"(names "`
+        // matched none of them.
+        std::fs::write(
+            &dune,
+            "(executables\n (names\n  ccsexp_parse\n  ccutf8_string)\n (optional))\n",
+        )
+        .unwrap();
+        assert!(root("ccsexp_parse.ml"));
+        assert!(root("ccutf8_string.ml"));
+        assert!(!root("helper.ml"));
+        // An implementation of a virtual library: the LINKER picks it.
+        std::fs::write(
+            &dune,
+            "(library\n (name dune_site_dynlink_linker)\n (implements dune-site.linker))\n",
+        )
+        .unwrap();
+        assert!(root("linker.ml"));
+        // A rename names the source outright, and the name must stand on
+        // its own — a `(copy# setup.defaults.ml setup.ml)` says nothing
+        // about a file called `defaults.ml`.
+        std::fs::write(&dune, "(rule\n (copy# setup.defaults.ml setup.ml))\n").unwrap();
+        assert!(root("setup.defaults.ml"));
+        assert!(!root("defaults.ml"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
