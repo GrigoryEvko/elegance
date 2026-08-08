@@ -1224,7 +1224,14 @@ fn declares_target(text: &str, rel: &str) -> bool {
 /// rather than guessed from the path — a library's module is called
 /// after the library, not after the directory holding it.
 fn dune_root(path: &Path, name: &str, stem: &str) -> bool {
-    if !name.ends_with(".ml") && !name.ends_with(".mli") {
+    let ml = name.ends_with(".ml") || name.ends_with(".mli");
+    // A js_of_ocaml stub is JavaScript that the OCaml build links in,
+    // and the dune file beside it lists the files by name:
+    // `(js_of_ocaml (javascript_files strftime.js runtime.js ...))`.
+    // Seven of the gold OCaml corpus's JavaScript orphans are one, and
+    // no import in any language can name a linker input.
+    let stub = name.ends_with(".js");
+    if !ml && !stub {
         return false;
     }
     let Some(dir) = path.parent() else {
@@ -1235,12 +1242,24 @@ fn dune_root(path: &Path, name: &str, stem: &str) -> bool {
     };
     // `(names ...)` is the plural: core's `bench-bin/dune` declares
     // twelve executables in one stanza, and each is an entry point.
-    ["(name ", "(public_name ", "(names "]
+    let fields: &[&str] = match ml {
+        true => &["(name ", "(public_name ", "(names "],
+        false => &["(javascript_files ", "(wasm_files "],
+    };
+    // A stub is listed under its FULL name, a module under its stem.
+    let wanted = match ml {
+        true => stem,
+        false => name,
+    };
+    fields
         .iter()
         .flat_map(|field| text.match_indices(field).map(|(at, f)| at + f.len()))
         .filter_map(|at| text[at..].split(')').next())
         .flat_map(str::split_whitespace)
-        .any(|declared| declared.rsplit('.').next() == Some(stem))
+        .any(|declared| match ml {
+            true => declared.rsplit('.').next() == Some(wanted),
+            false => declared == wanted,
+        })
 }
 
 /// A Mix task, which `mix` resolves from the MODULE name — running
@@ -1723,6 +1742,37 @@ mod tests {
     /// detection stays out of the way of the structural assertions.
     fn seen(names: &[&str]) -> Mentions {
         names.iter().map(|n| ((*n).into(), 2)).collect()
+    }
+
+    #[test]
+    fn a_js_of_ocaml_stub_is_a_linker_input_and_not_a_module() {
+        // `core/core/src/dune` writes `(js_of_ocaml (javascript_files
+        // strftime.js runtime.js timezone_js_loader_stubs.js
+        // timezone_runtime.js))` and `(wasm_files ...)` beside it. A
+        // linker input is not a module: no import in any language the
+        // tool reads can name one, and all seven JavaScript orphans in
+        // the OCaml corpus were these.
+        //
+        // The full NAME, where a module is listed under its stem — and
+        // scoped to the stanza, so a filename mentioned anywhere else
+        // in the dune file states nothing.
+        let dir = std::env::temp_dir().join(format!("elegance-dune-js-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(
+            dir.join("dune"),
+            "(library (name core) (preprocess (pps ppx))\n \
+             (js_of_ocaml (javascript_files strftime.js runtime.js))\n \
+             (wasm_files timezone.wasm.js))\n",
+        )
+        .unwrap();
+        assert!(entryish(&dir.join("strftime.js")));
+        assert!(entryish(&dir.join("runtime.js")));
+        assert!(entryish(&dir.join("timezone.wasm.js")));
+        assert!(!entryish(&dir.join("helper.js")), "an ordinary module");
+        // A stanza that lists no JavaScript claims none of it.
+        std::fs::write(dir.join("dune"), "(library (name core))\n").unwrap();
+        assert!(!entryish(&dir.join("runtime.js")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
