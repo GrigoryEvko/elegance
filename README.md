@@ -330,7 +330,7 @@ corpus and either tracked something else or moved under 10%. It counts
 of writing and its fenced example counts for nothing.
 
 One budget per role, because one across roles is meaningless for all of
-them: gold function summaries run to p99 = 258 prose words in Rust, 128
+them: gold function summaries run to p99 = 258 prose words in Rust, 127
 in TypeScript and 89 in Python, while a field's doc is a phrase and a
 module header is a page. A role with fewer than 200 runs in gold
 inherits its language's *pooled* doc p99 and `calibration.toml` records

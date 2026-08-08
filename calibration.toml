@@ -83,7 +83,7 @@
 "cohesion" = { hi = 4.0 }
 "module doc" = { hi = 22.0 }
 "type doc" = { hi = 124.0 }
-"fn doc" = { hi = 128.0 }
+"fn doc" = { hi = 127.0 }
 "field doc" = { hi = 93.0 }
 "inline doc" = { hi = 75.0 }
 "asserts" = { rate = 0.04 }

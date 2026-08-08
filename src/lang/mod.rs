@@ -131,7 +131,13 @@ const DESCS: [Desc; LANGS.len()] = [
         lang: Lang::TypeScript,
         name: "ts",
         corpus: "ts",
-        exts: &["ts"],
+        // `.mts` and `.cts` are TypeScript's two module systems spelled
+        // in the extension, and leaving them out was a coverage hole,
+        // not a decision: 113 files in gold went unread — vscode's 71
+        // `esbuild*.mts` extension drivers, hono's 27 benchmarks,
+        // primer-react 7, zod 3, excalidraw 3, radix 2 — their imports
+        // uncounted and their content unmeasured.
+        exts: &["ts", "mts", "cts"],
         make: || typescript::pack(typescript::Dialect::Ts),
     },
     Desc {
@@ -459,10 +465,13 @@ impl Lang {
             // `include`, `files` or `types`. 256 of the TypeScript
             // corpus's orphans are one, and 241 of those carry a
             // `declare module`, `declare global` or `declare namespace`.
-            Lang::TypeScript | Lang::Tsx => path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.ends_with(".d.ts")),
+            // `.d.mts` and `.d.cts` are the same declaration in the two
+            // module systems TypeScript 5 distinguishes.
+            Lang::TypeScript | Lang::Tsx => {
+                path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    n.ends_with(".d.ts") || n.ends_with(".d.mts") || n.ends_with(".d.cts")
+                })
+            }
             // A shell script you RUN is not a module anyone sources.
             // git/git-submodule.sh is dispatched by git's C binary and
             // git/ci/*.sh from workflow YAML; 100 of the 105 remaining
@@ -3614,6 +3623,40 @@ fn beta(items: Vec<i64>) -> i64 {
             .filter(|s| f.clone_sites.iter().filter(|t| t.hash == s.hash).count() >= 2)
             .collect();
         assert!(!dup.is_empty(), "renamed twin functions must collide");
+    }
+
+    #[test]
+    fn typescripts_two_module_systems_are_read_and_their_declarations_are_sinks() {
+        // 113 gold files were never opened at all: their imports went
+        // uncounted and their content unmeasured, so the corpus's true
+        // TypeScript baseline was never the one being reported.
+        for ext in ["ts", "mts", "cts", "tsx"] {
+            let path = format!("build/esbuild.{ext}");
+            assert_eq!(
+                Lang::from_path(Path::new(&path)),
+                Some(match ext {
+                    "tsx" => Lang::Tsx,
+                    _ => Lang::TypeScript,
+                }),
+                "{path} is TypeScript however its module system is spelled"
+            );
+        }
+        // A declaration file states a shape and declares no value, so
+        // no specifier can ever bind it — `import './x.d.mts'` is not
+        // how a `.d.mts` is reached, and gold's one instance
+        // (vscode/build/codex/generate-protocol.d.mts) has no fan-in
+        // because check-protocol-sync.ts imports the implementation
+        // `./generate-protocol.mjs` beside it. The two new spellings
+        // are the same claim `.d.ts` already carries.
+        for name in ["a.d.ts", "a.d.mts", "a.d.cts"] {
+            assert!(
+                Lang::TypeScript.is_sink(Path::new(name)),
+                "{name} declares no module anything can import"
+            );
+        }
+        for name in ["a.ts", "a.mts", "a.cts", "detsy.ts"] {
+            assert!(!Lang::TypeScript.is_sink(Path::new(name)), "{name} is code");
+        }
     }
 }
 
