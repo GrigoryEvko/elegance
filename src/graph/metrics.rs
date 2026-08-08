@@ -883,6 +883,7 @@ fn entryish(path: &Path) -> bool {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
     let stem = name.split('.').next().unwrap_or("");
     ENTRY_STEMS.contains(&stem)
+        || reserved(name)
         || routed(path, name, stem)
         || dune_root(path, name, stem)
         || mix_task(path)
@@ -1430,6 +1431,23 @@ fn sbt_meta_build(path: &Path) -> bool {
         && dir.join("build.properties").is_file()
 }
 
+/// Two filenames a toolchain reserves, matched WHOLE and never as a
+/// stem: `docs/Makefile` runs sphinx-build over the directory holding
+/// `conf.py` in attrs, rich, bats-core, AutoMapper and
+/// transformer-engine, and `.readthedocs.yaml` names it in click and
+/// rich; `setup.py` is what pip and setuptools run. Reading the stem
+/// instead would have taken kong's `conf.lua` loader and vscode's
+/// `setup.ts`, which are ordinary modules their neighbours import.
+///
+/// `*.gemspec` was the third and is deliberately absent: three files in
+/// gold are one, and a build file in their own directory already names
+/// two of them — sinatra's Rakefile writes `task 'rack-protection.gemspec'`
+/// and `task 'sinatra-contrib.gemspec'`. A whole-extension exemption
+/// worth one file is not worth its surface.
+fn reserved(name: &str) -> bool {
+    matches!(name, "conf.py" | "setup.py")
+}
+
 /// A gem's own entry points, named by the gemspec beside them.
 ///
 /// `lib/<X>.rb` is what `require "<X>"` loads and no file inside the
@@ -1705,6 +1723,19 @@ mod tests {
     /// detection stays out of the way of the structural assertions.
     fn seen(names: &[&str]) -> Mentions {
         names.iter().map(|n| ((*n).into(), 2)).collect()
+    }
+
+    #[test]
+    fn a_toolchain_reserves_two_filenames_whole() {
+        // `docs/Makefile` runs sphinx-build over the directory holding
+        // `conf.py` in attrs, rich, bats-core, AutoMapper and
+        // transformer-engine; `.readthedocs.yaml` names it in click and
+        // rich; `setup.py` is what pip runs. Whole filenames, so kong's
+        // `conf.lua` loader and vscode's `setup.ts` are untouched.
+        assert!(entryish(Path::new("rich/docs/source/conf.py")));
+        assert!(entryish(Path::new("attrs/setup.py")));
+        assert!(!entryish(Path::new("kong/kong/conf_loader/conf.lua")));
+        assert!(!entryish(Path::new("vscode/src/setup.ts")));
     }
 
     #[test]

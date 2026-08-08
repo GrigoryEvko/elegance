@@ -129,7 +129,15 @@ pub fn pack() -> Pack {
         declares_test,
         names_test: declares_test,
         is_test_code: |_, _| false,
-        test_path: |p| p.contains("/spec/") || p.contains("/test/") || p.ends_with("_spec.rb"),
+        // `tests/` beside `test/`: tigerbeetle's Ruby client files its
+        // suite as `src/clients/ruby/tests/{unit,integration}/test_*.rb`,
+        // ten files, and the pack read only the singular.
+        test_path: |p| {
+            p.contains("/spec/")
+                || p.contains("/test/")
+                || p.contains("/tests/")
+                || p.ends_with("_spec.rb")
+        },
         asserty,
         is_hook: |_, _| false,
         // A method returns its last expression and declares nothing, so
@@ -823,6 +831,28 @@ mod tests {
             .iter()
             .map(|i| (i.target.to_string(), i.reach))
             .collect()
+    }
+
+    #[test]
+    fn both_spellings_of_the_test_directory_are_test_code() {
+        // tigerbeetle's Ruby client files its suite as
+        // `src/clients/ruby/tests/{unit,integration}/test_*.rb`, eleven
+        // files, and the pack read only the singular.
+        let is_test = Lang::Ruby.pack().test_path;
+        for p in [
+            "tigerbeetle/src/clients/ruby/tests/unit/test_id.rb",
+            "tigerbeetle/src/clients/ruby/tests/integration/test_account.rb",
+            "rubocop/spec/rubocop/cop_spec.rb",
+            "sequel/test/core/dataset_test.rb",
+        ] {
+            assert!(is_test(p), "{p}");
+        }
+        for p in [
+            "tigerbeetle/src/tigerbeetle/client.rb",
+            "sinatra/sinatra-contrib/lib/sinatra/test_helpers.rb",
+        ] {
+            assert!(!is_test(p), "{p}");
+        }
     }
 
     #[test]

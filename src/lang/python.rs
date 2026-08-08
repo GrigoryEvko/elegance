@@ -100,10 +100,7 @@ pub fn pack() -> Pack {
         declares_test: |_, _| false,
         names_test,
         is_test_code: |_, _| false,
-        test_path: |p| {
-            let file = p.rsplit('/').next().unwrap_or(p);
-            file.starts_with("test_") || file.ends_with("_test.py") || p.contains("/tests/")
-        },
+        test_path,
         asserty: |node, src| {
             node.child_by_field_name("function")
                 .and_then(|f| match f.kind() {
@@ -138,6 +135,23 @@ pub fn pack() -> Pack {
         ],
         assign_kinds: &["assignment"],
     }
+}
+
+/// Both spellings of the directory, and both filename conventions.
+///
+/// `cuda/cutlass/test/python/` is cutlass's Python suite — conftest.py,
+/// run_all_tests.py, and 28 modules whose docstrings open "Tests ..." —
+/// and `ts/vscode/extensions/copilot/**/test/` holds its notebook and
+/// Python fixtures. Gold files 250 Python and notebook files under a
+/// directory named `test`, in exactly seven trees, and every one of the
+/// seven is a suite. Ruby and Lua already read `/test/`; this is the
+/// three packs agreeing.
+fn test_path(p: &str) -> bool {
+    let file = p.rsplit('/').next().unwrap_or(p);
+    file.starts_with("test_")
+        || file.ends_with("_test.py")
+        || p.contains("/tests/")
+        || p.contains("/test/")
 }
 
 /// `@pytest.mark.skip` and `@unittest.skip` switch a test off for
@@ -678,4 +692,37 @@ fn is_doc(node: Node) -> bool {
     node.kind() == "expression_statement"
         && node.named_child_count() == 1
         && node.named_child(0).is_some_and(|c| c.kind() == "string")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::lang::Lang;
+
+    #[test]
+    fn both_spellings_of_the_test_directory_are_test_code() {
+        // `cuda/cutlass/test/python/` is cutlass's Python suite --
+        // conftest.py, run_all_tests.py, and 28 modules whose
+        // docstrings open "Tests ..." -- and vscode's copilot extension
+        // files 90 notebook and 54 Python fixtures under `test/`. Gold
+        // holds 250 Python and notebook files under a directory named
+        // `test`, in exactly seven trees, and all seven are suites.
+        let is_test = Lang::Python.pack().test_path;
+        for p in [
+            "cutlass/test/python/cutlass/emit/pytorch.py",
+            "cutlass/operators/test/conftest.py",
+            "copilot/src/platform/notebook/test/fixture.ipynb",
+            "attrs/tests/test_make.py",
+            "rich/tests/conftest.py",
+        ] {
+            assert!(is_test(p), "{p}");
+        }
+        for p in [
+            "cutlass/python/cutlass_cppgen/emit/pytorch.py",
+            "rich/rich/console.py",
+            // A substring is not a segment.
+            "src/latest/config.py",
+        ] {
+            assert!(!is_test(p), "{p}");
+        }
+    }
 }
