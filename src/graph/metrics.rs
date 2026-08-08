@@ -2207,9 +2207,9 @@ fn find_orphans(
     judged: &[bool],
     from_tests: &[u32],
 ) -> (u32, Vec<String>, u32) {
-    let unreached = |i: usize| judged[i] && fan_in[i] == 0 && !entryish(&files[i].path);
+    let unclaimed = |i: usize| judged[i] && fan_in[i] == 0;
     let mut orphans: Vec<String> = (0..files.len())
-        .filter(|&i| unreached(i) && from_tests[i] == 0)
+        .filter(|&i| unclaimed(i) && from_tests[i] == 0 && !entryish(&files[i].path))
         .map(|i| files[i].path.display().to_string())
         .collect();
     // A file its own suite exercises and nothing else is a DIFFERENT
@@ -2218,8 +2218,17 @@ fn find_orphans(
     // 11 such importers, click's testing.py 8, and 88 of Solidity's 145
     // production orphans are imported by a mock or a harness. Counted,
     // not listed, because the reader's next question is how many.
+    //
+    // An ENTRY POINT its own suite exercises belongs here too. It is not
+    // an orphan — that is what the name says — but it is not nothing
+    // either, and excluding entryish from both buckets counted it
+    // NOWHERE. That erasure is the stated reason dune_root's `(wrapped
+    // false)` clause was refused, and it was shipped anyway everywhere
+    // else: the published-header rule alone took 23 cutlass and
+    // transformer-engine headers that a test does include out of
+    // `tested_only` and reported the loss as collateral.
     let tested = (0..files.len())
-        .filter(|&i| unreached(i) && from_tests[i] > 0)
+        .filter(|&i| unclaimed(i) && from_tests[i] > 0)
         .count() as u32;
     orphans.sort_unstable();
     let count = orphans.len() as u32;
@@ -2941,6 +2950,26 @@ mod tests {
         std::fs::remove_file(dir.join("build.properties")).unwrap();
         assert!(!runs_once(&dir.join("BuildHelper.scala")));
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn an_entry_point_its_own_suite_exercises_is_counted_rather_than_erased() {
+        let files: Vec<GraphFacts> = ["app/main.rs", "app/index.rs", "app/dead.rs"]
+            .iter()
+            .map(|p| crate::graph::fixture(Lang::Rust, p, &[]))
+            .collect();
+        let refs: Vec<&GraphFacts> = files.iter().collect();
+        let judged = vec![true; 3];
+        let fan_in = vec![0, 0, 0];
+        // main.rs is entryish AND reached by a test; index.rs is
+        // entryish and reached by nothing; dead.rs is neither.
+        let from_tests = vec![1, 0, 0];
+        let (count, listed, tested) = find_orphans(&refs, &fan_in, &judged, &from_tests);
+        // The entry point is never an orphan, tested or not.
+        assert_eq!(count, 1);
+        assert_eq!(listed, vec!["app/dead.rs".to_string()]);
+        // But the one a suite exercises is COUNTED, not erased.
+        assert_eq!(tested, 1);
     }
 
     #[test]
