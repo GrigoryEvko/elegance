@@ -191,6 +191,10 @@ struct Index {
     /// Separate from `declared` so a call on a value can never land on a
     /// TYPE of the same name. See `Reach::Member`.
     members: HashMap<Box<str>, Vec<usize>>,
+
+    /// `compilerOptions.paths`, keyed by the directory of the
+    /// `tsconfig.json` that declares it — the tree the alias governs.
+    aliases: HashMap<PathBuf, Vec<Alias>>,
     /// Each file's language. A module name binds a file of the language
     /// that named it: the OCaml corpus ships util.h, config.h and
     /// sha256.c beside OCaml modules of the same stem.
@@ -217,6 +221,15 @@ struct Index {
 struct DuneScopes {
     flat: Vec<Vec<Box<str>>>,
     unwrapped: HashSet<Vec<Box<str>>>,
+}
+
+/// One `compilerOptions.paths` entry: the specifier prefix it claims
+/// and the location it rewrites to. `"@/*": ["./*"]` is `head "@/"`,
+/// starred, rooted at the config's own directory.
+struct Alias {
+    head: Box<str>,
+    star: bool,
+    target: PathBuf,
 }
 
 /// What separates one component of an import target from the next.
@@ -247,6 +260,7 @@ impl Index {
                 m.extend(swift_targets(files));
                 m
             },
+            aliases: path_aliases(files),
             declared: declaring_files(files),
             members: receiver_members(files),
             dune: dune_scopes(files),
@@ -331,7 +345,7 @@ impl Index {
     fn by_path(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Option<Class> {
         let target = &*imp.target;
         Some(match from.lang {
-            Lang::TypeScript | Lang::Tsx | Lang::JavaScript => self.web(from, target),
+            Lang::TypeScript | Lang::Tsx | Lang::JavaScript => self.web(from, imp),
             // An import names a FILE, and the generic arm dropped the
             // extension on one side of the comparison only.
             Lang::Solidity => self.solidity(from, imp),
@@ -576,8 +590,15 @@ impl Index {
         Class::Unresolved
     }
 
-    fn web(&self, from: &GraphFacts, target: &str) -> Class {
+    fn web(&self, from: &GraphFacts, imp: &crate::facts::ImportFact) -> Class {
+        let target = &*imp.target;
         if !target.starts_with('.') {
+            // An alias the file's own tsconfig declares comes first: a
+            // workspace name is a package, and `@/components/header` is
+            // a directory the compiler was told to look in.
+            if let Class::Internal(i) = self.aliased(from, target) {
+                return Class::Internal(i);
+            }
             return self.workspace(target);
         }
         let joined = normalize(from.path.parent().unwrap_or(Path::new("")), target);
@@ -1073,6 +1094,59 @@ impl Index {
             }
         }
         Class::External
+    }
+
+    /// A specifier the nearest `tsconfig.json` rewrites. ariakit's
+    /// website declares `"@/*": ["./*"]` and writes 92 specifiers
+    /// through it; zod's docs package and eleven trpc examples do the
+    /// same, and every one of them read as a third-party dependency.
+    ///
+    /// Scoped to the declaring config's own directory rather than
+    /// pooled into `workspaces`, because the name is not unique: three
+    /// of the gold repositories spell an alias `@/` and two of them
+    /// live in the same corpus directory, so a single global `@` would
+    /// send excalidraw's imports into ariakit's website.
+    ///
+    /// The NEAREST config that states a map governs, and an outer one
+    /// does not also apply: `paths` replaces rather than merges when a
+    /// tsconfig extends another, so a package that states its own `~/*`
+    /// has stated the whole map for the files under it. Reading every
+    /// ancestor instead and taking the longest head measures the same
+    /// in all 22 corpora — no gold map is strictly extended by an
+    /// ancestor's — so the narrower claim is the one taken.
+    ///
+    /// Within that one map the longest head wins, which is what tsc
+    /// does: excalidraw declares both `@excalidraw/element` and
+    /// `@excalidraw/element/*`.
+    fn aliased(&self, from: &GraphFacts, target: &str) -> Class {
+        let Some(entries) = from
+            .path
+            .ancestors()
+            .skip(1)
+            .find_map(|dir| self.aliases.get(dir))
+        else {
+            return Class::External;
+        };
+        let mut best: Option<(usize, PathBuf)> = None;
+        for alias in entries {
+            let head = &*alias.head;
+            let rest = match alias.star {
+                true => target.strip_prefix(head),
+                false => (target == head).then_some(""),
+            };
+            let Some(rest) = rest else { continue };
+            if best.as_ref().is_some_and(|(len, _)| *len >= head.len()) {
+                continue;
+            }
+            let base = segments(rest)
+                .iter()
+                .fold(alias.target.clone(), |p, s| p.join(s));
+            best = Some((head.len(), base));
+        }
+        match best {
+            Some((_, base)) => self.web_file(&base),
+            None => Class::External,
+        }
     }
 
     /// A bare specifier naming a package this repository declares.
@@ -1674,6 +1748,122 @@ fn workspace_packages(files: &[GraphFacts]) -> HashMap<Box<str>, PathBuf> {
     out
 }
 
+/// Every `compilerOptions.paths` map in the tree, keyed by the
+/// directory of the config that states it.
+///
+/// A tsconfig is JSON with comments and trailing commas, which
+/// `serde_json` rejects: 4 of the gold corpus's 27 path maps are
+/// written that way, so the text is stripped first.
+fn path_aliases(files: &[GraphFacts]) -> HashMap<PathBuf, Vec<Alias>> {
+    let mut seen: HashSet<&Path> = HashSet::new();
+    let mut out: HashMap<PathBuf, Vec<Alias>> = HashMap::new();
+    for f in files {
+        if !matches!(f.lang, Lang::TypeScript | Lang::Tsx | Lang::JavaScript) {
+            continue;
+        }
+        for dir in f.path.ancestors().skip(1) {
+            if !seen.insert(dir) {
+                break;
+            }
+            let Ok(text) = std::fs::read_to_string(dir.join("tsconfig.json")) else {
+                continue;
+            };
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(&strip_jsonc(&text)) else {
+                continue;
+            };
+            let Some(map) = json
+                .get("compilerOptions")
+                .and_then(|c| c.get("paths"))
+                .and_then(|p| p.as_object())
+            else {
+                continue;
+            };
+            let entries: Vec<Alias> = map
+                .iter()
+                .filter_map(|(pattern, targets)| {
+                    let first = targets.as_array()?.first()?.as_str()?;
+                    // One `*` at most, and tsc puts it last. What
+                    // precedes it in the pattern is the prefix a
+                    // specifier must carry; what precedes it in the
+                    // target is the directory it lands in.
+                    let (head, star) = match pattern.strip_suffix('*') {
+                        Some(head) => (head, true),
+                        None => (pattern.as_str(), false),
+                    };
+                    let body = first.strip_suffix('*').unwrap_or(first);
+                    Some(Alias {
+                        head: head.into(),
+                        star,
+                        target: normalize(dir, body.trim_end_matches('/')),
+                    })
+                })
+                .collect();
+            out.entry(dir.to_path_buf()).or_default().extend(entries);
+        }
+    }
+    out
+}
+
+/// The cursor `strip_jsonc` shares with the four things it does.
+type Chars<'a> = std::iter::Peekable<std::str::CharIndices<'a>>;
+
+/// JSON with comments and trailing commas, cut back to JSON. String
+/// literals are copied through untouched: a `paths` map is full of
+/// `"./*"`, and a comment stripper that does not know it is inside a
+/// string eats the rest of the file from the first one.
+fn strip_jsonc(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        let next = chars.peek().map(|(_, n)| *n);
+        match (c, next) {
+            ('"', _) => copy_literal(&mut chars, &mut out),
+            ('/', Some('/')) => skip_to_end_of_line(&mut chars),
+            ('/', Some('*')) => skip_to_end_of_block(&mut chars),
+            // A trailing comma is legal in a tsconfig, not in JSON.
+            (',', _) if closes_after(text, at) => {}
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// The rest of a string literal, opening quote already emitted. An
+/// escape carries its next character through whatever that character
+/// is, so `\"` does not end the literal.
+fn copy_literal(chars: &mut Chars, out: &mut String) {
+    out.push('"');
+    while let Some((_, c)) = chars.next() {
+        out.push(c);
+        match c {
+            '\\' => chars.next().into_iter().for_each(|(_, e)| out.push(e)),
+            '"' => return,
+            _ => {}
+        }
+    }
+}
+
+/// A `//` comment, newline included. JSON has no significant
+/// whitespace, and `closes_after` reads the ORIGINAL text.
+fn skip_to_end_of_line(chars: &mut Chars) {
+    chars.by_ref().find(|&(_, c)| c == '\n');
+}
+
+fn skip_to_end_of_block(chars: &mut Chars) {
+    let mut prev = ' ';
+    for (_, c) in chars.by_ref() {
+        if prev == '*' && c == '/' {
+            return;
+        }
+        prev = c;
+    }
+}
+
+/// Is the next non-space character after this one a closing bracket?
+fn closes_after(text: &str, at: usize) -> bool {
+    text[at + 1..].trim_start().starts_with(['}', ']'])
+}
+
 /// Node's own private-name mechanism: a `package.json` may map `#app/*`
 /// onto `./src/*`, and a specifier starting `#` is resolvable ONLY
 /// through that map. ariakit writes 313 of them, every one of which
@@ -2123,6 +2313,63 @@ mod tests {
             Some(0),
             "the file's own alias says what V1 is"
         );
+    }
+
+    #[test]
+    fn a_tsconfig_alias_is_read_from_the_config_that_governs_the_file() {
+        // ariakit's website declares `"@/*": ["./*"]` and writes 92
+        // specifiers through it; every one read as a third-party
+        // package because a bare specifier was assumed to be one.
+        let root = std::env::temp_dir().join(format!("elegance-alias-{}", std::process::id()));
+        let app = root.join("app");
+        let _ = std::fs::create_dir_all(app.join("src/ui"));
+        let _ = std::fs::create_dir_all(app.join("pkg"));
+        // JSON with comments and a trailing comma: 4 of the corpus's
+        // 26 path maps are written that way and serde rejects them.
+        std::fs::write(
+            app.join("tsconfig.json"),
+            "{\n // the app's own root\n \"compilerOptions\": { \"paths\": {\n\
+         \x20  \"@/*\": [\"./src/*\"],\n }, },\n}\n",
+        )
+        .unwrap();
+        // A nearer config STATES THE WHOLE MAP for the files under it:
+        // `paths` replaces rather than merges when a tsconfig extends
+        // another, so `@/` does not reach in here.
+        std::fs::write(
+            app.join("pkg/tsconfig.json"),
+            r#"{"compilerOptions":{"paths":{"~/*":["./src/*"]}}}"#,
+        )
+        .unwrap();
+        let files = [
+            file(
+                Lang::TypeScript,
+                app.join("src/app.ts").to_str().unwrap(),
+                &["@/ui/header", "@/missing"],
+            ),
+            file(
+                Lang::TypeScript,
+                app.join("src/ui/header.ts").to_str().unwrap(),
+                &[],
+            ),
+            file(
+                Lang::TypeScript,
+                app.join("pkg/main.ts").to_str().unwrap(),
+                &["@/ui/header"],
+            ),
+        ];
+        let r = resolve(&files);
+        // The alias resolves inside the tree it governs; a name it
+        // rewrites to nothing is a miss and says so; and the package
+        // that declared its own map never sees `@/`.
+        assert_eq!(
+            r,
+            Resolution {
+                internal: 1,
+                external: 2,
+                unresolved: 0
+            }
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

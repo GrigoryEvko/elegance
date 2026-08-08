@@ -1435,6 +1435,13 @@ pub(crate) fn declares_an_override(node: Node, src: &[u8]) -> bool {
         .any(|word| word == "@Override" || word == "override")
 }
 
+/// Does this path end in an extension the web toolchains compile?
+pub(crate) fn web_extension(path: &str) -> bool {
+    const WEB: &[&str] = &["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
+    path.rsplit_once('.')
+        .is_some_and(|(_, ext)| WEB.contains(&ext))
+}
+
 pub(crate) fn config_file(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);

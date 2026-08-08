@@ -8,7 +8,7 @@
 //! delete never complected itself into its neighbors.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{GraphFacts, Resolution};
 
@@ -892,6 +892,8 @@ fn entryish(path: &Path) -> bool {
         || swift_leaf_target(path)
         || cargo_target(path, name)
         || gem_entry(path, name)
+        || manifest_entry(path)
+        || tool_driver(path)
 }
 
 /// A header whose only caller is outside this repository, because the
@@ -964,6 +966,60 @@ fn configured_header(path: &Path) -> bool {
                 let mut flags = text.split_whitespace().filter_map(|t| t.strip_prefix("-I"));
                 flags.any(|root| under_variant(rel, root))
             })
+        })
+    })
+}
+
+/// A file a `package.json` above it NAMES as an entry point of its
+/// package. Nothing inside the repository imports one, because the
+/// consumer is outside it: radix publishes 36 re-export barrels through
+/// `"./*": "./src/*.ts"`, preact eight `compat/*` shims through
+/// `exports`, and every vscode extension its activation module through
+/// `main` and `browser`.
+///
+/// The declared path is normally a BUILD OUTPUT — vscode writes
+/// `"main": "./out/npmMain"` and its tsconfig `"rootDir": "./src"`,
+/// `"outDir": "./out"` — so a value that names no file on disk is
+/// matched by NAME and DEPTH within the package that declared it. The
+/// directory the compiler writes to is a build detail; the name the
+/// toolchain loads, and how far down it sits, are the claim.
+///
+/// The depth is what keeps a stem from claiming a tree. `"main"` and
+/// `"exports"` name a compiled artefact, and matching a bare stem
+/// anywhere below the package exempted 479 gold files to win about a
+/// hundred: hono's fourteen subpath exports claimed 155 files, copilot's
+/// single `"./dist/extension"` claimed nine (three of them ordinary
+/// modules), vscode's root `"./out/main.js"` twelve. Requiring the
+/// candidate to sit as many components deep as the declared path does —
+/// `"./dist/request.js"` is two, so `src/request.ts` answers and
+/// `src/utils/request.ts` does not — cuts that blanket to 384 and costs
+/// exactly one orphan across all 22 corpora. Two stricter forms were
+/// measured and are worse buys: "a unique stem within the package"
+/// costs 18, and "the declared path minus its first component must
+/// equal the candidate's" costs 10 by losing the real two-level outputs
+/// like `"./client/dist/browser/cssClientMain"`.
+///
+/// A wildcard must narrow: `"./*": "./src/*.ts"` says which files are
+/// exports, `"./*": "./*"` says only that the package is a directory.
+/// ariakit's website and guide declare the second, and honouring it
+/// would have exempted 95 of that repository's ordinary modules.
+fn manifest_entry(path: &Path) -> bool {
+    let Some(stem) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let stem = stem.split('.').next().unwrap_or("");
+    path.ancestors().skip(1).any(|dir| {
+        package_entries(dir).is_some_and(|e| {
+            let depth = path.strip_prefix(dir).map_or(0, |r| r.components().count());
+            e.stems.iter().any(|(s, d)| &**s == stem && *d == depth)
+                || e.exact.iter().any(|p| p == path)
+                || e.scripted.iter().any(|p| p == path)
+                || e.globs.iter().any(|(head, tail)| {
+                    path.starts_with(head)
+                        && path.to_str().is_some_and(|p| {
+                            p.len() >= head.as_os_str().len() + tail.len() && p.ends_with(&**tail)
+                        })
+                })
         })
     })
 }
@@ -1212,6 +1268,198 @@ fn declares_target(text: &str, rel: &str) -> bool {
         }
     }
     false
+}
+
+/// What one `package.json` declares: files that exist as written,
+/// wildcard (prefix, suffix) pairs, and the (name, depth) of the rest.
+#[derive(Default)]
+struct Entries {
+    exact: Vec<PathBuf>,
+    /// Files a `scripts` command RUNS, kept apart from the entry fields
+    /// so the two claims can be counted separately. See `scripted_files`.
+    scripted: Vec<PathBuf>,
+    globs: Vec<(PathBuf, Box<str>)>,
+    stems: Vec<(Box<str>, usize)>,
+    /// Package names this manifest declares — what says a file named
+    /// after a tool is that tool's driver. See `tool_driver`.
+    dependencies: Vec<Box<str>>,
+}
+
+/// The fields a package manifest loads a file BY NAME through. `types`
+/// is deliberately absent: it points at a `.d.ts`, which is already a
+/// sink, and `files`/`workspaces` list directories rather than entries.
+const ENTRY_FIELDS: &[&str] = &[
+    "main",
+    "module",
+    "browser",
+    "bin",
+    "exports",
+    "source",
+    "unpkg",
+    "react-native",
+    "svelte",
+];
+
+const WEB_EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"];
+
+/// Parsed once per directory: `entryish` is asked about every file and
+/// a package.json sits above thousands of them.
+fn package_entries(dir: &Path) -> Option<std::rc::Rc<Entries>> {
+    thread_local! {
+        static CACHE: std::cell::RefCell<HashMap<PathBuf, Option<std::rc::Rc<Entries>>>> =
+            std::cell::RefCell::new(HashMap::new());
+    }
+    CACHE.with(|c| {
+        if let Some(hit) = c.borrow().get(dir) {
+            return hit.clone();
+        }
+        let parsed = read_package_entries(dir).map(std::rc::Rc::new);
+        c.borrow_mut().insert(dir.to_path_buf(), parsed.clone());
+        parsed
+    })
+}
+
+fn read_package_entries(dir: &Path) -> Option<Entries> {
+    let text = std::fs::read_to_string(dir.join("package.json")).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let mut out = Entries {
+        scripted: scripted_files(&json, dir),
+        dependencies: declared_dependencies(&json),
+        ..Entries::default()
+    };
+    let mut values = Vec::new();
+    for field in ENTRY_FIELDS.iter().filter_map(|f| json.get(f)) {
+        collect_strings(field, &mut values);
+    }
+    for value in values.iter().filter_map(|v| v.strip_prefix("./")) {
+        record_entry(&mut out, dir, value);
+    }
+    Some(out)
+}
+
+/// One entry-field value, classified: a wildcard that narrows, a file
+/// that exists as written, or a (name, depth) pair to match by, because
+/// the manifest gave the BUILD OUTPUT's path.
+fn record_entry(out: &mut Entries, dir: &Path, body: &str) {
+    if let Some((head, tail)) = body.split_once('*') {
+        // The head must name a directory inside the package, or the
+        // pattern claims the package's whole tree.
+        if head.contains('/') {
+            out.globs.push((dir.join(head), tail.into()));
+        }
+        return;
+    }
+    let base = dir.join(body);
+    let named = std::iter::once(base.clone())
+        .chain(WEB_EXTS.iter().map(|e| with_suffix(&base, e)))
+        .chain(WEB_EXTS.iter().map(|e| with_suffix(&base.join("index"), e)))
+        .find(|p| p.is_file());
+    match named {
+        // A build output states its own depth: `./out/npmMain` is two
+        // components below the package, and only a source file two
+        // components below it can be what the compiler wrote it from.
+        None => {
+            let depth = body.split('/').filter(|s| !s.is_empty()).count();
+            out.stems.extend(first_segment(&base).map(|s| (s, depth)));
+        }
+        Some(p) => out.exact.push(p),
+    }
+}
+
+/// A file a `scripts` entry RUNS by name rather than importing: vscode's
+/// extensions write `"bundle-web": "node ./esbuild.browser.mts"`, immer
+/// `"test:perf": "cd __performance_tests__ && node add-data.mjs"`, trpc
+/// four `script.*.ts` under its website, mithril `browser.js`.
+///
+/// A third arm of the entry fields above and not a rule of its own: it
+/// writes into the same `exact` set and fires only through
+/// `manifest_entry`, and 20 of the ts files it names are vscode
+/// `esbuild*.mts` drivers that `tool_driver` names too. Its own
+/// marginal worth, once the tool-driver rule is in, is 7 ts and 7 js.
+///
+/// Read textually, because the value is a command line and not a path —
+/// only the tokens carrying a web extension are looked for, and only
+/// where they name a file that is really there.
+fn scripted_files(json: &serde_json::Value, dir: &Path) -> Vec<PathBuf> {
+    let Some(scripts) = json.get("scripts").and_then(|s| s.as_object()) else {
+        return Vec::new();
+    };
+    let commands = scripts.values().filter_map(|v| v.as_str());
+    commands.flat_map(|c| command_files(c, dir)).collect()
+}
+
+/// The files one command line names, followed through its own `cd`:
+/// immer runs its four benchmarks as `cd __performance_tests__ && node
+/// add-data.mjs && node todo.mjs`, and a token joined against the
+/// package root would have named nothing. A second `cd` is relative to
+/// the first, as a shell reads it.
+///
+/// A token that ARGUES A FLAG is not a file the command runs, and one
+/// of them inverts the claim outright: ariakit-test writes
+/// `"docs-react": "... --entry src/react.tsx ... --exclude src/index.ts"`,
+/// where `src/index.ts` is named precisely because it is not an entry.
+fn command_files(command: &str, dir: &Path) -> Vec<PathBuf> {
+    const NEGATED: &[&str] = &["--exclude", "--ignore", "--external", "--exclude-file"];
+    let mut base = dir.to_path_buf();
+    let mut out = Vec::new();
+    let mut tokens = command.split([' ', '\t', '"', '\'', '=']).peekable();
+    while let Some(token) = tokens.next() {
+        if token == "cd" {
+            base = tokens.next().map_or_else(|| base.clone(), |d| base.join(d));
+            continue;
+        }
+        if NEGATED.contains(&token) {
+            tokens.next();
+            continue;
+        }
+        let named = base.join(token.trim_start_matches("./"));
+        if crate::lang::web_extension(token) && named.is_file() {
+            out.push(named);
+        }
+    }
+    out
+}
+
+/// Every package this manifest declares, in any of the four fields.
+fn declared_dependencies(json: &serde_json::Value) -> Vec<Box<str>> {
+    const DEPENDENCY_FIELDS: &[&str] = &[
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ];
+    DEPENDENCY_FIELDS
+        .iter()
+        .filter_map(|f| json.get(f)?.as_object())
+        .flat_map(|o| o.keys())
+        .map(|k| k.as_str().into())
+        .collect()
+}
+
+/// A path's file name up to its first dot: `ipynbMain.node` is named
+/// after `ipynbMain`.
+fn first_segment(path: &Path) -> Option<Box<str>> {
+    let name = path.file_name()?.to_str()?;
+    Some(name.split('.').next().unwrap_or("").into())
+}
+
+/// `Path::with_extension` REPLACES a dotted stem: `ipynbMain.node` plus
+/// `ts` would have become `ipynbMain.ts`.
+fn with_suffix(base: &Path, ext: &str) -> PathBuf {
+    let mut named = base.as_os_str().to_os_string();
+    named.push(".");
+    named.push(ext);
+    PathBuf::from(named)
+}
+
+/// Every string in a JSON subtree: `exports` nests its conditions.
+fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => out.push(s.clone()),
+        serde_json::Value::Array(a) => a.iter().for_each(|v| collect_strings(v, out)),
+        serde_json::Value::Object(o) => o.values().for_each(|v| collect_strings(v, out)),
+        _ => {}
+    }
 }
 
 /// The root module of a dune library or executable, which the `dune`
@@ -1539,6 +1787,44 @@ fn glob_loaded(path: &Path) -> bool {
     // corpus's 132 config files DO have importers — trpc's per-package
     // `vitest.config.ts` files import a shared base.
     segments.any(|s| matches!(s, "stories" | "figma" | "config"))
+}
+
+/// A file at a package's ROOT whose first dot-segment names a package
+/// that manifest chain declares as a dependency. The same argument the
+/// `config` marker makes, with the tool named directly instead of
+/// through a middle segment: vscode's extensions declare `esbuild` and
+/// keep an `esbuild.mts` beside the manifest, which
+/// `build/lib/extensions.ts` opens by that exact name
+/// (`esbuildConfigFileName = forWeb ? 'esbuild.browser.mts' :
+/// 'esbuild.mts'`). 42 gold orphans are one.
+///
+/// The package root is load-bearing and was measured: without it, a
+/// `util` polyfill in vscode's devDependencies claims all 17 files
+/// named `util.ts` in the tree — 284 matches and 47 orphans. With it
+/// gold offers 177 matches, of which 173 are tool drivers; the other
+/// four are preact demos named after the library they demonstrate
+/// (`demo/mobx.jsx`, `demo/redux.jsx`, `demo/styled-components.jsx`,
+/// `demo/zustand.jsx`). That is the rule's real shape — it keys on "a
+/// declared dependency", not on "a tool" — and those four sit under a
+/// `demo/` directory the one-shot rule already excludes.
+///
+/// `entryish` and not `glob_loaded`: the two mechanisms remove the same
+/// orphan in every one of the 22 corpora, and the stronger one would
+/// additionally take 63 files out of the judged population and exempt
+/// them from the blocking-async check. Nothing is bought by it.
+fn tool_driver(path: &Path) -> bool {
+    let Some(dir) = path.parent().filter(|d| d.join("package.json").is_file()) else {
+        return false;
+    };
+    let Some(stem) = first_segment(path).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    dir.ancestors().any(|a| depends_on(a, &stem))
+}
+
+/// Does the manifest in this directory declare a package by this name?
+fn depends_on(dir: &Path, name: &str) -> bool {
+    package_entries(dir).is_some_and(|e| e.dependencies.iter().any(|d| **d == *name))
 }
 
 /// The judged population, and the share of it that nothing transitively
