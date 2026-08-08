@@ -158,9 +158,12 @@ pub fn pack() -> Pack {
 /// tigerbeetle's seven client-binding generators and river's two
 /// `common/` modules with no dependent at all.
 ///
-/// Only a `.zig` argument is a module reference; `b.path` also carries
-/// C sources, assets and directories. 113 `b.path("*.zig")` sites are
-/// spelled across the corpus and every one names a file in the tree.
+/// A `.zig` argument is a module reference and a C HEADER is one too —
+/// `Index::zig` hands the second to C's own resolver, keyed on the
+/// target's extension so that this and `@cInclude` share one path. Not a
+/// `.c`: a translation unit is linked rather than included. Not an asset
+/// or a directory. 113 `b.path("*.zig")` sites are spelled across the
+/// corpus and every one names a file in the tree.
 fn build_path<'a>(node: Node, src: &'a [u8]) -> Option<&'a str> {
     if node.kind() != "call_expression" {
         return None;
@@ -182,7 +185,19 @@ fn build_path<'a>(node: Node, src: &'a [u8]) -> Option<&'a str> {
         .named_children(&mut cursor)
         .find(|c| c.kind() == "string")?;
     let target = arg.utf8_text(src).ok()?.trim_matches('"');
-    target.ends_with(".zig").then_some(target)
+    // A build file names a file in this repository whatever language it
+    // is written in, and a C header is the other one Zig reaches for:
+    // river/build.zig:159 writes `.c_source_file = b.path("river/c.h")`,
+    // and ghostty installs `pnglibconf.h`, `libintl.h`,
+    // `freetype-zig.h` and `include/ghostty.h` the same way.
+    //
+    // `Index::zig` already hands a C-header target to C's own resolver —
+    // the routing keys on the extension rather than on the node, exactly
+    // so that this and `@cInclude` share one path. Filtering to `.zig`
+    // here is what stopped it: no `.h` was ever emitted, so that arm was
+    // reachable only from `@cInclude` and `c_header`'s own doc-comment
+    // described behaviour that did not happen.
+    (target.ends_with(".zig") || crate::lang::c_header(target)).then_some(target)
 }
 
 /// `const std = @import("std");` — refine reclassifies the call; the
@@ -414,6 +429,9 @@ mod tests {
     const c = b.path("src/vendor/lib.c");
     const d = self.path("src/other.zig");
     const e = b.addPath("src/third.zig");
+    const f = b.path("river/c.h");
+    const g = b.path("include/ghostty.h");
+    const h = b.path("README.md");
 }
 "#;
         let pack = super::pack();
@@ -428,6 +446,13 @@ mod tests {
             let mut cursor = node.walk();
             stack.extend(node.named_children(&mut cursor));
         }
-        assert_eq!(found, ["src/main_bench.zig"]);
+        // A `.zig` module and a C header, which `Index::zig` hands to
+        // C's own resolver. Not a `.c` — a translation unit is linked,
+        // not included — and not a document. The walk is a stack, so
+        // the later statements come out first.
+        assert_eq!(
+            found,
+            ["include/ghostty.h", "river/c.h", "src/main_bench.zig"]
+        );
     }
 }
