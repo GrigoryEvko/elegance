@@ -1,9 +1,19 @@
 [package]
-name = "elegance"
-version = "0.1.1"
+name = "elegance-rs"
+version = "0.2.0"
 edition = "2024"
 description = "Fast source-code metrics for clarity, simplicity and elegance"
 license = "MIT"
+repository = "https://github.com/GrigoryEvko/elegance"
+readme = "README.md"
+keywords = ["metrics", "static-analysis", "code-quality", "linter", "cli"]
+categories = ["development-tools", "command-line-utilities"]
+
+# The package is `elegance-rs` because `elegance` is taken by an
+# unrelated pretty-printing library. The COMMAND stays `elegance`.
+[[bin]]
+name = "elegance"
+path = "src/main.rs"
 
 [dependencies]
 ignore = "0.4.31"
@@ -44,5 +54,20 @@ num_cpus = "1.17"
 tikv-jemallocator = "0.7"
 
 [profile.release]
-lto = true
+opt-level = 3
+# Fat LTO across every crate, and one codegen unit so the optimizer sees
+# the whole program: the hot path is a tree walk calling through the
+# per-language `Pack` function pointers, which only inlines when the
+# caller and the callee are compiled together.
+lto = "fat"
 codegen-units = 1
+# No `catch_unwind` anywhere in the tree, and a panic in a rayon worker
+# already ends the run, so unwinding buys nothing and costs a landing
+# pad at every call that can panic.
+panic = "abort"
+# Size, not speed. A release build carries no debug info to begin with,
+# so this is worth 0.4 MB of 55.4; `strip = "symbols"` takes 2.3 MB but
+# costs the function names in a panic backtrace, which is the wrong
+# trade for a parser that meets code nobody here has seen. Almost all of
+# the binary is the twenty-two vendored grammars.
+strip = "debuginfo"
