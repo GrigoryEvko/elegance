@@ -1124,6 +1124,21 @@ fn qualified_after(src: &[u8], code: &[bool], at: usize) -> bool {
     name_end > start && next_code(src, code, name_end).is_some_and(|k| src[k..].starts_with(b"::"))
 }
 
+/// True when the `=` at `at` follows the designator of a braced
+/// initializer, as `.pad = {}` does.
+///
+/// The `,` after such a value opens the next designator, and not the
+/// next parameter, so the value is not a default argument. Blanking it
+/// leaves `.pad ,` and the list around it stops parsing.
+fn designator_before(src: &[u8], code: &[bool], at: usize) -> bool {
+    let Some(prev) = prev_code(src, code, at) else {
+        return false;
+    };
+    let word = word_before(src, prev + 1);
+    let start = prev + 1 - word.len();
+    !word.is_empty() && start > 0 && src[start - 1] == b'.'
+}
+
 /// True when `at` sits on a preprocessor directive line.
 ///
 /// The name a directive spells is not a declarator. Blanking
@@ -1370,6 +1385,30 @@ pub fn normalize(src: &str, macros: &crate::clangfmt::Macros) -> Option<String> 
                 cut!(i..i + b"export".len(), b' ');
             }
         }
+        // A braced default argument. The grammar reads `= Cfg{}` and
+        // `= 0`, and no `= {}`, which is ordinary C++11. What follows
+        // the closing brace is what says the value is one: a default
+        // argument ends at the next parameter or at the parameter list.
+        //
+        // An empty pair states value-initialization and carries no
+        // complexity, so it goes. A pair with something in it becomes
+        // parentheses instead of blanks, so that a call written inside
+        // a default is still a call that this tool counts.
+        if out[i] == b'='
+            && !designator_before(&out, &code, i)
+            && let Some(open) = next_code(&out, &code, i + 1).filter(|&k| out[k] == b'{')
+            && let Some(close) = match_close(&out, &code, open, b'{', b'}')
+            && next_code(&out, &code, close + 1).is_some_and(|k| matches!(out[k], b',' | b')'))
+        {
+            if next_code(&out, &code, open + 1) == Some(close) {
+                cut!(i..close + 1, b' ');
+            }
+            out[open] = b'(';
+            out[close] = b')';
+            touched = true;
+            i = close + 1;
+            continue;
+        }
         // A qualified name after `typename`. The keyword disambiguates
         // for the compiler and the grammar has no rule for it here.
         if word_at(&out, i, b"typename") && qualified_after(&out, &code, i + b"typename".len()) {
@@ -1488,8 +1527,11 @@ fn module_declaration(src: &[u8], code: &[bool], at: usize) -> Option<usize> {
 fn worth_reading(src: &[u8]) -> bool {
     src.windows(2)
         .any(|w| w == b"^^" || w == b"[:" || w == b"..")
-        // A quote, a space, and the start of a name: the shape of a
-        // macro that expands to a string. No word spells that one.
+        // A brace that opens a value, which is the shape of a braced
+        // default argument. And a quote, a space, and the start of a
+        // name, which is a macro that expands to a string.
+        || src.windows(2).any(|w| w == b"={")
+        || src.windows(3).any(|w| w == b"= {")
         || src.windows(3).any(|w| {
             w[0] == b'"' && w[1].is_ascii_whitespace() && (w[2].is_ascii_alphabetic() || w[2] == b'_')
         })
@@ -2162,5 +2204,47 @@ mod tests {
         );
         assert!(out.contains("#ifdef KEEP_ALIVE"), "the guard went: {out}");
         assert!(!out.contains("int a KEEP_ALIVE"), "the use stayed: {out}");
+    }
+    #[test]
+    fn a_braced_default_argument_parses_and_keeps_the_calls_in_it() {
+        for src in [
+            "void f(int x = {}) { }\n",
+            "void f(Cfg c = {}) { }\n",
+            "void f(Cfg = {}) { }\n",
+            "void f(std::type_identity<Row> = {}) { }\n",
+            "struct S { S(Cfg c = {}) noexcept : c_{c} {} Cfg c_; };\n",
+            "void f(Cfg c = {1, 2}) { }\n",
+        ] {
+            same_length(src);
+            assert!(normalize(src).is_some(), "not rewritten: {src}");
+            assert!(!normalized(src).low_confidence(), "still fails: {src}");
+        }
+        // A value becomes parentheses and not blanks, so a call written
+        // in a default is a call this tool still counts.
+        let out = normalize("void f(Cfg c = {compute(), 2}) { }\n").unwrap();
+        assert!(
+            out.contains("compute()"),
+            "the call went with the braces: {out}"
+        );
+        // A braced initializer that is not a default argument already
+        // parses, and nothing here may touch it.
+        for kept in ["int x = {};\n", "struct S { int x = {}; };\n"] {
+            assert_eq!(normalize(kept), None, "rewrote an initializer: {kept}");
+        }
+    }
+    #[test]
+    fn a_designated_initializer_is_not_a_default_argument() {
+        // `.pad = {},` sits in a braced list, where the comma opens the
+        // next designator. Blanking the value leaves `.pad ,` and the
+        // list stops parsing, which is worse than what it replaced.
+        let src = "void f() {\n\
+                   \x20 Meta m = {.layout = Strided,\n\
+                   \x20            .pad = {},\n\
+                   \x20            .slot = SlotId{SL_X},\n\
+                   \x20            .pad2 = {}};\n\
+                   \x20 use(m);\n\
+                   }\n";
+        assert_eq!(normalize(src), None, "a designator was read as a default");
+        assert!(!normalized(src).low_confidence());
     }
 }
