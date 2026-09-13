@@ -964,6 +964,30 @@ fn open_paren_of(src: &[u8], code: &[bool], close: usize) -> Option<usize> {
     None
 }
 
+/// The `<` that opens the template header closed by the `>` at `close`.
+fn angle_open(src: &[u8], code: &[bool], close: usize) -> Option<usize> {
+    let mut depth = 0u32;
+    for i in (0..=close).rev() {
+        if !code[i] {
+            continue;
+        }
+        match src[i] {
+            b'>' => depth += 1,
+            b'<' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            // A header holds no statement, so anything that ends one
+            // says the `>` was a comparison.
+            b';' | b'{' | b'}' => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
 /// True when the parameter list that ends at `close` belongs to a
 /// declaration, and not to a call in an expression.
 ///
@@ -992,6 +1016,14 @@ fn declares_a_function(src: &[u8], code: &[bool], close: usize) -> bool {
             b')' | b']' => depth += 1,
             b'(' | b'[' if depth == 0 => return false,
             b'(' | b'[' => depth -= 1,
+            // A template header ends in `>`, and a default template
+            // argument spells an `=` inside it. Reading that `=` as an
+            // assignment rejects every contract clause on a template.
+            // The scan steps over the whole header instead.
+            b'>' if depth == 0 => match angle_open(src, code, i) {
+                Some(open) => i = open,
+                None => return true,
+            },
             b'=' | b'?' if depth == 0 => return false,
             b';' | b'{' | b'}' if depth == 0 => return true,
             byte if depth == 0 && is_word(byte) => {
@@ -1291,6 +1323,18 @@ pub fn normalize(src: &str, macros: &crate::clangfmt::Macros) -> Option<String> 
             if let Some(end) = end {
                 cut!(i..end, b'_');
             }
+        }
+        // An attribute before `friend`. The grammar reads `friend` and
+        // it reads an attribute, and not the two together. An attribute
+        // carries no complexity, so the declaration keeps everything it
+        // had.
+        if out[i] == b'['
+            && out.get(i + 1) == Some(&b'[')
+            && let Some(close) = match_close(&out, &code, i, b'[', b']')
+            && out.get(close.wrapping_sub(1)) == Some(&b']')
+            && next_code(&out, &code, close + 1).is_some_and(|k| word_at(&out, k, b"friend"))
+        {
+            cut!(i..close + 1, b' ');
         }
         // P3394 annotation. An attribute that starts with `=` carries
         // an expression, and an attribute is not a unit of complexity.
@@ -2245,6 +2289,41 @@ mod tests {
                    \x20 use(m);\n\
                    }\n";
         assert_eq!(normalize(src), None, "a designator was read as a default");
+        assert!(!normalized(src).low_confidence());
+    }
+    #[test]
+    fn an_attribute_before_friend_goes_and_the_declaration_stays() {
+        // The grammar reads `friend`, and it reads an attribute, and
+        // not the two together.
+        for src in [
+            "struct S { [[nodiscard]] friend bool ok(S const& s) { return true; } };\n",
+            "struct S { [[nodiscard]] friend constexpr bool ok(S const& s); };\n",
+            "template <class T> struct S { [[nodiscard]] friend constexpr bool ok(S const& s) { return true; } };\n",
+        ] {
+            same_length(src);
+            let out = normalize(src).expect("the attribute must go");
+            assert!(out.contains("friend"), "the declaration went: {out}");
+            assert!(!out.contains("nodiscard"), "the attribute stayed: {out}");
+            assert!(!normalized(src).low_confidence(), "still fails: {src}");
+        }
+        // An attribute that stands anywhere else already parses.
+        assert_eq!(normalize("[[nodiscard]] int f() { return 1; }\n"), None);
+    }
+
+    #[test]
+    fn a_contract_clause_reads_under_a_defaulted_template_parameter() {
+        // `template <class R = Row>` spells an `=` that is a default
+        // template argument, not an assignment. A scan that reads it as
+        // one rejects every contract clause on a template.
+        let src = "template <class R = Row>\n\
+                   struct Pool {\n\
+                   \x20 explicit Pool(unsigned n)\n\
+                   \x20     pre(n >= 8)\n\
+                   \x20     : n_{n} {}\n\
+                   \x20 unsigned n_;\n\
+                   };\n";
+        same_length(src);
+        assert!(normalize(src).is_some(), "the clause was read as a call");
         assert!(!normalized(src).low_confidence());
     }
 }
