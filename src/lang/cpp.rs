@@ -30,6 +30,7 @@
 use tree_sitter::Node;
 
 use super::{CatchSin, Lang, Pack, ParamInfo, field_text_is, sem_table};
+use crate::clangfmt::Kind;
 use crate::sem::Sem;
 
 pub enum Dialect {
@@ -827,17 +828,20 @@ fn blank(out: &mut [u8], range: std::ops::Range<usize>, fill: u8) {
     }
 }
 
-/// Write `text` at the start of a span and blank the rest of it. The
-/// span must hold the text and must have no line break.
-fn overwrite(out: &mut [u8], range: std::ops::Range<usize>, text: &[u8]) {
-    debug_assert!(range.len() >= text.len(), "a rewrite grew the source");
-    debug_assert!(
-        !out[range.clone()].contains(&b'\n'),
-        "a rewrite crossed a line break"
-    );
+/// Write `text` at the start of a span and blank the rest of it.
+///
+/// False when the span cannot hold the text, or when a line break runs
+/// through where the text would go. Nothing is written then, because a
+/// rewrite that grows the source or eats a line break moves every
+/// finding below it. Each caller has an answer for false that is safe.
+fn overwrite(out: &mut [u8], range: std::ops::Range<usize>, text: &[u8]) -> bool {
     let start = range.start;
+    if range.len() < text.len() || out[start..start + text.len()].contains(&b'\n') {
+        return false;
+    }
     blank(out, range, b' ');
     out[start..start + text.len()].copy_from_slice(text);
+    true
 }
 
 /// The last code byte before `at` that is not whitespace.
@@ -1028,9 +1032,10 @@ fn contract_clause(src: &[u8], code: &[bool], at: usize, name_end: usize) -> Opt
     let close = match_paren(src, code, open)?;
 
     // 3. What follows a clause is a body, a declaration end, another
-    //    clause, or a trailing return type.
+    //    clause, a trailing return type, or the initializer list of a
+    //    constructor. A call is followed by an operator or an argument.
     let follows = next_code(src, code, close + 1)?;
-    let tail_ok = matches!(src[follows], b'{' | b';' | b'-' | b'=')
+    let tail_ok = matches!(src[follows], b'{' | b';' | b'-' | b'=' | b':')
         || word_at(src, follows, b"pre")
         || word_at(src, follows, b"post")
         || QUALIFIERS.contains(&&src[follows..word_end(src, follows)]);
@@ -1105,6 +1110,74 @@ fn reflect_operand_end(src: &[u8], code: &[bool], at: usize) -> Option<usize> {
     end
 }
 
+/// True when a qualified name follows `at`. `typename` before one is a
+/// disambiguator the grammar reads without, and `typename` in a
+/// template parameter list is followed by a plain name instead.
+fn qualified_after(src: &[u8], code: &[bool], at: usize) -> bool {
+    let Some(start) = next_code(src, code, at) else {
+        return false;
+    };
+    if src[start..].starts_with(b"::") {
+        return true;
+    }
+    let name_end = word_end(src, start);
+    name_end > start && next_code(src, code, name_end).is_some_and(|k| src[k..].starts_with(b"::"))
+}
+
+/// True when `at` sits on a preprocessor directive line.
+///
+/// The name a directive spells is not a declarator. Blanking
+/// `CRUCIBLE_INLINE` in the `#define` that writes it leaves `#define`
+/// with nothing to define, and every declaration under it stops
+/// parsing. `#undef` and `#ifdef` name it the same way.
+fn on_a_directive(src: &[u8], at: usize) -> bool {
+    (0..at)
+        .rev()
+        .take_while(|&k| src[k] != b'\n')
+        .filter(|&k| !src[k].is_ascii_whitespace())
+        .last()
+        .is_some_and(|k| src[k] == b'#')
+}
+
+/// True when a string literal ends earlier on the same line as `at`,
+/// with whitespace between the two.
+///
+/// A name in that position can only be a macro that expands to a
+/// string: `"%016" PRIx64` is one literal to the compiler, and C++ puts
+/// nothing else after a literal. Two details carry the rule.
+///
+/// The space is one. A user-defined literal writes its suffix against
+/// the quote, so `""_km` names an operator and keeps its name.
+///
+/// The line is the other, and without it the rule is a defect. An
+/// include line ends with a quote, and the declaration under it opens
+/// with a name: `#include "config.h"` over `namespace crucible {`
+/// blanks the namespace and every file that holds one stops parsing.
+fn follows_a_string(src: &[u8], code: &[bool], at: usize) -> bool {
+    if at == 0 || !src[at - 1].is_ascii_whitespace() {
+        return false;
+    }
+    let Some(quote) = (0..at)
+        .rev()
+        .take_while(|&k| src[k] != b'\n')
+        .find(|&k| !src[k].is_ascii_whitespace())
+        .filter(|&k| src[k] == b'"' && !code[k])
+    else {
+        return false;
+    };
+    // Two declarations put a name after a string of their own.
+    // `extern "C" int f()` states a linkage, and `operator "" _km`
+    // names a literal operator. The word before the string tells them
+    // from a macro, so the scan reads back over the literal to find it.
+    let opens = (0..=quote)
+        .rev()
+        .take_while(|&k| !code[k])
+        .last()
+        .unwrap_or(quote);
+    !prev_code(src, code, opens)
+        .is_some_and(|p| matches!(word_before(src, p + 1), b"extern" | b"operator"))
+}
+
 /// C++ syntax the bundled grammar cannot read, rewritten into syntax it
 /// can, with every byte offset left where it was.
 ///
@@ -1144,9 +1217,9 @@ fn reflect_operand_end(src: &[u8], code: &[bool], at: usize) -> Option<usize> {
 /// no rule here covers stays a parse error, and `--errors` names the
 /// file and the line. That is the signal to add a rule. The failure
 /// mode is loud on purpose.
-pub fn normalize(src: &str) -> Option<String> {
+pub fn normalize(src: &str, macros: &crate::clangfmt::Macros) -> Option<String> {
     let bytes = src.as_bytes();
-    if !worth_reading(bytes) {
+    if !worth_reading(bytes) && macros.is_empty() {
         return None;
     }
 
@@ -1277,8 +1350,9 @@ pub fn normalize(src: &str) -> Option<String> {
             let bang = prev_code(&out, &code, i).filter(|&p| out[p] == b'!');
             let start = bang.unwrap_or(i);
             let before = prev_code(&out, &code, start);
-            if before.is_some_and(|p| word_before(&out, p + 1) == b"if") {
-                overwrite(&mut out, start..end, b"(true)");
+            if before.is_some_and(|p| word_before(&out, p + 1) == b"if")
+                && overwrite(&mut out, start..end, b"(true)")
+            {
                 touched = true;
                 i = end;
                 continue;
@@ -1294,6 +1368,79 @@ pub fn normalize(src: &str) -> Option<String> {
             }
             if word_at(&out, i, b"export") {
                 cut!(i..i + b"export".len(), b' ');
+            }
+        }
+        // A qualified name after `typename`. The keyword disambiguates
+        // for the compiler and the grammar has no rule for it here.
+        if word_at(&out, i, b"typename") && qualified_after(&out, &code, i + b"typename".len()) {
+            cut!(i..i + b"typename".len(), b' ');
+        }
+        // A name that follows a string literal expands to one.
+        if is_word(out[i]) && (i == 0 || !is_word(out[i - 1])) && follows_a_string(&out, &code, i) {
+            cut!(i..word_end(&out, i), b' ');
+        }
+        // A macro the project declared to clang-format. The grammar
+        // has no rule for a bare token in a declarator, and the name is
+        // the only thing that says one is there.
+        if !macros.is_empty()
+            && is_word(out[i])
+            && (i == 0 || !is_word(out[i - 1]))
+            && !on_a_directive(&out, i)
+            && let Some(kind) = macros.kind(&out[i..word_end(&out, i)])
+        {
+            let name_end = word_end(&out, i);
+            // The argument list, when the macro takes one. It goes with
+            // the name, because what remains has to stand on its own
+            // and `(a, b);` is not a declaration at namespace scope.
+            let args = next_code(&out, &code, name_end)
+                .filter(|&k| out[k] == b'(')
+                .and_then(|open| match_paren(&out, &code, open).map(|close| (open, close)));
+            let call_end = args.map_or(name_end, |(_, close)| close + 1);
+            match kind {
+                // It expands to an attribute, which is not complexity.
+                Kind::Attribute => cut!(i..name_end, b' '),
+                Kind::Statement => cut!(i..call_end, b' '),
+                // The body stays a loop, because the macro writes one.
+                // A name too short to hold `for (;;)` leaves a plain
+                // block, which parses and counts one loop less.
+                Kind::ForEach => {
+                    if overwrite(&mut out, i..call_end, b"for (;;)") {
+                        touched = true;
+                        i = call_end;
+                        continue;
+                    }
+                    cut!(i..call_end, b' ')
+                }
+                // The branch stays a branch, and it keeps its condition.
+                Kind::Branch => {
+                    if overwrite(&mut out, i..name_end, b"if") {
+                        touched = true;
+                        i = name_end;
+                        continue;
+                    }
+                    cut!(i..call_end, b' ')
+                }
+                // The argument IS the type, so only the name and the
+                // two parentheses around it go, and the type stays
+                // where the declaration put it.
+                Kind::Typename => {
+                    if let Some((open, close)) = args {
+                        blank(&mut out, i..open + 1, b' ');
+                        blank(&mut out, close..close + 1, b' ');
+                        touched = true;
+                        i = close + 1;
+                        continue;
+                    }
+                    cut!(i..name_end, b' ')
+                }
+                Kind::Namespace => {
+                    if overwrite(&mut out, i..call_end, b"namespace") {
+                        touched = true;
+                        i = call_end;
+                        continue;
+                    }
+                    cut!(i..call_end, b' ')
+                }
             }
         }
         i += 1;
@@ -1341,6 +1488,11 @@ fn module_declaration(src: &[u8], code: &[bool], at: usize) -> Option<usize> {
 fn worth_reading(src: &[u8]) -> bool {
     src.windows(2)
         .any(|w| w == b"^^" || w == b"[:" || w == b"..")
+        // A quote, a space, and the start of a name: the shape of a
+        // macro that expands to a string. No word spells that one.
+        || src.windows(3).any(|w| {
+            w[0] == b'"' && w[1].is_ascii_whitespace() && (w[2].is_ascii_alphabetic() || w[2] == b'_')
+        })
         || [
             &b"delete"[..],
             b"template",
@@ -1348,6 +1500,7 @@ fn worth_reading(src: &[u8]) -> bool {
             b"post",
             b"this",
             b"consteval",
+            b"typename",
             b"export",
             b"module",
             b"import",
@@ -1359,7 +1512,19 @@ fn worth_reading(src: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize;
+    use super::normalize as rewrite;
+    use crate::clangfmt::Macros;
+
+    /// A project that declares nothing, which is what every test about
+    /// the standard syntax measures against.
+    fn normalize(src: &str) -> Option<String> {
+        rewrite(src, &Macros::default())
+    }
+
+    /// The same rewrite, against a project that declared these names.
+    fn with_macros(src: &str, yaml: &str) -> Option<String> {
+        rewrite(src, &Macros::read(yaml))
+    }
     use crate::facts::extract;
     use crate::lang::Lang;
     use crate::sem::Sem;
@@ -1842,5 +2007,160 @@ mod tests {
     #[test]
     fn a_file_without_any_of_it_is_not_copied() {
         assert_eq!(normalize("int main() { return 0; }\n"), None);
+    }
+    /// What a project declares, and what each declaration has to do to
+    /// the one line under it.
+    const DECLARED: &str = "AttributeMacros: [KEEP_ALIVE]\n\
+                            StatementMacros: [LAYOUT_INVARIANT]\n\
+                            ForEachMacros: [for_each_slot]\n\
+                            IfMacros: [IF_SOME]\n\
+                            TypenameMacros: [STACK_OF]\n\
+                            NamespaceMacros: [TESTSUITE]\n";
+
+    #[test]
+    fn a_declared_macro_stops_being_a_parse_error() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "an attribute in a declarator",
+                "int* keep(int& a KEEP_ALIVE) KEEP_ALIVE { return &a; }\n",
+            ),
+            (
+                "a whole declaration at namespace scope",
+                "LAYOUT_INVARIANT(Alias, int);\nint f() { return 1; }\n",
+            ),
+            (
+                "a loop over a range",
+                "void f(Table t) { for_each_slot(s, t) { use(s); } }\n",
+            ),
+            (
+                "a branch",
+                "void f(Maybe m) { IF_SOME(x, m) { use(x); } }\n",
+            ),
+            ("a type", "STACK_OF(Frame)* frames() { return 0; }\n"),
+            ("a namespace", "TESTSUITE(Pool) { int f() { return 1; } }\n"),
+        ];
+        for (what, src) in cases {
+            let out = with_macros(src, DECLARED);
+            let text = out.clone().unwrap_or_else(|| src.to_string());
+            assert_eq!(text.len(), src.len(), "{what}: a rewrite moved an offset");
+            assert!(out.is_some(), "{what}: the declaration was not read");
+            let pack = Lang::Cpp.pack();
+            let f = extract(pack, &mut pack.make_parser(), Path::new("t.cpp"), &text);
+            assert!(!f.low_confidence(), "{what}: still fails to parse");
+        }
+    }
+
+    #[test]
+    fn a_loop_macro_stays_a_loop_and_a_branch_macro_stays_a_branch() {
+        // Blanking either one would leave a bare block, which parses
+        // and reports one control structure less than the code has.
+        let loops = with_macros("void f(T t) { for_each_slot(s, t) { g(s); } }\n", DECLARED);
+        assert!(loops.is_some_and(|t| t.contains("for (;;)")), "not a loop");
+        let branch = with_macros("void f(T m) { IF_SOME(x, m) { g(x); } }\n", DECLARED).unwrap();
+        let head = branch.split_once('{').unwrap().1.trim_start();
+        assert!(head.starts_with("if "), "not a branch: {branch}");
+        assert!(branch.contains("(x, m)"), "the condition went: {branch}");
+    }
+
+    #[test]
+    fn a_type_macro_keeps_the_type_it_wraps() {
+        // The argument IS the type. Blanking it with the name would
+        // leave a declaration with nothing to declare.
+        let out = with_macros("STACK_OF(Frame)* frames() { return 0; }\n", DECLARED).unwrap();
+        assert!(out.contains("Frame"), "the type went with the macro: {out}");
+        assert!(out.trim_start().starts_with("Frame"), "{out}");
+    }
+
+    #[test]
+    fn a_macro_the_project_did_not_declare_is_left_alone() {
+        // The name is the whole of what identifies one. A tool that
+        // guessed would blank real work and report less than is there.
+        assert_eq!(
+            with_macros("int f(int a UNDECLARED) { return a; }\n", DECLARED),
+            None
+        );
+    }
+
+    #[test]
+    fn a_declaration_does_not_reach_a_word_that_merely_contains_it() {
+        // `KEEP_ALIVE` is declared; `KEEP_ALIVE_2` is another name.
+        let src = "int KEEP_ALIVE_2 = 1;\nint f() { return KEEP_ALIVE_2; }\n";
+        assert_eq!(with_macros(src, DECLARED), None);
+    }
+    #[test]
+    fn typename_before_a_qualified_name_goes_and_a_template_parameter_keeps_it() {
+        let dependent = "void f() { g(typename sriov::VfIndex::Trusted{}); }\n";
+        same_length(dependent);
+        assert!(normalize(dependent).is_some(), "typename must go here");
+        assert!(!normalized(dependent).low_confidence());
+        // A template parameter list spells a plain name after the word,
+        // and blanking it there would turn the parameter into a value.
+        for kept in [
+            "template <typename T> void f(T x) { }\n",
+            "template <typename... Ts> void f(Ts... a) { }\n",
+            "template <template <typename> class C> void f() { }\n",
+        ] {
+            assert_eq!(normalize(kept), None, "a template parameter kept its word");
+        }
+    }
+
+    #[test]
+    fn a_name_after_a_string_literal_is_a_macro_that_expands_to_one() {
+        let src = "void f(long v) { printf(\"%016\" PRIx64 \"\\n\", v); }\n";
+        same_length(src);
+        let out = normalize(src).expect("the macro must go");
+        assert!(!out.contains("PRIx64"), "{out}");
+        assert!(!normalized(src).low_confidence());
+    }
+
+    #[test]
+    fn an_include_does_not_reach_the_declaration_under_it() {
+        // The rule above reads back to a quote. Without a line to stop
+        // it, `#include "config.h"` blanks the `namespace` below it and
+        // every file that holds one stops parsing.
+        let src = "#include \"config.h\"\nnamespace crucible {\nint f() { return 1; }\n}\n";
+        assert_eq!(normalize(src), None, "the include reached past its line");
+        assert!(!normalized(src).low_confidence());
+    }
+
+    #[test]
+    fn a_user_defined_literal_keeps_its_suffix() {
+        // The suffix is written against the quote, and it names the
+        // operator. Only a space makes the name a separate token.
+        let src = "constexpr int operator\"\"_km(unsigned long long v) { return (int)v; }\n";
+        assert_eq!(normalize(src), None, "the suffix went with the literal");
+    }
+    #[test]
+    fn a_declaration_that_states_a_string_of_its_own_keeps_its_name() {
+        // A name after a string is a macro, EXCEPT in the two
+        // declarations that put a string of their own in front of one.
+        // Blanking either leaves a declaration with no declarator.
+        for kept in [
+            "extern \"C\" int fuzz_one(const char* data, int size);\n",
+            "extern \"C++\" void g();\n",
+            "extern \"C\" {\nint h(int a);\n}\n",
+            "constexpr int operator \"\" _km(unsigned long long v) { return (int)v; }\n",
+        ] {
+            assert_eq!(normalize(kept), None, "a rewrite ate a declarator: {kept}");
+            assert!(!normalized(kept).low_confidence(), "{kept}");
+        }
+    }
+
+    #[test]
+    fn a_macro_is_not_rewritten_in_the_directive_that_defines_it() {
+        // `#define KEEP_ALIVE [[gnu::always_inline]]` names the macro on
+        // a line that is not a declarator. Blanking it there leaves
+        // `#define` with nothing to define, and the file stops parsing.
+        let src = "#define KEEP_ALIVE [[gnu::always_inline]]\n\
+                   #ifdef KEEP_ALIVE\n\
+                   int f(int a KEEP_ALIVE) { return a; }\n\
+                   #endif\n";
+        let out = with_macros(src, DECLARED).expect("the declarator use is rewritten");
+        assert!(
+            out.contains("#define KEEP_ALIVE"),
+            "the definition went: {out}"
+        );
+        assert!(out.contains("#ifdef KEEP_ALIVE"), "the guard went: {out}");
+        assert!(!out.contains("int a KEEP_ALIVE"), "the use stayed: {out}");
     }
 }

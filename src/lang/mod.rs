@@ -334,11 +334,14 @@ impl Lang {
     /// of its scope — so a pack that has drifted reports the complexity
     /// of a tree that never matched the code. Only C++ needs this today.
     ///
+    /// `macros` names what the project declared to clang-format, which
+    /// is the only thing that identifies a macro in a declarator.
+    ///
     /// Every rewrite preserves byte offsets, because the line a finding
     /// prints is an offset into this text.
-    pub fn normalize(self, src: &str) -> Option<String> {
+    pub fn normalize(self, src: &str, macros: &crate::clangfmt::Macros) -> Option<String> {
         match self {
-            Lang::Cpp | Lang::Cuda => cpp::normalize(src),
+            Lang::Cpp | Lang::Cuda => cpp::normalize(src, macros),
             _ => None,
         }
     }

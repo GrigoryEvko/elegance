@@ -2,6 +2,7 @@ mod api;
 mod cache;
 mod calibrate;
 mod ci;
+mod clangfmt;
 mod config;
 mod context;
 mod coupling;
@@ -109,6 +110,11 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = parse_args()?;
+    // Before any file is read: the C++ rewrite needs the macro names
+    // the project declares, and `--errors` on one file needs them too.
+    let macros = clangfmt::Registry::discover(&args.roots[0]);
+    let declared = macros.count();
+    clangfmt::install(macros);
     if single_file_mode(&args)? {
         return Ok(());
     }
@@ -133,11 +139,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let shape = shape(&args);
     let complete = shape != Shape::Brief;
     let layers = config::layers(&args.roots[0])?;
-    // A reader of one table should know it is not one budget.
-    match layers.count() {
-        0 => {}
-        1 => println!("1 package sets its own budgets\n"),
-        n => println!("{n} packages set their own budgets\n"),
+    // What the run read before it read any code. Machine output carries
+    // one document and nothing else, so neither line says anything
+    // there: a line above the JSON is a parse error for whatever reads
+    // it.
+    if !matches!(shape, Shape::Json | Shape::Sarif) {
+        // A reader of one table should know it is not one budget.
+        match layers.count() {
+            0 => {}
+            1 => println!("1 package sets its own budgets\n"),
+            n => println!("{n} packages set their own budgets\n"),
+        }
+        // A reader who declared the names should see that they arrived.
+        if declared > 0 {
+            println!("{declared} macro names read from .clang-format\n");
+        }
     }
     let wants = wants_for(shape);
     let mut agg = scan(&files, layers, complete, wants);
@@ -446,7 +462,7 @@ fn measurable<'a>(
             // that uses contracts or reflection from reporting the
             // complexity of a tree that never matched the code.
             let text = lang
-                .normalize(source)
+                .normalize(source, clangfmt::for_file(path))
                 .map_or(std::borrow::Cow::Borrowed(source), std::borrow::Cow::Owned);
             (lang, text)
         });
