@@ -328,6 +328,21 @@ impl Lang {
         DESCS.iter().find(|d| d.exts.contains(&ext)).map(|d| d.lang)
     }
 
+    /// Source rewritten into what this pack's grammar can read, or
+    /// `None` when it already reads it. A grammar lags its language, and
+    /// a parse error is not local — the failing node swallows the rest
+    /// of its scope — so a pack that has drifted reports the complexity
+    /// of a tree that never matched the code. Only C++ needs this today.
+    ///
+    /// Every rewrite preserves byte offsets, because the line a finding
+    /// prints is an offset into this text.
+    pub fn normalize(self, src: &str) -> Option<String> {
+        match self {
+            Lang::Cpp | Lang::Cuda => cpp::normalize(src),
+            _ => None,
+        }
+    }
+
     /// The language a file is MEASURED as. `.h` is the one extension in
     /// this tool that underdetermines its language, and reading it as C
     /// unconditionally is measurably wrong: of leveldb's 56 headers 47

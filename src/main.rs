@@ -439,8 +439,17 @@ fn measurable<'a>(
     source: &'a str,
 ) -> Option<(Lang, std::borrow::Cow<'a, str>)> {
     let Some(container) = ci::Container::of(path) else {
-        return Lang::of_source(path, source)
-            .map(|lang| (lang, std::borrow::Cow::Borrowed(source)));
+        return Lang::of_source(path, source).map(|lang| {
+            // C++26 ships syntax the bundled grammar cannot read, and a
+            // parse error swallows the rest of its scope rather than
+            // just itself. Normalising first is what keeps a header
+            // that uses contracts or reflection from reporting the
+            // complexity of a tree that never matched the code.
+            let text = lang
+                .normalize(source)
+                .map_or(std::borrow::Cow::Borrowed(source), std::borrow::Cow::Owned);
+            (lang, text)
+        });
     };
     let owned = |lang: Lang, text: String| (lang, std::borrow::Cow::Owned(text));
     match container {
