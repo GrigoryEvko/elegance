@@ -607,6 +607,16 @@ const BUILTIN_TYPES: [&[u8]; 16] = [
     b"nullptr_t",
 ];
 
+/// The specifiers a lambda can carry. The grammar reads each one after
+/// a parameter list and none of them without one.
+const LAMBDA_SPECIFIERS: [&[u8]; 5] = [
+    b"consteval",
+    b"constexpr",
+    b"static",
+    b"mutable",
+    b"noexcept",
+];
+
 /// The keywords that take a parenthesized condition. A `)` that closes
 /// one of these is the end of a condition, and never the end of the
 /// parameter list of a function.
@@ -1266,10 +1276,16 @@ fn follows_a_string(src: &[u8], code: &[bool], at: usize) -> bool {
 /// mode is loud on purpose.
 pub fn normalize(src: &str, macros: &crate::clangfmt::Macros) -> Option<String> {
     let bytes = src.as_bytes();
-    if !worth_reading(bytes) && macros.is_empty() {
-        return None;
-    }
-
+    // There is no cheap reject before this, on purpose. One used to
+    // test the file for the words the rewrites key on, and it cost
+    // three defects of one shape: a rule was added, its trigger was
+    // not, and the rule then did nothing on a file that needed it. The
+    // failure was silent every time, because a file that is not
+    // rewritten still parses and still reports.
+    //
+    // The test saved 0.2 seconds over 3282 files and suppressed 15 of
+    // them. A pass over the source costs less than a measurement that
+    // is quietly wrong.
     let code = code_mask(bytes);
     let mut out = bytes.to_vec();
     let mut touched = false;
@@ -1401,6 +1417,22 @@ pub fn normalize(src: &str, macros: &crate::clangfmt::Macros) -> Option<String> 
             && next_code(&out, &code, i + b"this".len()).is_some_and(|k| is_word(out[k]))
         {
             cut!(i..i + b"this".len(), b' ');
+        }
+        // A lambda specifier with no parameter list. `[] consteval {}`
+        // is C++23, and the grammar reads the word only after a `()`
+        // that this lambda does not write. A specifier states how the
+        // body may be called and adds nothing to measure.
+        //
+        // The introducer is what identifies one. A `]]` before the word
+        // closes an attribute instead, and `[[nodiscard]] constexpr` is
+        // an ordinary declaration that already reads.
+        if is_word(out[i])
+            && (i == 0 || !is_word(out[i - 1]))
+            && LAMBDA_SPECIFIERS.contains(&&out[i..word_end(&out, i)])
+            && prev_code(&out, &code, i)
+                .is_some_and(|p| out[p] == b']' && (p == 0 || out[p - 1] != b']'))
+        {
+            cut!(i..word_end(&out, i), b' ');
         }
         // P1938 `if consteval`. The branch is an ordinary branch, and
         // the condition it takes is a constant.
@@ -1563,37 +1595,6 @@ fn module_declaration(src: &[u8], code: &[bool], at: usize) -> Option<usize> {
     }
     let end = (i..src.len()).find(|&k| code[k] && src[k] == b';')?;
     Some(end + 1)
-}
-
-/// True when the source holds a byte that one of the rewrites needs.
-/// The scan below costs two allocations of the length of the file, and
-/// a file of plain C++ pays for neither.
-fn worth_reading(src: &[u8]) -> bool {
-    src.windows(2)
-        .any(|w| w == b"^^" || w == b"[:" || w == b"..")
-        // A brace that opens a value, which is the shape of a braced
-        // default argument. And a quote, a space, and the start of a
-        // name, which is a macro that expands to a string.
-        || src.windows(2).any(|w| w == b"={")
-        || src.windows(3).any(|w| w == b"= {")
-        || src.windows(3).any(|w| {
-            w[0] == b'"' && w[1].is_ascii_whitespace() && (w[2].is_ascii_alphabetic() || w[2] == b'_')
-        })
-        || [
-            &b"delete"[..],
-            b"template",
-            b"pre",
-            b"post",
-            b"this",
-            b"consteval",
-            b"typename",
-            b"export",
-            b"module",
-            b"import",
-            b"[[",
-        ]
-        .iter()
-        .any(|needle| find(src, 0, needle).is_some())
 }
 
 #[cfg(test)]
@@ -2325,5 +2326,31 @@ mod tests {
         same_length(src);
         assert!(normalize(src).is_some(), "the clause was read as a call");
         assert!(!normalized(src).low_confidence());
+    }
+    #[test]
+    fn a_lambda_specifier_with_no_parameter_list_goes() {
+        // `[] consteval {}` is C++23. The grammar reads each specifier
+        // after a `()` and none of them without one.
+        for src in [
+            "auto f = [] consteval { return 1; };\n",
+            "auto f = [] constexpr { return 1; };\n",
+            "auto f = [] static { return 1; };\n",
+            "auto f = [] mutable { return 1; };\n",
+            "auto f = [] noexcept { return 1; };\n",
+            "auto f = [x] consteval { return x; };\n",
+        ] {
+            same_length(src);
+            assert!(normalize(src).is_some(), "not rewritten: {src}");
+            assert!(!normalized(src).low_confidence(), "still fails: {src}");
+        }
+        // A `]]` before the word closes an attribute, and the
+        // declaration under it keeps its specifier.
+        for kept in [
+            "[[nodiscard]] constexpr int f() { return 1; }\n",
+            "struct S { [[nodiscard]] static constexpr int f() { return 1; } };\n",
+            "auto f = []() consteval { return 1; };\n",
+        ] {
+            assert_eq!(normalize(kept), None, "rewrote a declaration: {kept}");
+        }
     }
 }
