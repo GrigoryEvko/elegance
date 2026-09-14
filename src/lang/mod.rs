@@ -7,6 +7,10 @@ mod c;
 mod cpp;
 mod csharp;
 mod elixir;
+/// The C++ text with what a Clang does not read removed, and the
+/// constructs that no removal keeps the meaning of. `elegance tidy`
+/// reads both.
+pub(crate) use cpp::{clang_gaps, lower_for_clang};
 /// A module name written the way Elixir writes it as a path, the bridge
 /// the graph needs to match `Plug.Conn` against `plug/conn.ex`.
 pub(crate) use elixir::underscore;

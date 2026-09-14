@@ -582,7 +582,7 @@ fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
 
 mod dialect;
 
-pub use dialect::{normalize, rewrites};
+pub use dialect::{clang_gaps, lower_for_clang, normalize, rewrites};
 
 #[cfg(test)]
 mod tests {

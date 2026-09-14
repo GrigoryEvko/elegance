@@ -2862,36 +2862,242 @@ const RULES: &[Rule] = &[
     ),
 ];
 
-/// The rules that can fire at a byte, in the order `RULES` gives.
-fn dispatch(byte: u8) -> &'static [&'static Rule] {
-    static BY_BYTE: OnceLock<Vec<Vec<&'static Rule>>> = OnceLock::new();
-    let table = BY_BYTE.get_or_init(|| {
-        let mut table: Vec<Vec<&'static Rule>> = vec![Vec::new(); 256];
-        for rule in RULES {
-            match rule.trigger {
-                Trigger::Byte(byte) => table[usize::from(byte)].push(rule),
-                Trigger::Words(words) => {
-                    for word in words {
-                        let slot = &mut table[usize::from(word[0])];
-                        // Two words with one first byte name the rule
-                        // one time, so it runs one time.
-                        if !slot.iter().any(|seen| std::ptr::eq(*seen, rule)) {
-                            slot.push(rule);
-                        }
+// ---------------------------------------------------------------------
+// The rules for a Clang
+// ---------------------------------------------------------------------
+
+/// P2900 `contract_assert(expr)`. A Clang without contracts reads it as
+/// a call to a function it has not seen. The assertion goes and its `;`
+/// stays, which is the program with the check off.
+fn contract_assert_statement(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let open = t
+        .next(i + b"contract_assert".len())
+        .filter(|&k| t.at(k) == b'(')?;
+    let close = t.match_paren(open)?;
+    t.blank(i..close + 1, b' ');
+    Some(close + 1)
+}
+
+/// P3394 annotations in an attribute list, as in `[[nodiscard, =tag]]`.
+/// A Clang without annotations rejects the whole attribute. Each
+/// annotation goes with one comma, and every other attribute in the
+/// list stays, because the others change what the compiler checks.
+fn annotation_items(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if t.get(i + 1) != Some(b'[') || t.get(i + 2) == Some(b':') {
+        return None;
+    }
+    let close = t.match_close(i, b'[', b']')?;
+    if close <= i + 2
+        || t.at(close - 1) != b']'
+        || t.match_close(i + 1, b'[', b']') != Some(close - 1)
+    {
+        return None;
+    }
+    // The items of the list, divided at the commas at its top level.
+    let (start, end) = (i + 2, close - 1);
+    let mut items = Vec::new();
+    let mut depth = 0u32;
+    let mut from = start;
+    for k in start..end {
+        if !t.is_code(k) {
+            continue;
+        }
+        match t.at(k) {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                items.push(from..k);
+                from = k + 1;
+            }
+            _ => {}
+        }
+    }
+    items.push(from..end);
+    let mut removed = false;
+    for (n, item) in items.iter().enumerate() {
+        if !t
+            .next(item.start)
+            .is_some_and(|k| k < item.end && t.at(k) == b'=')
+        {
+            continue;
+        }
+        // The comma before the item goes with it, or the comma after it
+        // when the item is the first.
+        let span = if n > 0 {
+            item.start - 1..item.end
+        } else if items.len() > 1 {
+            item.start..item.end + 1
+        } else {
+            item.clone()
+        };
+        t.blank(span, b' ');
+        removed = true;
+    }
+    removed.then_some(close + 1)
+}
+
+/// P2573 `= delete("reason")` for a Clang before 19. The reason goes,
+/// and `= delete` stays, which is the declaration Clang 18 reads.
+fn delete_reason_for_clang(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    t.prev(i).filter(|&p| t.at(p) == b'=')?;
+    let open = t.next(i + b"delete".len()).filter(|&k| t.at(k) == b'(')?;
+    let close = t.match_paren(open)?;
+    t.blank(open..close + 1, b' ');
+    Some(close + 1)
+}
+
+/// The rules for a Clang from version 19. A rule is here only when a
+/// released Clang does not read the construct, and only when a program
+/// without the construct does the same work. A contract is a check, an
+/// annotation is data for reflection, and a class property states what
+/// the compiler may do with a type.
+///
+/// The other grammar rules change what Clang checks, and Clang reads
+/// those constructs anyway: an attribute, a digraph, `typeid`. So none
+/// of them is here.
+const CLANG_RULES: &[Rule] = &[
+    rule!("annotation", "P3394", Trigger::Byte(b'['), annotation_items),
+    rule!(
+        "contract clause",
+        "P2900",
+        Trigger::Words(&[b"pre", b"post"]),
+        contract
+    ),
+    rule!(
+        "contract assertion",
+        "P2900",
+        Trigger::Words(&[b"contract_assert"]),
+        contract_assert_statement
+    ),
+    rule!(
+        "class property",
+        "P2786",
+        Trigger::Words(&[
+            b"trivially_relocatable_if_eligible",
+            b"replaceable_if_eligible"
+        ]),
+        class_property
+    ),
+];
+
+/// The rules for a Clang before 19, which also does not read a reason
+/// on `= delete`.
+const CLANG_18_RULES: &[Rule] = &[
+    rule!("annotation", "P3394", Trigger::Byte(b'['), annotation_items),
+    rule!(
+        "contract clause",
+        "P2900",
+        Trigger::Words(&[b"pre", b"post"]),
+        contract
+    ),
+    rule!(
+        "contract assertion",
+        "P2900",
+        Trigger::Words(&[b"contract_assert"]),
+        contract_assert_statement
+    ),
+    rule!(
+        "class property",
+        "P2786",
+        Trigger::Words(&[
+            b"trivially_relocatable_if_eligible",
+            b"replaceable_if_eligible"
+        ]),
+        class_property
+    ),
+    rule!(
+        "delete with a reason",
+        "P2573",
+        Trigger::Words(&[b"delete"]),
+        delete_reason_for_clang
+    ),
+];
+
+/// What the rewrite is for.
+#[derive(Clone, Copy)]
+pub enum Target<'a> {
+    /// The bundled tree-sitter grammar, with the macros the project
+    /// declared to clang-format.
+    Grammar(&'a Macros),
+    /// A Clang of this major version, which clang-tidy runs.
+    Clang(u32),
+}
+
+/// The byte table for one list of rules: for each byte, the rules that
+/// can fire where it stands, in the order of the list.
+fn by_byte(rules: &'static [Rule]) -> Vec<Vec<&'static Rule>> {
+    let mut table: Vec<Vec<&'static Rule>> = vec![Vec::new(); 256];
+    for rule in rules {
+        match rule.trigger {
+            Trigger::Byte(byte) => table[usize::from(byte)].push(rule),
+            Trigger::Words(words) => {
+                for word in words {
+                    let slot = &mut table[usize::from(word[0])];
+                    // Two words with one first byte name the rule one
+                    // time, so it runs one time.
+                    if !slot.iter().any(|seen| std::ptr::eq(*seen, rule)) {
+                        slot.push(rule);
                     }
                 }
-                Trigger::AnyWord => {
-                    for byte in 0..=u8::MAX {
-                        if is_word(byte) && !byte.is_ascii_digit() {
-                            table[usize::from(byte)].push(rule);
-                        }
+            }
+            Trigger::AnyWord => {
+                for byte in 0..=u8::MAX {
+                    if is_word(byte) && !byte.is_ascii_digit() {
+                        table[usize::from(byte)].push(rule);
                     }
                 }
             }
         }
-        table
-    });
+    }
+    table
+}
+
+/// The rules that can fire at a byte for a target.
+fn dispatch(target: Target, byte: u8) -> &'static [&'static Rule] {
+    static GRAMMAR: OnceLock<Vec<Vec<&'static Rule>>> = OnceLock::new();
+    static CLANG: OnceLock<Vec<Vec<&'static Rule>>> = OnceLock::new();
+    static CLANG_18: OnceLock<Vec<Vec<&'static Rule>>> = OnceLock::new();
+    let table = match target {
+        Target::Grammar(_) => GRAMMAR.get_or_init(|| by_byte(RULES)),
+        Target::Clang(major) if major < 19 => CLANG_18.get_or_init(|| by_byte(CLANG_18_RULES)),
+        Target::Clang(_) => CLANG.get_or_init(|| by_byte(CLANG_RULES)),
+    };
     &table[usize::from(byte)]
+}
+
+impl Text {
+    /// The text as a Clang reads it. The body of a `#define` is code to
+    /// a Clang, because Clang expands it: `#define ASSERT(c)
+    /// contract_assert(c)` puts an assertion at each use, and only the
+    /// body can take it out. So each such body is read again as code,
+    /// with its own comments and literals.
+    fn for_clang(out: Vec<u8>) -> Text {
+        let (mut code, mut literals) = lex(&out);
+        for line in lines(&out) {
+            let Some(hash) = (line.start..line.end).find(|&k| !matches!(out[k], b' ' | b'\t'))
+            else {
+                continue;
+            };
+            if out[hash] != b'#' || !code[hash] || directive_is_prose(&out, hash) {
+                continue;
+            }
+            let Some(body) = directive_text(&out, hash) else {
+                continue;
+            };
+            let (inner, inner_literals) = lex(&out[body.clone()]);
+            code[body.clone()].copy_from_slice(&inner);
+            literals.extend(
+                inner_literals
+                    .into_iter()
+                    .map(|span| span.start + body.start..span.end + body.start),
+            );
+        }
+        Text {
+            out,
+            code,
+            literals,
+        }
+    }
 }
 
 /// The rewritten source, and the rules that wrote it.
@@ -2904,26 +3110,77 @@ pub struct Rewritten {
 /// Rewrite the C++ the grammar cannot read. `None` when the source
 /// needs none of it, so the common file is not copied.
 pub fn rewrite(src: &str, macros: &Macros) -> Option<Rewritten> {
+    rewrite_for(src, Target::Grammar(macros))
+}
+
+/// The C++ text with what this Clang does not read removed, for
+/// clang-tidy. `None` when the source needs none of it.
+pub fn lower_for_clang(src: &str, major: u32) -> Option<Rewritten> {
+    rewrite_for(src, Target::Clang(major))
+}
+
+/// The constructs in the source that this Clang does not read and that
+/// no removal keeps the meaning of, one name for each: reflection, a
+/// consteval block, and an expansion statement before Clang 23.
+pub fn clang_gaps(src: &str, major: u32) -> Vec<&'static str> {
+    let Some(done) = rewrite(src, &Macros::default()) else {
+        return Vec::new();
+    };
+    let mut gaps = Vec::new();
+    for &(name, _) in &done.rules {
+        let gap = match name {
+            "reflect" | "splice" => "reflection",
+            "consteval block" => "consteval block",
+            "expansion statement" if major < 23 => "expansion statement",
+            _ => continue,
+        };
+        if !gaps.contains(&gap) {
+            gaps.push(gap);
+        }
+    }
+    gaps
+}
+
+/// Rewrite for a target. `None` when the source needs none of it.
+fn rewrite_for(src: &str, target: Target) -> Option<Rewritten> {
     let mut fired: Vec<(&'static str, &'static str)> = Vec::new();
     let mut bytes = src.as_bytes().to_vec();
-    for pass in PASSES {
-        if let Stage::Bytes(apply) = pass.stage {
-            fired.extend(std::iter::repeat_n(
-                (pass.name, pass.paper),
-                apply(&mut bytes),
-            ));
+    let grammar = matches!(target, Target::Grammar(_));
+    // A Clang reads a splice after whitespace, a skipped group and a
+    // delimited escape as the standard writes them, so the passes are
+    // for the grammar only.
+    if grammar {
+        for pass in PASSES {
+            if let Stage::Bytes(apply) = pass.stage {
+                fired.extend(std::iter::repeat_n(
+                    (pass.name, pass.paper),
+                    apply(&mut bytes),
+                ));
+            }
         }
     }
-    let mut text = Text::new(bytes);
-    for pass in PASSES {
-        if let Stage::Literals(apply) = pass.stage {
-            fired.extend(std::iter::repeat_n(
-                (pass.name, pass.paper),
-                apply(&mut text),
-            ));
+    let mut text = if grammar {
+        Text::new(bytes)
+    } else {
+        Text::for_clang(bytes)
+    };
+    if grammar {
+        for pass in PASSES {
+            if let Stage::Literals(apply) = pass.stage {
+                fired.extend(std::iter::repeat_n(
+                    (pass.name, pass.paper),
+                    apply(&mut text),
+                ));
+            }
         }
     }
-    let cx = Cx { macros };
+    let none = Macros::default();
+    let cx = Cx {
+        macros: match target {
+            Target::Grammar(macros) => macros,
+            Target::Clang(_) => &none,
+        },
+    };
     let mut i = 0;
     while i < text.len() {
         if !text.is_code(i) {
@@ -2931,7 +3188,7 @@ pub fn rewrite(src: &str, macros: &Macros) -> Option<Rewritten> {
             continue;
         }
         let mut next = i + 1;
-        for rule in dispatch(text.at(i)) {
+        for rule in dispatch(target, text.at(i)) {
             let matched = match rule.trigger {
                 Trigger::Byte(_) => true,
                 Trigger::Words(words) => words.iter().any(|word| text.word_at(i, word)),
@@ -3920,6 +4177,152 @@ mod tests {
         let out = normalize(src).expect("typeid becomes sizeof");
         assert_eq!(parse_errors(Lang::Cpp, &out), 0, "{out}");
         assert_eq!(out.matches(".name()").count(), 2, "{out}");
+    }
+
+    /// The rewrite for a Clang of this major version.
+    fn lowered(src: &str, major: u32) -> Option<String> {
+        super::lower_for_clang(src, major).map(|done| done.text)
+    }
+
+    #[test]
+    fn a_clang_loses_only_what_it_cannot_read_and_what_does_no_work() {
+        // The source, a piece that has to go, and a piece that has to stay.
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "int f(int n) pre(n > 0) post(r: r > 0) { return n; }\n",
+                "pre(",
+                "int f(int n)",
+            ),
+            (
+                "void f(int n) { contract_assert(n > 0); g(n); }\n",
+                "contract_assert",
+                "; g(n); }",
+            ),
+            ("struct [[=1]] S { };\n", "=1", "]] S { };"),
+            (
+                "struct S { [[nodiscard, =tag]] int f(); };\n",
+                "=tag",
+                "[[nodiscard",
+            ),
+            (
+                "struct S trivially_relocatable_if_eligible { };\n",
+                "relocatable",
+                "struct S",
+            ),
+        ];
+        for (src, gone, kept) in cases {
+            let out = lowered(src, 23).expect("a construct Clang 23 does not read goes");
+            assert_eq!(out.len(), src.len(), "a removal moved an offset: {out}");
+            assert!(!out.contains(gone), "{gone} stayed: {out}");
+            assert!(out.contains(kept), "{kept} went: {out}");
+        }
+    }
+
+    #[test]
+    fn a_clang_keeps_what_it_reads_where_the_grammar_needs_a_rewrite() {
+        // An attribute, `typeid`, a digraph, a reason on `delete`, a pack
+        // index and a reflection all mean something to Clang, and a
+        // removal would change what clang-tidy checks.
+        for src in [
+            "[[nodiscard]] int f();\n",
+            "auto& t = typeid(int);\n",
+            "int f() <% return 1; %>\n",
+            "struct S { S(const S&) = delete(\"no\"); };\n",
+            "template <class... T> using First = T...[0];\n",
+            "constexpr auto r = ^^int;\n",
+        ] {
+            assert_eq!(
+                lowered(src, 23),
+                None,
+                "a removal changed what Clang reads: {src}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reason_on_delete_goes_only_for_a_clang_before_19() {
+        let src = "struct S { S(const S&) = delete(\"no copy\"); };\n";
+        assert_eq!(lowered(src, 19), None);
+        let out = lowered(src, 18).expect("Clang 18 reads no reason");
+        assert!(out.contains("= delete"), "{out}");
+        assert!(!out.contains("no copy"), "{out}");
+    }
+
+    #[test]
+    fn the_clang_rewrite_reaches_a_macro_body_and_the_grammar_rewrite_does_not() {
+        // Clang expands the body at each use, and only the body can take
+        // the assertion out. The grammar reads the body as raw text.
+        let src = "#define ASSERT(c) contract_assert(c)\nvoid f(int n) { ASSERT(n > 0); }\n";
+        let out = lowered(src, 23).expect("the body loses its assertion");
+        assert!(out.starts_with("#define ASSERT(c)"), "{out}");
+        assert!(!out.contains("contract_assert"), "{out}");
+        assert_eq!(
+            normalize(src),
+            None,
+            "the grammar rewrite edited a macro body"
+        );
+    }
+
+    #[test]
+    fn the_gaps_name_reflection_and_an_expansion_statement_before_clang_23() {
+        let src = "void f() { template for (auto x : {1, 2}) { g(^^int); } }\n";
+        let mut before = super::clang_gaps(src, 22);
+        before.sort_unstable();
+        assert_eq!(before, ["expansion statement", "reflection"]);
+        assert_eq!(super::clang_gaps(src, 23), ["reflection"]);
+        assert!(super::clang_gaps("int f() { return 1; }\n", 22).is_empty());
+    }
+
+    #[test]
+    fn a_clang_compiles_the_lowered_text_that_it_rejects_as_written() {
+        // This test needs clang++ on the PATH, and it stops without a
+        // result on a machine that has none. It is the one test that
+        // holds a removal to its meaning: what goes has to leave a
+        // program that the compiler accepts.
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+        let Ok(version) = Command::new("clang++").arg("--version").output() else {
+            return;
+        };
+        let Some(major) = String::from_utf8_lossy(&version.stdout)
+            .split_whitespace()
+            .skip_while(|word| *word != "version")
+            .nth(1)
+            .and_then(|v| v.split('.').next()?.parse::<u32>().ok())
+        else {
+            return;
+        };
+        let compiles = |text: &str| {
+            let mut child = Command::new("clang++")
+                .args(["-std=c++2c", "-fsyntax-only", "-w", "-x", "c++", "-"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("clang++ runs");
+            child
+                .stdin
+                .take()
+                .expect("a stdin")
+                .write_all(text.as_bytes())
+                .expect("the source goes in");
+            child.wait().expect("clang++ ends").success()
+        };
+        for src in [
+            "int f(int n) pre(n > 0) post(r: r > 0) { return n; }\n",
+            "void g(int);\nvoid f(int n) { contract_assert(n > 0); g(n); }\n",
+            "struct [[nodiscard, =1]] S { int f() { return 0; } };\n",
+            "struct S trivially_relocatable_if_eligible { int x; };\nS s{1};\n",
+            "#define ASSERT(c) contract_assert(c)\nvoid f(int n) { ASSERT(n > 0); }\n",
+            "struct B { virtual int f(int n) pre(n > 0) = 0; };\n",
+            "template <class T>\n  requires (sizeof(T) > 0)\nint f(T n) pre(n > 0) { return 0; }\n",
+        ] {
+            let out = lowered(src, major).unwrap_or_else(|| src.to_string());
+            assert!(
+                compiles(&out),
+                "clang++ {major} rejects the lowered text:\n{out}"
+            );
+        }
     }
 
     /// One short source for each construct of the language that carries

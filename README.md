@@ -67,6 +67,7 @@ See [plugins/elegance-nudge](plugins/elegance-nudge/README.md).
 | `elegance install-hook` | pre-commit hook running `--diff HEAD` |
 | `elegance --context [paths...]` | the repo's measured style, for a writer |
 | `elegance calibrate <gold-dirs>` | re-derive budgets from a gold corpus |
+| `elegance tidy FILES... [-- FLAGS]` | clang-tidy on C++ that its Clang does not read yet |
 
 | Reports | |
 | :--- | :--- |
@@ -232,6 +233,33 @@ gnarly  sample.py:17  cognitive 31  cyclomatic 14  depth 6
   L19    loop       cognitive +1  cyclomatic +1
   L24    if         cognitive +5  cyclomatic +1  (1 + nesting 4)
 ```
+
+### `elegance tidy`
+
+clang-tidy parses with the Clang it was built with, and the Clang in each
+release reads only part of C++26. A contract clause that Clang cannot
+parse is an error, and no check then examines that declaration.
+
+`elegance tidy` removes, for clang-tidy only, what its Clang does not read
+and what does no work: contract clauses, `contract_assert`, annotations,
+and class properties. A virtual file system overlay puts the changed text
+at the original path, so each diagnostic shows the original file, line and
+column. No file on disk changes.
+
+```sh
+elegance tidy --checks='bugprone-*' src/pool.cpp -- -std=c++26 -Iinclude
+elegance tidy --clang-tidy clang-tidy-23 -p build src/pool.cpp
+```
+
+`-p BUILD` reads `compile_commands.json`. The command removes from a copy
+of it the flags that this clang-tidy does not know, such as `-fcontracts`
+from a GCC build. A clang-tidy in a container works with flags after `--`,
+because every path in the overlay is relative to the working directory.
+
+Reflection, a consteval block and, before Clang 23, an expansion statement
+have no removal that keeps their meaning. The command tells how many files
+use each one, and clang-tidy reports each use as an error. `--fix` is not
+available, because clang-tidy calculates a fix on the changed text.
 
 ### Configuration
 

@@ -29,6 +29,7 @@ mod report;
 mod rollup;
 mod sem;
 mod sfc;
+mod tidy;
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -109,6 +110,13 @@ struct Args {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // `tidy` sends every argument after it to clang-tidy as written, so it
+    // leaves before the parser of elegance's own flags reads them.
+    let mut raw = std::env::args_os().skip(1);
+    if raw.next().is_some_and(|first| first == "tidy") {
+        let rest: Vec<String> = raw.map(|arg| arg.to_string_lossy().into_owned()).collect();
+        std::process::exit(tidy::main(&rest));
+    }
     let args = parse_args()?;
     // Before any file is read: the C++ rewrite needs the macro names
     // the project declares, and `--errors` on one file needs them too.
@@ -640,7 +648,8 @@ usage: elegance [paths...]                 report; defaults to .
   --errors FILE                            parse errors and pack drift (pack developers)
 
   elegance calibrate <gold-dirs...>        re-derive budgets, write calibration.toml
-  elegance install-hook|uninstall-hook     pre-commit hook running --diff HEAD";
+  elegance install-hook|uninstall-hook     pre-commit hook running --diff HEAD
+  elegance tidy FILES... [-- FLAGS]        clang-tidy on C++ that its Clang does not read yet";
 
 /// Flags whose meaning is the argument that follows them.
 fn takes_value(flag: &str) -> bool {
