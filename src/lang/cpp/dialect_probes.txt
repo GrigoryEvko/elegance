@@ -1529,6 +1529,9 @@ template <class T> void f() { auto x = typename T::type(); }
 #
 int f();
 # endif
+### s98_export_macro_in_class_head
+class EXPORT_API Index : public Base { public: int x; };
+struct EXPORT_API Leaf final : Index { };
 ### s98_unnamed_pointer_template_parameter
 template <int* = 0> void g();
 template <typename T, typename std::enable_if<std::is_integral<T>::value>::type* = nullptr>

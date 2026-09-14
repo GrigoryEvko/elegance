@@ -717,7 +717,7 @@ offset stays, so each finding shows the correct line.
 <details>
 <summary>What the normalization covers, and how a test holds it to that</summary>
 
-`src/lang/cpp/dialect_probes.txt` holds 675 short sources. There is one
+`src/lang/cpp/dialect_probes.txt` holds 676 short sources. There is one
 for each row of the Clang conformance table that has syntax, from C++98
 to C++2d, and one for each GNU, Clang and MSVC extension that production
 code uses. A test parses every probe after the normalization. A second
