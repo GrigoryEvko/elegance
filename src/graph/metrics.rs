@@ -1268,21 +1268,42 @@ fn declared_include_root(path: &Path) -> bool {
 /// :141 all read as unreferenced. swift-nio's manifest declares 15
 /// `.executableTarget(`, its `dev/stackdiff` one more. 21 orphans.
 fn swift_leaf_target(path: &Path) -> bool {
-    const LEAF: &[&str] = &[".executableTarget(", ".macro(", ".plugin("];
     if path.extension().and_then(|e| e.to_str()) != Some("swift") {
         return false;
     }
     path.ancestors().skip(1).any(|dir| {
-        let Ok(text) = std::fs::read_to_string(dir.join("Package.swift")) else {
-            return false;
-        };
-        LEAF.iter().any(|kind| {
-            text.split(kind)
-                .skip(1)
-                .filter_map(target_name)
-                .any(|target| path.starts_with(dir.join("Sources").join(target)))
-        })
+        leaf_targets(dir)
+            .iter()
+            .any(|target| path.starts_with(dir.join("Sources").join(target)))
     })
+}
+
+thread_local! {
+    /// The leaf targets that the `Package.swift` of each directory
+    /// declares, one read for each directory. swift's report read the
+    /// manifests above each of its 22889 files again for each file.
+    static LEAF_TARGETS: std::cell::RefCell<std::collections::HashMap<PathBuf, std::rc::Rc<[String]>>> =
+        std::cell::RefCell::default();
+}
+
+/// The targets that the `Package.swift` in `dir` declares as leaves.
+/// Empty when the directory holds no manifest.
+fn leaf_targets(dir: &Path) -> std::rc::Rc<[String]> {
+    const LEAF: &[&str] = &[".executableTarget(", ".macro(", ".plugin("];
+    if let Some(known) = LEAF_TARGETS.with_borrow(|memo| memo.get(dir).cloned()) {
+        return known;
+    }
+    let names: std::rc::Rc<[String]> = match std::fs::read_to_string(dir.join("Package.swift")) {
+        Ok(text) => LEAF
+            .iter()
+            .flat_map(|kind| text.split(kind).skip(1).filter_map(target_name))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+            .into(),
+        Err(_) => std::rc::Rc::from([]),
+    };
+    LEAF_TARGETS.with_borrow_mut(|memo| memo.insert(dir.to_path_buf(), std::rc::Rc::clone(&names)));
+    names
 }
 
 /// The `name:` a target stanza declares, read at ARGUMENT level.
@@ -1339,31 +1360,54 @@ fn xcode_app(path: &Path) -> bool {
     if path.extension().and_then(|e| e.to_str()) != Some("swift") {
         return false;
     }
-    for dir in path.ancestors().skip(1) {
-        let mut project = None;
-        let mut repo_root = false;
-        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            match entry.file_name().to_str() {
-                Some(n) if n.ends_with(".xcodeproj") => project = Some(entry.path()),
-                Some(".git") => repo_root = true,
-                _ => {}
-            }
-        }
-        if let Some(proj) = project {
-            let Ok(text) = std::fs::read_to_string(proj.join("project.pbxproj")) else {
-                return false;
-            };
-            return app_target_dirs(&text)
-                .iter()
-                .any(|group| path.starts_with(dir.join(group)));
-        }
-        // The scan never leaves the repository: a `.xcodeproj` above it
-        // belongs to another project and says nothing about this file.
-        if repo_root {
-            return false;
+    path.parent()
+        .and_then(nearest_xcode_project)
+        .is_some_and(|(dir, groups)| groups.iter().any(|group| path.starts_with(dir.join(group))))
+}
+
+/// The directory of an Xcode project, and the directories that its
+/// application targets compile.
+type XcodeProject = Option<(PathBuf, std::rc::Rc<[String]>)>;
+
+thread_local! {
+    /// The nearest Xcode project at or above each directory, one listing
+    /// for each directory. swift's report listed the ancestors of each
+    /// of its 22889 files again for each file, and spent 15 s of its 17 s
+    /// on the listings.
+    static XCODE_PROJECTS: std::cell::RefCell<std::collections::HashMap<PathBuf, XcodeProject>> =
+        std::cell::RefCell::default();
+}
+
+/// The nearest `.xcodeproj` at or above `dir`. None when no project is
+/// there, or when its `project.pbxproj` cannot be read.
+fn nearest_xcode_project(dir: &Path) -> XcodeProject {
+    if let Some(known) = XCODE_PROJECTS.with_borrow(|memo| memo.get(dir).cloned()) {
+        return known;
+    }
+    let mut project = None;
+    let mut repo_root = false;
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        match entry.file_name().to_str() {
+            Some(n) if n.ends_with(".xcodeproj") => project = Some(entry.path()),
+            Some(".git") => repo_root = true,
+            _ => {}
         }
     }
-    false
+    let found = match project {
+        Some(proj) => std::fs::read_to_string(proj.join("project.pbxproj"))
+            .ok()
+            .map(|text| {
+                let groups: Vec<String> =
+                    app_target_dirs(&text).into_iter().map(str::to_string).collect();
+                (dir.to_path_buf(), groups.into())
+            }),
+        // The scan never leaves the repository: a `.xcodeproj` above it
+        // belongs to another project and says nothing about this file.
+        None if repo_root => None,
+        None => dir.parent().and_then(nearest_xcode_project),
+    };
+    XCODE_PROJECTS.with_borrow_mut(|memo| memo.insert(dir.to_path_buf(), found.clone()));
+    found
 }
 
 /// The directories an Xcode project hands wholesale to an application
