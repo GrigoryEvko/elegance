@@ -1512,3 +1512,7 @@ void* operator new[](std::size_t); void operator delete[](void*) noexcept;
 int x;
 ### s98_throw_spec
 void f() throw(std::bad_alloc); void g() throw(int, long);
+### s98_typename_functional_cast
+template <class T> auto g(T o) { return o(typename T::id{}); }
+### s98_typename_value_init
+template <class T> void f() { auto x = typename T::type(); }

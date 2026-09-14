@@ -947,13 +947,28 @@ fn designator_before(t: &Text, at: usize) -> bool {
 /// `CRUCIBLE_INLINE` in the `#define` that writes it leaves `#define`
 /// with nothing to define, and every declaration under it stops
 /// parsing. `#undef` and `#ifdef` name it the same way.
+///
+/// A line that the line before it continues with `\` belongs to the
+/// directive that the first line opens: eigen breaks `#if defined(A) && \`
+/// over two lines, and the second line holds no `#`.
 fn on_a_directive(t: &Text, at: usize) -> bool {
-    (0..at)
-        .rev()
-        .take_while(|&k| t.at(k) != b'\n')
-        .filter(|&k| !t.at(k).is_ascii_whitespace())
-        .last()
-        .is_some_and(|k| t.at(k) == b'#')
+    let mut end = at;
+    loop {
+        let start = (0..end).rev().find(|&k| t.at(k) == b'\n').map_or(0, |k| k + 1);
+        let break_at = start.checked_sub(1);
+        let before_break = break_at
+            .and_then(|k| k.checked_sub(1))
+            .map(|k| if t.at(k) == b'\r' { k.checked_sub(1) } else { Some(k) });
+        if let (Some(line_break), Some(Some(k))) = (break_at, before_break)
+            && t.at(k) == b'\\'
+        {
+            end = line_break;
+            continue;
+        }
+        return (start..end)
+            .find(|&k| !t.at(k).is_ascii_whitespace())
+            .is_some_and(|k| t.at(k) == b'#');
+    }
 }
 
 /// True when a string literal ends earlier on the same line as `at`,
@@ -997,10 +1012,15 @@ fn follows_a_string(t: &Text, at: usize) -> bool {
 
 /// The end of a module declaration that starts at `at`, or `None` when
 /// `at` starts something else. `module` and `import` are context
-/// keywords, so a declaration has to start a statement, and a call such
-/// as `import(path)` keeps its parentheses and stays.
+/// keywords, so a declaration starts a statement at file scope, and only
+/// a module name stands between the keyword and its `;`.
+///
+/// Anything else makes the word a name. eve writes `#include
+/// <eve/module/core.hpp>` in 1752 files, pybind11 code writes `module
+/// .def(...)`, and Qt Creator writes `{.imports = {import}}`. Each of
+/// them lost everything up to the next `;` before the name was read.
 fn module_declaration(t: &Text, at: usize) -> Option<usize> {
-    if !starts_a_statement(t, at) {
+    if !starts_a_statement(t, at) || on_a_directive(t, at) {
         return None;
     }
     let mut i = at;
@@ -1011,17 +1031,61 @@ fn module_declaration(t: &Text, at: usize) -> Option<usize> {
         }
         i = after;
     }
-    if !t.word_at(i, b"module") && !t.word_at(i, b"import") {
+    let import = t.word_at(i, b"import");
+    if !import && !t.word_at(i, b"module") {
         return None;
     }
-    // `import(x)` is a call, and `module = 1` is an assignment. Neither
-    // word is reserved, so both stay where a declaration does not follow.
-    let after = t.next(t.word_end(i));
-    if after.is_none_or(|k| matches!(t.at(k), b'(' | b'=')) {
-        return None;
+    let end = module_name_end(t, t.word_end(i), import)?;
+    at_file_scope(t, at).then_some(end)
+}
+
+/// The end of the `;` that closes the module name after `from`: dotted
+/// words, a partition after one `:`, and attributes. An import also
+/// takes a header name. A string literal is not code, so `import "x.h";`
+/// reads as `import ;`.
+fn module_name_end(t: &Text, from: usize, import: bool) -> Option<usize> {
+    let mut k = t.next(from)?;
+    let mut named = import;
+    loop {
+        match t.at(k) {
+            b';' if named => return Some(k + 1),
+            byte if is_word(byte) => {
+                named = true;
+                k = t.next(t.word_end(k))?;
+            }
+            b'.' if named && t.get(k + 1).is_some_and(is_word) => k = t.next(k + 1)?,
+            b':' if t.get(k + 1) != Some(b':') => k = t.next(k + 1)?,
+            b'<' if import => {
+                let close = (k..t.len())
+                    .take_while(|&j| t.at(j) != b'\n')
+                    .find(|&j| t.at(j) == b'>')?;
+                k = t.next(close + 1)?;
+            }
+            b'[' if t.get(k + 1) == Some(b'[') => {
+                k = t.next(t.match_close(k, b'[', b']')? + 1)?;
+            }
+            _ => return None,
+        }
     }
-    let end = (i..t.len()).find(|&k| t.is_code(k) && t.at(k) == b';')?;
-    Some(end + 1)
+}
+
+/// True when no brace is open before `at`. The scan reads back to the
+/// start of the file, and only a word that already reads as a module
+/// declaration asks.
+fn at_file_scope(t: &Text, at: usize) -> bool {
+    let mut depth = 0u32;
+    for k in (0..at).rev() {
+        if !t.is_code(k) {
+            continue;
+        }
+        match t.at(k) {
+            b'}' => depth += 1,
+            b'{' if depth == 0 => return false,
+            b'{' => depth -= 1,
+            _ => {}
+        }
+    }
+    true
 }
 
 /// True when the `]` at `close` ends the introducer of a lambda, and
@@ -1095,6 +1159,112 @@ fn in_a_class_head(t: &Text, at: usize) -> bool {
         k = p;
     }
     class
+}
+
+/// True when the nearest unmatched bracket before `at` is a parenthesis,
+/// and no `;` stands between them.
+fn in_parentheses(t: &Text, at: usize) -> bool {
+    let mut depth = 0u32;
+    for k in (0..at).rev() {
+        if !t.is_code(k) {
+            continue;
+        }
+        match t.at(k) {
+            b')' | b']' | b'}' => depth += 1,
+            b'(' if depth == 0 => return true,
+            b'[' | b'{' if depth == 0 => return false,
+            b'(' | b'[' | b'{' => depth -= 1,
+            b';' if depth == 0 => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when `at` sits in the body of a function. The nearest open brace
+/// before it follows the `)` of a parameter list or a word that ends a
+/// function head, directly or through the blocks inside the body.
+fn in_a_function_body(t: &Text, at: usize) -> bool {
+    let mut depth = 0u32;
+    for k in (0..at).rev() {
+        if !t.is_code(k) {
+            continue;
+        }
+        match t.at(k) {
+            b'}' => depth += 1,
+            b'{' if depth > 0 => depth -= 1,
+            b'{' => match t.prev(k) {
+                Some(p) if t.at(p) == b')' => return true,
+                Some(p)
+                    if is_word(t.at(p))
+                        && matches!(
+                            t.word_before(p + 1),
+                            b"const"
+                                | b"noexcept"
+                                | b"override"
+                                | b"final"
+                                | b"mutable"
+                                | b"try"
+                                | b"else"
+                                | b"do"
+                        ) =>
+                {
+                    return true;
+                }
+                // A block in a body: the scan reads on to the brace that
+                // holds it.
+                Some(p) if matches!(t.at(p), b'{' | b';' | b'}') => {}
+                _ => return false,
+            },
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when the `:` at `colon` ends `case ...:` or `default:`. The scan
+/// reads back to the start of the statement, and a `?` on the way makes
+/// the `:` part of a conditional expression.
+fn ends_a_case_label(t: &Text, colon: usize) -> bool {
+    if t.at(colon) != b':'
+        || t.get(colon + 1) == Some(b':')
+        || (colon > 0 && t.at(colon - 1) == b':')
+    {
+        return false;
+    }
+    let mut first = None;
+    let mut k = colon;
+    while let Some(p) = t.prev(k) {
+        match t.at(p) {
+            b';' | b'{' | b'}' => break,
+            b'?' => return false,
+            byte if is_word(byte) => {
+                let word = t.word_before(p + 1);
+                first = Some(word);
+                k = p + 1 - word.len();
+            }
+            _ => k = p,
+        }
+    }
+    matches!(first, Some(b"case" | b"default"))
+}
+
+/// True when the word from `at` to `end` stands as a name: a member
+/// access holds it, an access or a subscript follows it, or it is the
+/// last word of a parameter, an argument or a declarator.
+///
+/// A word after a declarator's own name is a macro, as `KEEP_ALIVE` is in
+/// `int& a KEEP_ALIVE)`. A word after `*`, `&`, `(` or `,` is the name
+/// itself, as `emit` is in `XEmitter* emit,` and in `f(emit)`.
+fn used_as_a_name(t: &Text, at: usize, end: usize) -> bool {
+    let before = t.prev(at);
+    let after = t.next(end);
+    let accessed = before
+        .is_some_and(|p| t.at(p) == b'.' || (p > 0 && matches!((t.at(p - 1), t.at(p)), (b'-', b'>') | (b':', b':'))));
+    let accesses = after.is_some_and(|k| matches!(t.at(k), b'.' | b'[') || t.starts(k, b"->"));
+    let ends_a_name = before.is_some_and(|p| matches!(t.at(p), b'*' | b'&' | b'(' | b','))
+        && after.is_some_and(|k| matches!(t.at(k), b')' | b',' | b';' | b'=' | b']'));
+    accessed || accesses || ends_a_name
 }
 
 /// True when `at` sits in the parameter list of a template header.
@@ -1994,8 +2164,11 @@ fn braced_default_argument(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     }
     let open = t.next(i + 1).filter(|&k| t.at(k) == b'{')?;
     let close = t.match_close(open, b'{', b'}')?;
+    // A default argument sits in a parameter list. `Segment s0 = {{-1,
+    // 0}, {1, 0}}, s1 = ...` is a list of declarators in a block, and its
+    // `,` ends a declarator.
     let ends = t.next(close + 1).is_some_and(|k| match t.at(k) {
-        b',' | b')' => true,
+        b',' | b')' => in_parentheses(t, i),
         b'>' => in_a_template_header(t, i),
         _ => false,
     });
@@ -2279,17 +2452,32 @@ fn bitfield_initializer(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     }
     let name_end = t.prev(i).filter(|&p| is_word(t.at(p)))?;
     let name = t.word_before(name_end + 1);
+    // A name on a directive line is the condition of `#ifdef DEBUG`, and
+    // the `:` on the next line opens the initializers of a constructor.
     if matches!(
         name,
         b"public" | b"private" | b"protected" | b"default" | b"final"
-    ) {
+    ) || on_a_directive(t, name_end)
+    {
         return None;
     }
     let before = t.prev(name_end + 1 - name.len())?;
+    // Qt's `public slots:` puts a name between an access specifier and
+    // its `:`, and the member after it is no width.
     let typed = if is_word(t.at(before)) {
         !matches!(
             t.word_before(before + 1),
-            b"struct" | b"class" | b"union" | b"enum" | b"case" | b"goto" | b"return" | b"virtual"
+            b"struct"
+                | b"class"
+                | b"union"
+                | b"enum"
+                | b"case"
+                | b"goto"
+                | b"return"
+                | b"virtual"
+                | b"public"
+                | b"private"
+                | b"protected"
         )
     } else {
         matches!(t.at(before), b'*' | b'&' | b'>')
@@ -2314,6 +2502,11 @@ fn bitfield_initializer(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
         }
         k = p;
     }
+    // `struct LLVM_ABI Listener : public Base {` is the head of a class
+    // with a macro before its name, and the `:` opens its bases.
+    if in_a_class_head(t, i) {
+        return None;
+    }
     let mut depth = 0u32;
     let mut stop = None;
     for k in i + 1..t.len() {
@@ -2331,11 +2524,29 @@ fn bitfield_initializer(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
                 stop = Some(k);
                 break;
             }
+            // An initializer in braces ends the member, so a `;` or the
+            // next declarator follows it. A function body follows the
+            // parameters of a function, and a member follows the body.
             b'{' if depth == 0 => {
+                let close = t.match_close(k, b'{', b'}')?;
+                t.next(close + 1).filter(|&j| matches!(t.at(j), b';' | b','))?;
                 stop = Some(k);
                 break;
             }
             b';' | b',' | b'}' | b'?' if depth == 0 => return None,
+            // A constant expression puts an operator between two names,
+            // and a declaration such as `void onClick()` does not.
+            byte if depth == 0
+                && is_word(byte)
+                && !is_word(t.at(k - 1))
+                && t.prev(k).is_some_and(|p| {
+                    p > i
+                        && is_word(t.at(p))
+                        && !matches!(t.word_before(p + 1), b"sizeof" | b"alignof")
+                }) =>
+            {
+                return None;
+            }
             _ => {}
         }
     }
@@ -2508,15 +2719,65 @@ fn computed_goto(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     Some(star + 1)
 }
 
-/// A typename before a qualified name. The keyword disambiguates for the
-/// compiler and the grammar has no rule for it here.
+/// A typename before a qualified name that a functional cast applies,
+/// as in `f(typename T::id{})` and `auto x = typename T::type()`. The
+/// keyword disambiguates for the compiler, and the grammar has no rule
+/// for it in an expression.
+///
+/// P2893's variadic friend, `friend typename Ts::type...;`, is the other
+/// place, because the grammar reads no `typename` after `friend`.
+///
+/// Everywhere else the grammar reads the keyword: in a declaration, a
+/// `typedef`, an alias, a parameter, a base, a template argument and a
+/// type requirement. Blanking it there took the dependent type from
+/// boost's `typedef typename mpl::begin<S> ::type iter`, in 224 files.
 fn typename_qualified(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     let end = i + b"typename".len();
-    if !qualified_after(t, end) {
+    if !qualified_after(t, end) || starts_a_statement(t, i) {
         return None;
+    }
+    let before = t.prev(i)?;
+    let friend = is_word(t.at(before)) && t.word_before(before + 1) == b"friend";
+    if !friend {
+        if t.at(before) == b'<' || (t.at(before) == b',' && in_template_arguments(t, i)) {
+            return None;
+        }
+        let name_end = qualified_name_end(t, end)?;
+        t.next(name_end).filter(|&k| matches!(t.at(k), b'(' | b'{'))?;
     }
     t.blank(i..end, b' ');
     Some(end)
+}
+
+/// The end of the qualified name that starts after `at`: words, `::`,
+/// the `template` keyword, and template arguments.
+fn qualified_name_end(t: &Text, at: usize) -> Option<usize> {
+    let mut k = t.next(at)?;
+    let mut end = None;
+    loop {
+        if t.starts(k, b"::") {
+            k = t.next(k + 2)?;
+            continue;
+        }
+        if t.word_at(k, b"template") {
+            k = t.next(t.word_end(k))?;
+            continue;
+        }
+        if !is_word(t.at(k)) {
+            return end;
+        }
+        end = Some(t.word_end(k));
+        let mut after = t.next(t.word_end(k));
+        if let Some(open) = after.filter(|&j| t.at(j) == b'<') {
+            let close = t.match_close(open, b'<', b'>')?;
+            end = Some(close + 1);
+            after = t.next(close + 1);
+        }
+        match after {
+            Some(j) if t.starts(j, b"::") => k = t.next(j + 2)?,
+            _ => return end,
+        }
+    }
 }
 
 /// A name that follows a string literal expands to one.
@@ -2538,14 +2799,39 @@ fn declared_macro(t: &mut Text, i: usize, cx: &Cx) -> Option<usize> {
     }
     let kind = cx.macros.kind(t.word(i))?;
     let name_end = t.word_end(i);
+    // A macro that a member access holds, or that ends an operand or a
+    // declarator, is a name the project also uses: mongo declares
+    // `foreach` and calls `children.foreach(fn)`.
+    if used_as_a_name(t, i, name_end) {
+        return None;
+    }
     // The argument list, when the macro takes one. It goes with the
     // name, because what remains has to stand on its own and `(a, b);`
-    // is not a declaration at namespace scope.
+    // is not a declaration at namespace scope. After `if`, `while`, `for`
+    // and `switch` the parentheses hold the condition, as in libc++'s `if
+    // _LIBCPP_CONSTEXPR (x)`.
+    let conditioned = t.prev(i).is_some_and(|p| {
+        is_word(t.at(p)) && matches!(t.word_before(p + 1), b"if" | b"while" | b"for" | b"switch")
+    });
     let args = t
         .next(name_end)
-        .filter(|&k| t.at(k) == b'(')
+        .filter(|&k| t.at(k) == b'(' && !conditioned)
         .and_then(|open| t.match_paren(open).map(|close| (open, close)));
     let call_end = args.map_or(name_end, |(_, close)| close + 1);
+    // A statement starts after a statement, after the `)` of a condition,
+    // after `else` or `do`, or after a case label: bitcoin writes `if
+    // (m_wallet_model) Q_EMIT created(m_wallet_model);`, and eigen writes
+    // `case 64 * 1: EIGEN_IF_CONSTEXPR (is_f32) {`.
+    let at_a_statement = starts_a_statement(t, i)
+        || t.prev(i).is_some_and(|p| {
+            t.at(p) == b')'
+                || (is_word(t.at(p)) && matches!(t.word_before(p + 1), b"else" | b"do"))
+                || ends_a_case_label(t, p)
+        });
+    // A loop or a branch opens one, with its arguments or with a block
+    // right after the name, as Qt's `forever {` does.
+    let opens_a_statement = at_a_statement
+        && (args.is_some() || t.next(name_end).is_some_and(|k| t.at(k) == b'{'));
     match kind {
         // It expands to an attribute, which is not complexity, and its
         // arguments are part of that attribute: `GUARDED_BY(mu)` leaves
@@ -2554,17 +2840,40 @@ fn declared_macro(t: &mut Text, i: usize, cx: &Cx) -> Option<usize> {
             t.blank(i..call_end, b' ');
             Some(call_end)
         }
+        // `emit changed();` opens a statement with the macro, and the
+        // word is a name anywhere else. Dolphin declares `emit`, and it
+        // also writes `bool emit` and `if (!emit)`.
+        Kind::StatementAttribute => {
+            if !at_a_statement
+                || !t
+                    .next(call_end)
+                    .is_some_and(|k| is_word(t.at(k)) || t.starts(k, b"::"))
+            {
+                return None;
+            }
+            t.blank(i..call_end, b' ');
+            Some(call_end)
+        }
         // The body stays a loop, because the macro writes one. A name
         // too short to hold `for (;;)` leaves a plain block, which
         // parses and counts one loop less.
         Kind::ForEach => {
+            if !opens_a_statement {
+                return None;
+            }
             if !t.overwrite(i..call_end, b"for (;;)") {
                 t.blank(i..call_end, b' ');
             }
             Some(call_end)
         }
-        // The branch stays a branch, and it keeps its condition.
+        // The branch stays a branch, and it keeps its condition. Outside
+        // a function no branch can stand, and the grammar reads the call
+        // and its braces as a function definition: Carbon declares
+        // `CARBON_DEFINE_RAW_ENUM_CLASS(Kind, uint8_t) { ... }` that way.
         Kind::Branch => {
+            if !opens_a_statement || !in_a_function_body(t, i) {
+                return None;
+            }
             if t.overwrite(i..name_end, b"if") {
                 return Some(name_end);
             }
@@ -3666,6 +3975,72 @@ mod tests {
                 "{what}: a rewrite fired on code the grammar already reads"
             );
         }
+    }
+
+    /// Shapes from the 65 codebases where a rule once fired, and each
+    /// one made the file worse. Some of them do not parse even so,
+    /// because a macro stands in them, and that is why they are not
+    /// ORDINARY: no rewrite may touch them.
+    #[test]
+    fn corpus_shapes_that_no_rule_may_touch() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "eve: a module in an include path",
+                "#include <eve/module/core.hpp>\n#include <vector>\nint f() { return 1; }\n",
+            ),
+            (
+                "pybind11: a variable named module",
+                "void bind(py::module m) {\n  auto module = m;\n  module\n      .def(\"f\", &f)\n      .def(\"g\", &g);\n}\n",
+            ),
+            (
+                "Qt Creator: import as a name in a braced list",
+                "void f() { sync({imports, {import}, types}); }\n",
+            ),
+            (
+                "boost: typename after typedef",
+                "template <class S> struct F { typedef typename mpl::begin<S> ::type iter_0; };\n",
+            ),
+            (
+                "eve: a type requirement",
+                "template <class T> concept C = requires { typename T::type; };\n",
+            ),
+            (
+                "qtbase: public slots",
+                "class W : public QObject {\npublic slots:\n    void onClick() { count++; }\n    int count = 0;\n};\n",
+            ),
+            (
+                "LLVM: an export macro before a base clause",
+                "struct LLVM_ABI Listener : public Base {\n  void f();\n};\n",
+            ),
+            (
+                "firefox: constructor initializers under a directive",
+                "struct P {\n  explicit P(int a)\n#ifdef DEBUG\n      : m(a)\n#endif\n  {}\n  int m;\n};\n",
+            ),
+            (
+                "skia: a list of declarators with braced initializers",
+                "void f() {\n  Segment s0 = {{-1, 0}, {1, 0}},\n          s1 = {{5, 0}, {-1, 0}};\n}\n",
+            ),
+        ];
+        for (what, src) in cases {
+            assert_eq!(normalize(src), None, "{what}: a rule fired");
+        }
+    }
+
+    #[test]
+    fn a_declared_macro_stays_where_it_is_a_name_or_a_declaration() {
+        let yaml = "StatementAttributeLikeMacros: [emit]\nIfMacros: [DEFINE_ENUM]\n";
+        // Dolphin declares `emit` for its Qt code and names a parameter
+        // with it. Carbon declares a macro that defines an enumeration as
+        // a branch, and outside a function the grammar reads it already.
+        let kept = "void write(Emitter* emit, int op) { emit->Write8(op); }\n\
+                    DEFINE_ENUM(Kind, uint8_t) { A, B };\n";
+        assert_eq!(with_macros(kept, yaml), None, "a name or a declaration went");
+        // In a statement the macro still goes, and in a function the
+        // branch still becomes one.
+        let used = "void f(W w) { emit w.changed(); DEFINE_ENUM(x, y) { g(); } }\n";
+        let out = with_macros(used, yaml).expect("the uses were not read");
+        assert!(!out.contains("emit"), "{out}");
+        assert!(out.contains("if"), "{out}");
     }
 
     #[test]

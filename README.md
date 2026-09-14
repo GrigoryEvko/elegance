@@ -717,16 +717,17 @@ offset stays, so each finding shows the correct line.
 <details>
 <summary>What the normalization covers, and how a test holds it to that</summary>
 
-`src/lang/cpp/dialect_probes.txt` holds 670 short sources. There is one
+`src/lang/cpp/dialect_probes.txt` holds 672 short sources. There is one
 for each row of the Clang conformance table that has syntax, from C++98
 to C++2d, and one for each GNU, Clang and MSVC extension that production
 code uses. A test parses every probe after the normalization. A second
 test makes sure that each rule applies to at least one probe. Samples of
-ordinary code must stay the same after the normalization.
+ordinary code must stay the same after the normalization, and so must
+shapes from 64 codebases where a rule once read code wrongly.
 
 elegance also reads the macros that a project declares to clang-format:
-`AttributeMacros`, `StatementMacros`, `ForEachMacros`, `IfMacros`,
-`TypenameMacros` and `NamespaceMacros`.
+`AttributeMacros`, `StatementAttributeLikeMacros`, `StatementMacros`,
+`ForEachMacros`, `IfMacros`, `TypenameMacros` and `NamespaceMacros`.
 
 `--errors FILE` shows the rules that applied to a file, with the paper for
 each construct, above the parse errors that stay.

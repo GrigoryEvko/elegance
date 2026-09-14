@@ -28,6 +28,9 @@ use yaml_rust2::{Yaml, YamlLoader};
 pub enum Kind {
     /// Expands to an attribute. It carries no complexity, so it goes.
     Attribute,
+    /// Stands before the expression of a statement and expands to nothing
+    /// that counts, as Qt's `emit` does. Anywhere else the word is a name.
+    StatementAttribute,
     /// Stands where a statement or a declaration stands.
     Statement,
     /// Opens a loop over a range.
@@ -87,9 +90,8 @@ impl Macros {
             let Yaml::Hash(map) = doc else { continue };
             for (key, value) in map {
                 let kind = match key.as_str() {
-                    // Both spell a token that stands beside a
-                    // declaration and expands to an attribute.
-                    Some("AttributeMacros" | "StatementAttributeLikeMacros") => Kind::Attribute,
+                    Some("AttributeMacros") => Kind::Attribute,
+                    Some("StatementAttributeLikeMacros") => Kind::StatementAttribute,
                     Some("StatementMacros") => Kind::Statement,
                     Some("ForEachMacros") => Kind::ForEach,
                     Some("IfMacros") => Kind::Branch,
@@ -242,7 +244,7 @@ mod tests {
         );
         assert_eq!(macros.kind(b"KEEP_ALIVE"), Some(Kind::Attribute));
         assert_eq!(macros.kind(b"HOT"), Some(Kind::Attribute));
-        assert_eq!(macros.kind(b"EMIT"), Some(Kind::Attribute));
+        assert_eq!(macros.kind(b"EMIT"), Some(Kind::StatementAttribute));
         assert_eq!(macros.kind(b"LAYOUT_INVARIANT"), Some(Kind::Statement));
         assert_eq!(macros.kind(b"for_each_program"), Some(Kind::ForEach));
         assert_eq!(macros.kind(b"IF_MAYBE"), Some(Kind::Branch));
