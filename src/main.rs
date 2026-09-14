@@ -120,7 +120,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = parse_args()?;
     // Before any file is read: the C++ rewrite needs the macro names
     // the project declares, and `--errors` on one file needs them too.
-    let macros = clangfmt::Registry::discover(&args.roots[0]);
+    // A mode that reads one file looks up from that file. The default
+    // root is `.`, and a walk of `.` reads every directory of the
+    // repository before the one file is measured.
+    let scope = match (&args.explain, &args.errors) {
+        (Some((path, _)), _) | (None, Some(path)) => path.as_path(),
+        (None, None) => args.roots[0].as_path(),
+    };
+    let macros = clangfmt::Registry::discover(scope);
     let declared = macros.count();
     clangfmt::install(macros);
     if single_file_mode(&args)? {
