@@ -126,6 +126,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         doc_targets: Vec::new(),
         stray_calls: Vec::new(),
         string_rows: std::collections::HashMap::new(),
+        path: Vec::new(),
         facts: &mut facts,
     };
     let root = ex.walk(
@@ -574,12 +575,27 @@ struct Extractor<'a> {
     /// appeared in. A repeat is only visible once the whole file is
     /// read, so the counting happens after the walk.
     string_rows: std::collections::HashMap<Box<str>, Vec<(u32, usize)>>,
+    /// The nodes the walk is inside: the root first, the node it reads
+    /// last. `Node::parent` goes down from the root and scans the
+    /// children at each level, so each value in a table of n rows costs
+    /// n through it. A node on this path finds its parent one step down.
+    path: Vec<Node<'a>>,
     facts: &'a mut FileFacts,
 }
 
-impl Extractor<'_> {
+impl<'a> Extractor<'a> {
     fn sem_of(&self, node: Node) -> Sem {
         self.pack.sem_of(node, self.src)
+    }
+
+    /// The parent of `node`. A node on the walk's path finds it there,
+    /// in time that the depth of the tree bounds. Any other node asks
+    /// the tree, in time that the width of each ancestor bounds.
+    fn parent(&self, node: Node<'a>) -> Option<Node<'a>> {
+        match self.path.iter().rposition(|step| step.id() == node.id()) {
+            Some(k) if k > 0 => Some(self.path[k - 1]),
+            _ => node.parent(),
+        }
     }
 
     /// Is this declaration an override point?
@@ -593,16 +609,16 @@ impl Extractor<'_> {
     ///
     /// Both matter to `ceremony`, whose 79 gold false positives were
     /// every one of them a documented trait default.
-    fn is_override_point(&self, node: Node) -> bool {
+    fn is_override_point(&self, node: Node<'a>) -> bool {
         if self.pack.is_override(node, self.src) {
             return true;
         }
-        let mut anc = node.parent();
+        let mut anc = self.parent(node);
         while let Some(a) = anc {
             if self.sem_of(a) == Sem::TypeDef {
                 return !self.pack.interfaces(a, self.src).is_empty();
             }
-            anc = a.parent();
+            anc = self.parent(a);
         }
         false
     }
@@ -674,7 +690,7 @@ impl Extractor<'_> {
 
     /// Returns the subtree summary, or None for commentary (comments and doc
     /// strings never contribute to clone identity or expression height).
-    fn walk(&mut self, node: Node, ctx: Ctx) -> Option<Sub> {
+    fn walk(&mut self, node: Node<'a>, ctx: Ctx) -> Option<Sub> {
         if ctx.depth > MAX_TREE_DEPTH {
             self.facts.too_deep = true;
             return None;
@@ -682,8 +698,9 @@ impl Extractor<'_> {
         if node.is_error() || node.is_missing() {
             self.facts.parse_errors += 1;
         }
+        self.path.push(node);
         let sem = self.sem_of(node);
-        match sem {
+        let sub = match sem {
             Sem::Comment => {
                 self.mark_commentary(node);
                 self.check_echo(node);
@@ -737,12 +754,14 @@ impl Extractor<'_> {
                 }
                 Some(self.scan(node, inner, sem))
             }
-        }
+        };
+        self.path.pop();
+        sub
     }
 
     /// Everything one node contributes to the facts, before descending
     /// into it. Nesting is the caller's business; this is the ledger.
-    fn record(&mut self, node: Node, sem: Sem, ctx: Ctx) {
+    fn record(&mut self, node: Node<'a>, sem: Sem, ctx: Ctx) {
         // Record literals carry no Sem of their own: they are shaped by
         // their keys, not by what they do.
         self.record_shape(node);
@@ -800,7 +819,7 @@ impl Extractor<'_> {
     /// Both faces of a binding site. Repurposing first: the live map
     /// must still describe the world BEFORE this assignment, or a
     /// first binding reads as its own repurposing.
-    fn record_bindings(&mut self, node: Node, ctx: Ctx) {
+    fn record_bindings(&mut self, node: Node<'a>, ctx: Ctx) {
         if let Some(field) = self.pack.reassign_field(node.kind_id()) {
             self.check_repurposing(node, field, ctx);
         }
@@ -818,7 +837,7 @@ impl Extractor<'_> {
     /// overrides (a branch chooses a value, not a meaning), loop-body
     /// refills, and try-sheltered fills whose old value survives on
     /// the handler path.
-    fn check_repurposing(&mut self, node: Node, field: &str, ctx: Ctx) {
+    fn check_repurposing(&mut self, node: Node<'a>, field: &str, ctx: Ctx) {
         if ctx.branched || ctx.sheltered {
             return;
         }
@@ -901,7 +920,7 @@ impl Extractor<'_> {
 
     /// A control event, tagged with the cognitive nesting depth it sits
     /// at. Chained boolean operators of one kind count as one sequence.
-    fn record_ctrl(&mut self, node: Node, sem: Sem, ctx: Ctx) {
+    fn record_ctrl(&mut self, node: Node<'a>, sem: Sem, ctx: Ctx) {
         if !sem.is_ctrl() {
             return;
         }
@@ -940,14 +959,14 @@ impl Extractor<'_> {
         }
     }
 
-    fn record_call(&mut self, node: Node, ctx: Ctx) {
+    fn record_call(&mut self, node: Node<'a>, ctx: Ctx) {
         let unit_idx = ctx.unit;
         if let Some(name) = self.callee_simple_name(node).map(Box::<str>::from) {
             // A statement-position call, unawaited, result thrown away.
             // If the name resolves to a same-file async unit once the
             // whole file is walked, the coroutine was created and
             // dropped. It never ran.
-            if !ctx.awaited && discards_its_result(node) {
+            if !ctx.awaited && self.discards_its_result(node) {
                 self.stray_calls.push((unit_idx, name.clone()));
             }
             self.callees[unit_idx].push(name);
@@ -1049,8 +1068,9 @@ impl Extractor<'_> {
     /// A task spawned with nothing arranging its end: the handle is
     /// thrown away, so nothing can await it and nothing observes its
     /// panic.
-    fn record_lifetime(&mut self, node: Node, unit_idx: usize) {
-        let dropped = self.callee_trailing_name(node) == Some("spawn") && discards_its_result(node);
+    fn record_lifetime(&mut self, node: Node<'a>, unit_idx: usize) {
+        let dropped =
+            self.callee_trailing_name(node) == Some("spawn") && self.discards_its_result(node);
         self.facts.units[unit_idx].dropped_tasks += dropped as u16;
     }
 
@@ -1109,8 +1129,8 @@ impl Extractor<'_> {
 
     /// Is this call the SUBJECT of another call rather than a complete
     /// assertion? A curried assertion applies its subject first.
-    fn is_applied_again(&self, call: Node) -> bool {
-        outer_node(call)
+    fn is_applied_again(&self, call: Node<'a>) -> bool {
+        self.outer_node(call)
             .and_then(|p| self.pack.call_target(p))
             .is_some_and(|t| t.id() == call.id())
     }
@@ -1143,7 +1163,7 @@ impl Extractor<'_> {
         self.facts.interfaces.extend(found);
     }
 
-    fn record_type_export(&mut self, node: Node) {
+    fn record_type_export(&mut self, node: Node<'a>) {
         if self.pack.is_public(node, self.src)
             && let Some(name) = self.scope_name(node).map(Box::<str>::from)
         {
@@ -1154,7 +1174,7 @@ impl Extractor<'_> {
     /// Member names included, unlike `record_use`: `pkg.Symbol` is how Go,
     /// C and qualified Rust/Python reach an export, and the dead-export
     /// join needs those. Allocates only on first sight of a name.
-    fn record_ident(&mut self, node: Node, unit_idx: usize) {
+    fn record_ident(&mut self, node: Node<'a>, unit_idx: usize) {
         if let Ok(name) = node.utf8_text(self.src)
             && !self.mentions.contains(name)
         {
@@ -1165,7 +1185,7 @@ impl Extractor<'_> {
 
     /// One bottom-up combine serves three metrics: normalized Merkle hashing
     /// (clones), named-node mass, and per-line expression height.
-    fn scan(&mut self, node: Node, ctx: Ctx, sem: Sem) -> Sub {
+    fn scan(&mut self, node: Node<'a>, ctx: Ctx, sem: Sem) -> Sub {
         let ctx = Ctx {
             depth: ctx.depth + 1,
             ..ctx
@@ -1228,13 +1248,13 @@ impl Extractor<'_> {
     /// subs it governs follow it as siblings. Climb to the file-level
     /// statement holding this unit, then walk back for the nearest
     /// TypeDef.
-    fn preceding_scope<'t>(&self, node: Node<'t>) -> Option<Node<'t>> {
+    fn preceding_scope(&self, node: Node<'a>) -> Option<Node<'a>> {
         if !self.pack.file_level_scope {
             return None;
         }
         let mut top = node;
-        while let Some(p) = top.parent() {
-            if p.parent().is_none() {
+        while let Some(p) = self.parent(top) {
+            if self.parent(p).is_none() {
                 break;
             }
             top = p;
@@ -1253,19 +1273,19 @@ impl Extractor<'_> {
     /// whose closest TypeDef/FnDef ancestor is a class is a method,
     /// even when decorated or defined conditionally inside the class
     /// body.
-    fn enclosing_scope_is_class(&self, node: Node) -> bool {
+    fn enclosing_scope_is_class(&self, node: Node<'a>) -> bool {
         // Ancestors first. A file-level `package Foo;` governs
         // everything after it, but a SUB in between still ends the
         // class scope: a local inside one is a local, not an attribute
         // of a type. Asking the preceding scope first would make every
         // rewrite in every Perl sub read as a class attribute, which is
         // the exemption, leaving `repurposed` dead for the language.
-        let mut anc = node.parent();
+        let mut anc = self.parent(node);
         while let Some(a) = anc {
             match self.sem_of(a) {
                 Sem::TypeDef => return true,
                 Sem::FnDef | Sem::Lambda => return false,
-                _ => anc = a.parent(),
+                _ => anc = self.parent(a),
             }
         }
         self.preceding_scope(node).is_some()
@@ -1274,13 +1294,13 @@ impl Extractor<'_> {
     /// Base name of a scope-forming node: the pack's name_node hook wins,
     /// then the `name` field, then the parent's binding site (promoted
     /// lambdas), then a `type` field (Rust impl blocks, generics stripped).
-    fn scope_name(&self, node: Node) -> Option<&str> {
+    fn scope_name(&self, node: Node<'a>) -> Option<&str> {
         let named = self
             .pack
             .name_node(node)
             .or_else(|| node.child_by_field_name("name"))
             .or_else(|| {
-                let p = node.parent()?;
+                let p = self.parent(node)?;
                 p.child_by_field_name("name")
                     .or_else(|| p.child_by_field_name("left"))
                     .or_else(|| p.child_by_field_name("key"))
@@ -1312,7 +1332,7 @@ impl Extractor<'_> {
         self.src.get(start as usize..end as usize)
     }
 
-    fn open_unit(&mut self, node: Node) -> usize {
+    fn open_unit(&mut self, node: Node<'a>) -> usize {
         if self.pack.skips_test(node, self.src) {
             self.note_skipped_test(node);
         }
@@ -1383,7 +1403,7 @@ impl Extractor<'_> {
     /// method has no enclosing type node to inherit a scope from, so
     /// `Billing.Total` and `Invoice.Total` in one file would otherwise
     /// share a name, and with it a baseline identity.
-    fn unit_names(&self, node: Node, recv: Option<&Receiver>) -> (Box<str>, Box<str>) {
+    fn unit_names(&self, node: Node<'a>, recv: Option<&Receiver>) -> (Box<str>, Box<str>) {
         // A composed name outranks every node-based route: it exists
         // because no single node spells the whole name.
         let name: Box<str> = match self.pack.composed_name(node, self.src) {
@@ -1391,14 +1411,14 @@ impl Extractor<'_> {
             None => self.scope_name(node).unwrap_or("?").into(),
         };
         let mut scopes: Vec<&str> = Vec::new();
-        let mut anc = node.parent();
+        let mut anc = self.parent(node);
         while let Some(a) = anc {
             if matches!(self.sem_of(a), Sem::TypeDef | Sem::FnDef)
                 && let Some(s) = self.scope_name(a)
             {
                 scopes.push(s);
             }
-            anc = a.parent();
+            anc = self.parent(a);
         }
         scopes.reverse(); // ancestors arrive innermost-first
         if let Some(s) = self.preceding_scope(node).and_then(|p| self.scope_name(p)) {
@@ -1692,7 +1712,7 @@ impl Extractor<'_> {
 
     /// A literal that carries a real key's entropy under a name that
     /// promises a credential.
-    fn record_secret(&mut self, node: Node, unit_idx: usize) {
+    fn record_secret(&mut self, node: Node<'a>, unit_idx: usize) {
         // A fixture credential in a test is not a leak: it authenticates
         // nothing, and every JWT test in existence carries one. Test
         // UNITS count too: a #[test] living in a production file is
@@ -1711,7 +1731,7 @@ impl Extractor<'_> {
     /// computation, and two of them sharing text are not one constant.
     /// So are literals in constant position, which is the remedy: a
     /// `const KIND = "user"` is the name, not the smell.
-    fn record_repeatable_string(&mut self, node: Node, unit_idx: usize) {
+    fn record_repeatable_string(&mut self, node: Node<'a>, unit_idx: usize) {
         if self.facts.is_test_file || self.facts.units[unit_idx].is_test {
             return;
         }
@@ -1845,7 +1865,7 @@ impl Extractor<'_> {
     }
 
     /// Is this node a string built from values rather than written?
-    fn is_assembled_string(&self, node: Node) -> bool {
+    fn is_assembled_string(&self, node: Node<'a>) -> bool {
         if self.pack.table_sem(node) == Sem::StrLit {
             return interpolates(node) || self.inside_a_format_call(node);
         }
@@ -1979,7 +1999,7 @@ impl Extractor<'_> {
     /// `$1`, `:name`, psycopg's `%s`) is the remedy. Only
     /// interpolation counts, and it is judged at the START of the
     /// string, where a statement announces itself.
-    fn check_built_query(&mut self, node: Node, unit_idx: usize) {
+    fn check_built_query(&mut self, node: Node<'a>, unit_idx: usize) {
         // A test builds queries to exercise the builder; the risk is
         // in production. Same line the credential family draws.
         if self.facts.is_test_file || self.facts.units[unit_idx].is_test {
@@ -2007,16 +2027,16 @@ impl Extractor<'_> {
     /// Three ancestors, not one: a grammar may wrap the literal in an
     /// `argument` node AND that in an `arguments` list before reaching
     /// the call, which is how PHP and C# spell every call there is.
-    fn inside_a_format_call(&self, node: Node) -> bool {
+    fn inside_a_format_call(&self, node: Node<'a>) -> bool {
         let mut call = None;
-        let mut anc = node.parent();
+        let mut anc = self.parent(node);
         for _ in 0..3 {
             let Some(a) = anc else { break };
             if self.pack.table_sem(a) == Sem::Call {
                 call = Some(a);
                 break;
             }
-            anc = a.parent();
+            anc = self.parent(a);
         }
         call.and_then(|c| self.callee_trailing_name(c))
             .is_some_and(|name| {
@@ -2079,7 +2099,7 @@ impl Extractor<'_> {
     /// out, since those are the shapes of code that reads a secret from
     /// somewhere else. Vendor-prefixed values are the one exception:
     /// they identify THEMSELVES, and need no name at all.
-    fn is_hardcoded_secret(&self, node: Node) -> bool {
+    fn is_hardcoded_secret(&self, node: Node<'a>) -> bool {
         let Ok(raw) = node.utf8_text(self.src) else {
             return false;
         };
@@ -2095,7 +2115,7 @@ impl Extractor<'_> {
         if !looks_like_a_key(value) {
             return false;
         }
-        let mut anc = node.parent();
+        let mut anc = self.parent(node);
         for _ in 0..4 {
             let Some(a) = anc else { break };
             if self.pack.binds_value(a.kind())
@@ -2109,7 +2129,7 @@ impl Extractor<'_> {
                 return assigns_to(a, node)
                     && self.bound_name(a).is_some_and(promises_a_credential);
             }
-            anc = a.parent();
+            anc = self.parent(a);
         }
         false
     }
@@ -2120,14 +2140,22 @@ impl Extractor<'_> {
     /// flagging every docs site's search config would teach readers to
     /// ignore the metric. A real secret hidden beside an `appId` goes
     /// unseen; that is the price.
-    fn in_client_config(&self, literal: Node) -> bool {
+    fn in_client_config(&self, literal: Node<'a>) -> bool {
         const CLIENT_SIBLINGS: &[&str] = &["appId", "authDomain", "projectId", "indexName"];
-        let Some(pair) = literal.parent().filter(|p| p.kind() == "pair") else {
+        // A config block is a handful of keys. An object with more is a
+        // table, and a scan of all its keys for each literal in it costs
+        // the square of its size: blender's 100000-entry revision map
+        // stopped the report for an hour.
+        const CONFIG_KEYS: usize = 64;
+        let Some(pair) = self.parent(literal).filter(|p| p.kind() == "pair") else {
             return false;
         };
-        let Some(object) = pair.parent() else {
+        let Some(object) = self.parent(pair) else {
             return false;
         };
+        if object.named_child_count() > CONFIG_KEYS {
+            return false;
+        }
         let mut cursor = object.walk();
         object.named_children(&mut cursor).any(|sib| {
             sib.kind() == "pair"
@@ -2159,7 +2187,7 @@ impl Extractor<'_> {
     /// A number is magic when it is non-trivial and unnamed: outside const
     /// definitions, parameter defaults, indexing, types, and patterns
     /// (Kernighan & Plauger; McConnell ch. 12).
-    fn is_magic(&self, node: Node) -> bool {
+    fn is_magic(&self, node: Node<'a>) -> bool {
         let trivial = matches!(
             node.utf8_text(self.src),
             Ok("0" | "1" | "2" | "0.0" | "1.0" | "0.5" | "10" | "100" | "100.0")
@@ -2171,12 +2199,12 @@ impl Extractor<'_> {
     /// parameter defaults, indexing, types and patterns (Kernighan &
     /// Plauger; McConnell ch. 12)? A SCREAMING binding IS the name, and
     /// is the remedy both literal metrics ask for.
-    fn is_unnamed_literal(&self, node: Node) -> bool {
+    fn is_unnamed_literal(&self, node: Node<'a>) -> bool {
         let screaming = |text: &str| {
             text.chars().any(|c| c.is_ascii_alphabetic())
                 && !text.chars().any(|c| c.is_ascii_lowercase())
         };
-        let mut anc = node.parent();
+        let mut anc = self.parent(node);
         for _ in 0..8 {
             let Some(a) = anc else { break };
             let kind = a.kind();
@@ -2186,7 +2214,7 @@ impl Extractor<'_> {
             if self.pack.binds_value(kind) && self.binds_a_screaming_name(a, screaming) {
                 return false;
             }
-            anc = a.parent();
+            anc = self.parent(a);
         }
         true
     }
@@ -2204,7 +2232,7 @@ impl Extractor<'_> {
     /// data links couples the reader to neighbors' internal structure.
     /// Fluent chains break naturally, since a call ends the descent,
     /// and a self/this base forgives its first link.
-    fn check_demeter(&mut self, node: Node, unit: usize) {
+    fn check_demeter(&mut self, node: Node<'a>, unit: usize) {
         // C HAS NO METHODS, so it has no Demeter. Lieberherr's rule
         // constrains which OBJECTS a method may send a message to, and
         // its remedy — Hide Delegate, ask the neighbour instead of
@@ -2225,7 +2253,8 @@ impl Extractor<'_> {
         };
         // Only chain roots: a parent of the same kind means we are one of
         // its links and will be counted from the top.
-        if node.kind_id() != attr_kind || outer_node(node).is_some_and(|p| p.kind_id() == attr_kind)
+        if node.kind_id() != attr_kind
+            || self.outer_node(node).is_some_and(|p| p.kind_id() == attr_kind)
         {
             return;
         }
@@ -2451,9 +2480,9 @@ impl Extractor<'_> {
     /// Any mention keeps a local alive; last row wins. Identifiers on the
     /// member side of an access (`x` in `foo.x`) are field names, not
     /// locals. Counting them would inflate spans of same-named locals.
-    fn record_use(&mut self, node: Node, unit: usize) {
+    fn record_use(&mut self, node: Node<'a>, unit: usize) {
         if let Some((attr_kind, object_field)) = self.pack.attr()
-            && node.parent().is_some_and(|p| {
+            && self.parent(node).is_some_and(|p| {
                 p.kind_id() == attr_kind
                     && p.child_by_field_name(object_field)
                         .is_none_or(|obj| obj.id() != node.id())
@@ -2564,7 +2593,7 @@ impl Extractor<'_> {
     /// per line, so a fenced example, a sentence and a paragraph all
     /// span several nodes, and none of them can be recognized a node at
     /// a time. The rest of the run arrives already accounted for.
-    fn record_comment_run(&mut self, node: Node, ctx: Ctx) {
+    fn record_comment_run(&mut self, node: Node<'a>, ctx: Ctx) {
         if node.start_position().row < self.comments_through {
             return;
         }
@@ -2606,7 +2635,7 @@ impl Extractor<'_> {
     }
 
     /// What a run that opens its own line introduces.
-    fn introduced_role(&self, node: Node, follows: Option<Node>, ctx: Ctx) -> CommentRole {
+    fn introduced_role(&self, node: Node<'a>, follows: Option<Node>, ctx: Ctx) -> CommentRole {
         match follows.map(|n| self.declared_sem(n)) {
             Some(Sem::FnDef) => return CommentRole::FnSummary,
             Some(Sem::TypeDef) => return CommentRole::TypeDoc,
@@ -2623,7 +2652,7 @@ impl Extractor<'_> {
         // Opens the file: nothing declared precedes it, and it declares
         // nothing itself.
         let opens_file = node.prev_named_sibling().is_none()
-            && node.parent().is_some_and(|p| p.parent().is_none());
+            && self.parent(node).is_some_and(|p| self.parent(p).is_none());
         match opens_file {
             true => CommentRole::ModuleHeader,
             false => CommentRole::Inline,
@@ -2677,9 +2706,9 @@ impl Extractor<'_> {
     /// A docstring is documentation the grammar spells as a VALUE —
     /// Python's and Ruby's first-statement string — so it carries no
     /// comment node and the run walk never reaches it.
-    fn record_docstring(&mut self, node: Node, ctx: Ctx) {
+    fn record_docstring(&mut self, node: Node<'a>, ctx: Ctx) {
         let mut role = CommentRole::ModuleHeader;
-        let mut anc = node.parent();
+        let mut anc = self.parent(node);
         while let Some(a) = anc {
             match self.sem_of(a) {
                 Sem::FnDef | Sem::Lambda => {
@@ -2690,7 +2719,7 @@ impl Extractor<'_> {
                     role = CommentRole::TypeDoc;
                     break;
                 }
-                _ => anc = a.parent(),
+                _ => anc = self.parent(a),
             }
         }
         let attach = match role {
@@ -2900,8 +2929,8 @@ impl Extractor<'_> {
 
     /// A boolean operator starts a new sequence unless its parent is the same
     /// operator (`a and b and c` chains count once cognitively).
-    fn bool_starts_seq(&self, node: Node) -> bool {
-        let Some(parent) = node.parent() else {
+    fn bool_starts_seq(&self, node: Node<'a>) -> bool {
+        let Some(parent) = self.parent(node) else {
             return true;
         };
         if self.sem_of(parent) != Sem::BoolOp {
@@ -2912,6 +2941,25 @@ impl Extractor<'_> {
                 .and_then(|o| o.utf8_text(self.src).ok())
         };
         op(parent) != op(node)
+    }
+
+    /// The first ancestor that spells MORE than this node does. Solidity
+    /// stacks an `expression` around every link of a member chain, so the
+    /// question "is my parent another link" has to look past them.
+    fn outer_node(&self, node: Node<'a>) -> Option<Node<'a>> {
+        let mut up = self.parent(node);
+        while let Some(p) = up.filter(|p| p.byte_range() == node.byte_range()) {
+            up = self.parent(p);
+        }
+        up
+    }
+
+    /// Is this call's value thrown away? A spawn as a bare statement leaves
+    /// nobody able to await the task, observe its panic, or stop the runtime
+    /// dropping it mid-write at shutdown.
+    fn discards_its_result(&self, call: Node<'a>) -> bool {
+        self.parent(call)
+            .is_some_and(|p| p.kind() == "expression_statement")
     }
 }
 
@@ -3088,17 +3136,6 @@ fn call_arguments<'t>(pack: &Pack, call: Node<'t>) -> Vec<Node<'t>> {
         .filter(|n| func.is_none_or(|f| f.id() != n.id()))
         .map(bare_argument)
         .collect()
-}
-
-/// The first ancestor that spells MORE than this node does. Solidity
-/// stacks an `expression` around every link of a member chain, so the
-/// question "is my parent another link" has to look past them.
-fn outer_node<'t>(node: Node<'t>) -> Option<Node<'t>> {
-    let mut up = node.parent();
-    while let Some(p) = up.filter(|p| p.byte_range() == node.byte_range()) {
-        up = p.parent();
-    }
-    up
 }
 
 /// The child that HOLDS a call's arguments, when no field names it:
@@ -3967,14 +4004,6 @@ fn arm_label(arm: Node, src: &[u8]) -> String {
         .join(" ")
 }
 
-/// Is this call's value thrown away? A spawn as a bare statement leaves
-/// nobody able to await the task, observe its panic, or stop the runtime
-/// dropping it mid-write at shutdown.
-fn discards_its_result(call: Node) -> bool {
-    call.parent()
-        .is_some_and(|p| p.kind() == "expression_statement")
-}
-
 fn line_span(node: Node) -> u32 {
     (node.end_position().row - node.start_position().row) as u32 + 1
 }
@@ -4475,6 +4504,38 @@ mod tests {
         let ok = facts("def f(x):\n    return x + 1\n");
         assert!(!ok.too_deep);
         assert!(!ok.low_confidence());
+    }
+
+    /// A table costs the extractor one pass. `Node::parent` scans the
+    /// children of each ancestor, so a literal that asks for its parents
+    /// that way costs the width of the table. Blender's revision map, a
+    /// dict of 100000 entries, held the report past fifteen minutes.
+    #[test]
+    fn a_large_table_costs_one_pass() {
+        let rows = 20_000;
+        let mut dict = String::from("data = {\n");
+        let mut table = String::from("static const long kTable[] = {\n");
+        for n in 0..rows {
+            dict.push_str(&format!("\"{n:040x}\": {n},\n"));
+            table.push_str(&format!("  {n}, -{n}, 0x{n:x},\n"));
+        }
+        dict.push_str("}\n");
+        table.push_str("};\n");
+        for (lang, path, src) in [
+            (Lang::Python, "map.py", &dict),
+            (Lang::Cpp, "table.cc", &table),
+        ] {
+            let pack = lang.pack();
+            let mut parser = pack.make_parser();
+            let started = std::time::Instant::now();
+            let f = extract(pack, &mut parser, Path::new(path), src);
+            let spent = started.elapsed();
+            assert!(!f.low_confidence(), "{path} did not parse");
+            assert!(
+                spent < std::time::Duration::from_secs(20),
+                "{path} took {spent:?}"
+            );
+        }
     }
 
     #[test]
