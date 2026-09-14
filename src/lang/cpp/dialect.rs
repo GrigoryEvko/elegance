@@ -2179,9 +2179,70 @@ fn braced_default_argument(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
         t.blank(i..close + 1, b' ');
         return Some(close + 1);
     }
+    // A designated list, as in `Opts o = { .a = true }`, has no form in
+    // parentheses: `( .a = true )` does not parse. It holds data and no
+    // work, so it goes whole.
+    if t.next(open + 1).is_some_and(|k| {
+        t.at(k) == b'.' && t.get(k + 1).is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+    }) {
+        t.blank(i..close + 1, b' ');
+        return Some(close + 1);
+    }
     t.out[open] = b'(';
     t.out[close] = b')';
     Some(close + 1)
+}
+
+/// C++98 the null directive: a `#` with nothing after it on its line but
+/// a comment. Boost.Preprocessor writes `# /* Copyright ... */` above its
+/// directives in 1263 files, and the grammar reads no directive without
+/// a name. The bytes after the `#` are read as they are, so a directive
+/// name is never taken for a comment.
+fn null_directive(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let line_start = (0..i).rev().find(|&k| t.at(k) == b'\n').map_or(0, |k| k + 1);
+    if (line_start..i).any(|k| !matches!(t.at(k), b' ' | b'\t')) {
+        return None;
+    }
+    let mut k = i + 1;
+    while k < t.len() {
+        match t.at(k) {
+            b'\n' => break,
+            b' ' | b'\t' | b'\r' => k += 1,
+            b'/' if t.get(k + 1) == Some(b'/') => break,
+            b'/' if t.get(k + 1) == Some(b'*') => {
+                let close = (k + 2..t.len().saturating_sub(1))
+                    .find(|&j| t.at(j) == b'*' && t.at(j + 1) == b'/');
+                match close {
+                    Some(close) if !(k..close).any(|j| t.at(j) == b'\n') => k = close + 2,
+                    _ => break,
+                }
+            }
+            _ => return None,
+        }
+    }
+    t.blank(i..i + 1, b' ');
+    Some(i + 1)
+}
+
+/// C++98 an unnamed template parameter of pointer type with a default, as
+/// in `template <class T, std::enable_if_t<C<T>>* = nullptr>`. The grammar
+/// reads the parameter once it has a name, and the space before the `=`
+/// becomes one.
+fn unnamed_pointer_parameter(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if !matches!(t.get(i + 1), Some(b' ' | b'\t')) {
+        return None;
+    }
+    let eq = t
+        .next(i + 1)
+        .filter(|&k| t.at(k) == b'=' && t.get(k + 1) != Some(b'='))?;
+    let before = t.prev(i)?;
+    if !(matches!(t.at(before), b'>' | b'*') || is_word(t.at(before)))
+        || !in_a_template_header(t, i)
+    {
+        return None;
+    }
+    t.out[i + 1] = b'_';
+    Some(eq)
 }
 
 /// P0734. A constrained template parameter whose default is a type that
@@ -2974,6 +3035,13 @@ const RULES: &[Rule] = &[
         Trigger::Byte(b'{'),
         braced_template_argument
     ),
+    rule!("null directive", "C++98", Trigger::Byte(b'#'), null_directive),
+    rule!(
+        "unnamed template parameter with a default",
+        "C++98",
+        Trigger::Byte(b'*'),
+        unnamed_pointer_parameter
+    ),
     rule!("digraph", "C++98", Trigger::Byte(b'<'), digraph),
     rule!("digraph", "C++98", Trigger::Byte(b'%'), digraph),
     rule!("digraph", "C++98", Trigger::Byte(b':'), digraph),
@@ -3713,6 +3781,15 @@ mod tests {
             "module declaration",
             "export module widget;\nexport int f() { return 1; }\n",
         ),
+        ("null directive", "#\n# /* note */\nint f();\n"),
+        (
+            "an unnamed pointer template parameter with a default",
+            "template <typename T, std::enable_if_t<C<T>>* = nullptr>\nvoid f(T t);\n",
+        ),
+        (
+            "a designated initializer as a default argument",
+            "struct O { bool a; };\nvoid f(O o = { .a = true });\n",
+        ),
     ];
 
     /// Ordinary C++ that happens to spell one of the words or the bytes a
@@ -3949,6 +4026,14 @@ mod tests {
             "void f(S s, int S::*pm) { s.*pm = 1; }",
         ),
         ("a structured binding", "void f(P p) { auto [a, b] = p; }"),
+        (
+            "a product in a template default",
+            "template <class T, int N = sizeof(T) * 2> struct S { };",
+        ),
+        (
+            "a stringizing macro",
+            "#define STR(a) # a\nconst char* s = STR(x);",
+        ),
     ];
 
     #[test]

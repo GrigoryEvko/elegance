@@ -1040,6 +1040,9 @@ void f() { using enum ns::E; }
 void g() { F(1); F(1, 2); }
 ### s20_var_tmpl_constrained
 template <C T> constexpr bool v = true;
+### s20_designated_default_argument
+struct O { bool a; bool b; };
+void f(O o = { .a = true, .b = false });
 ### s23_assume
 int f(int x) { [[assume(x > 0)]]; return x; }
 ### s23_assume_complex
@@ -1516,3 +1519,17 @@ void f() throw(std::bad_alloc); void g() throw(int, long);
 template <class T> auto g(T o) { return o(typename T::id{}); }
 ### s98_typename_value_init
 template <class T> void f() { auto x = typename T::type(); }
+### s98_null_directive
+# /* Copyright (C) 2001
+#  * Housemarque Oy
+#  */
+#
+# ifndef X_HPP
+# define X_HPP
+#
+int f();
+# endif
+### s98_unnamed_pointer_template_parameter
+template <int* = 0> void g();
+template <typename T, typename std::enable_if<std::is_integral<T>::value>::type* = nullptr>
+void f(T t);
