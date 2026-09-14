@@ -763,11 +763,12 @@ fn debug_errors(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
     for (name, paper, count) in lang.rewrites(&raw, clangfmt::for_file(path)) {
         println!("{lang:?} rewrite: {name} ({paper}), {count} times");
     }
-    let tree = lang
-        .pack()
-        .make_parser()
-        .parse(&source, None)
-        .ok_or("parse returned nothing")?;
+    let tree = facts::parse_bounded(
+        &mut lang.pack().make_parser(),
+        &source,
+        facts::parse_limit(source.len()),
+    )
+    .ok_or("the parse stopped: tree-sitter's error recovery ran past the time limit")?;
     let mut out = std::io::stdout().lock();
     let mut stack = vec![tree.root_node()];
     let mut count = 0;

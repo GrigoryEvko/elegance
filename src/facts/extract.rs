@@ -1,6 +1,8 @@
+use std::ops::ControlFlow;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Node, ParseOptions, ParseState, Parser, Tree};
 
 use super::{CloneSite, CommentFact, CommentRole, CtrlFact, FileFacts, UnitFacts};
 use crate::facts::BodyShape;
@@ -43,6 +45,74 @@ fn retune(pack: &Pack, parser: &mut Parser, path: &Path) {
     if pack.lang == crate::lang::Lang::OCaml {
         let _ = parser.set_language(&crate::lang::ocaml_grammar(path));
     }
+}
+
+/// The parse time for each byte past which a parse that reports an error
+/// stops. A file that parses reads at 1 to 8 µs a byte on a machine
+/// under full load. tree-sitter's error recovery has no such bound:
+/// zstd's testcard-dxt1.inl, 196 KB of bare bytes, took 12 s.
+const RECOVERY_MICROS_PER_BYTE: u64 = 25;
+
+/// The parse time for each byte past which any parse stops. tree-sitter
+/// reports an error to the callback only when every version of the parse
+/// holds one, and a recovery that keeps one clean version never reports
+/// it: hhvm's large-scalar.php, 218 KB of Hack that the PHP grammar
+/// cannot read, took 256 s with no report. The limit is 12 times the
+/// slowest clean parse measured in 65 codebases.
+const PARSE_MICROS_PER_BYTE: u64 = 100;
+
+/// The parse time that a file may take, whatever its size.
+const PARSE_FLOOR: Duration = Duration::from_secs(2);
+
+/// The two times a parse may take: one past which a parse that reports an
+/// error stops, and one past which any parse stops.
+#[derive(Clone, Copy)]
+pub(crate) struct ParseLimit {
+    pub(crate) reported_error: Duration,
+    pub(crate) any: Duration,
+}
+
+/// The limits for a source of `len` bytes. A count of parser operations
+/// does not serve, because each step of a recovery costs more as the
+/// error grows: large-scalar.php uses 6.8 operations a byte, a normal
+/// count.
+pub(crate) fn parse_limit(len: usize) -> ParseLimit {
+    let per_byte = |micros: u64| {
+        PARSE_FLOOR.max(Duration::from_micros(micros.saturating_mul(len as u64)))
+    };
+    ParseLimit {
+        reported_error: per_byte(RECOVERY_MICROS_PER_BYTE),
+        any: per_byte(PARSE_MICROS_PER_BYTE),
+    }
+}
+
+/// Parse `source`, and stop a parse that runs past its limit. A stopped
+/// parse gives None, as a parse that fails does, and the parser starts the
+/// next file clean.
+///
+/// The limits are times, so on a machine slow enough one file can stop on
+/// one run and finish on the next. That takes a machine 12 times slower
+/// than a loaded one for a file that parses.
+pub(crate) fn parse_bounded(parser: &mut Parser, source: &str, limit: ParseLimit) -> Option<Tree> {
+    let bytes = source.as_bytes();
+    let started = Instant::now();
+    let mut stop = |state: &ParseState| {
+        let spent = started.elapsed();
+        if spent > limit.any || (state.has_error() && spent > limit.reported_error) {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
+    let tree = parser.parse_with_options(
+        &mut |at, _| bytes.get(at..).unwrap_or_default(),
+        None,
+        Some(ParseOptions::new().progress_callback(&mut stop)),
+    );
+    if tree.is_none() {
+        parser.reset();
+    }
+    tree
 }
 
 /// The empty fact sheet a walk fills in: the counts a file gives up
@@ -103,7 +173,7 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         }
     }
     let mut facts = blank_facts(pack, path, blank.len as u32, blank.count() as u32);
-    let Some(tree) = parser.parse(source, None) else {
+    let Some(tree) = parse_bounded(parser, source, parse_limit(source.len())) else {
         facts.parse_errors = 1;
         return facts;
     };
@@ -4504,6 +4574,33 @@ mod tests {
         let ok = facts("def f(x):\n    return x + 1\n");
         assert!(!ok.too_deep);
         assert!(!ok.low_confidence());
+    }
+
+    #[test]
+    fn a_parse_stops_at_its_limit_and_the_parser_reads_the_next_file() {
+        use super::{ParseLimit, parse_bounded};
+        use std::time::Duration;
+        let pack = Lang::Cpp.pack();
+        let mut parser = pack.make_parser();
+        let stopped = ParseLimit {
+            reported_error: Duration::ZERO,
+            any: Duration::ZERO,
+        };
+        let broken = "int f( { ) } ] ;;; class {\n".repeat(200);
+        assert!(
+            parse_bounded(&mut parser, &broken, stopped).is_none(),
+            "a parse ran past a limit of zero"
+        );
+        // An error limit of zero cannot stop a parse that has no error,
+        // and the parser does not resume the parse it stopped.
+        let clean = "int f(int x) { return x + 1; }\n".repeat(200);
+        let open = ParseLimit {
+            reported_error: Duration::ZERO,
+            any: Duration::from_secs(3600),
+        };
+        let tree = parse_bounded(&mut parser, &clean, open).expect("a clean parse stopped");
+        assert!(!tree.root_node().has_error());
+        assert_eq!(tree.root_node().end_byte(), clean.len());
     }
 
     /// A table costs the extractor one pass. `Node::parent` scans the

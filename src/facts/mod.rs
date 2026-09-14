@@ -4,6 +4,7 @@
 mod extract;
 
 pub use extract::{extract, is_leaked_credential};
+pub(crate) use extract::{parse_bounded, parse_limit};
 /// A directory whose files RUN rather than get imported. The graph asks
 /// the same question `is_sink` answers for a C translation unit.
 pub(crate) use extract::{one_shot_dir, rooted};
