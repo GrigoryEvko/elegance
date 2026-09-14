@@ -678,6 +678,32 @@ application branches harder than a header-only library, and a C++ budget
 derived only from libraries would have been one nobody could meet.
 </details>
 
+**elegance reads C++ as a compiler does, up to C++2d, the draft that
+follows C++26.** The bundled grammar is older than the language, and a
+parse error removes the rest of its scope from the tree. So elegance
+normalizes each C++ file before the parser reads it. The normalization
+removes the parts that do no work: contracts, attributes, specifiers,
+reflection operators. Every call, branch and loop stays, and every byte
+offset stays, so each finding shows the correct line.
+
+<details>
+<summary>What the normalization covers, and how a test holds it to that</summary>
+
+`src/lang/cpp/dialect_probes.txt` holds 670 short sources. There is one
+for each row of the Clang conformance table that has syntax, from C++98
+to C++2d, and one for each GNU, Clang and MSVC extension that production
+code uses. A test parses every probe after the normalization. A second
+test makes sure that each rule applies to at least one probe. Samples of
+ordinary code must stay the same after the normalization.
+
+elegance also reads the macros that a project declares to clang-format:
+`AttributeMacros`, `StatementMacros`, `ForEachMacros`, `IfMacros`,
+`TypenameMacros` and `NamespaceMacros`.
+
+`--errors FILE` shows the rules that applied to a file, with the paper for
+each construct, above the parse errors that stay.
+</details>
+
 **CUDA adds exactly two named kinds to C++** — a whole dialect for one
 table entry, which is what the hourglass was built to buy. `__global__`
 and `__device__` are unnamed tokens the tree never shows, `__shared__`

@@ -8,15 +8,15 @@ extern int x __asm__("y");
 struct S { char c; } __attribute__((packed));
 ### ext_attr_gnu_class
 struct __attribute__((packed)) S { char c; int i; };
-### ext_attr_gnu_enum  (not read yet)
+### ext_attr_gnu_enum
 enum __attribute__((packed)) E { A };
 ### ext_attr_gnu_multi
 __attribute__((__always_inline__, __hot__)) inline void f() { }
-### ext_attr_gnu_ns  (not read yet)
+### ext_attr_gnu_ns
 namespace n __attribute__((visibility("hidden"))) { }
 ### ext_attr_gnu_param
 void f(int x __attribute__((unused)));
-### ext_attr_gnu_var  (not read yet)
+### ext_attr_gnu_var
 int x __attribute__((aligned(16)));
 ### ext_block_comment_with_all
 /* pre(x)
@@ -29,9 +29,9 @@ void f(struct bpf_object* obj) { struct bpf_program* prog; bpf_object__for_each_
 bool b = __builtin_expect(x, 1); auto t = __builtin_trap; int c = __builtin_popcount(3);
 ### ext_builtin_offsetof
 auto o = __builtin_offsetof(S, x); auto p = offsetof(S, x);
-### ext_case_range  (not read yet)
+### ext_case_range
 void f(int x) { switch (x) { case 1 ... 5: break; } }
-### ext_cdecl  (not read yet)
+### ext_cdecl
 void __cdecl f(); void __stdcall g();
 ### ext_char_literal_prefixes
 auto a = u8'x'; auto b = u'x'; auto c = U'x'; auto d = L'x';
@@ -44,7 +44,7 @@ std::map<int, /* key */ int /* value */> m;
 ### ext_comment_with_all
 // pre(x) post(y) = delete("z") ^^T [:s:] template for [[=1]] this consteval
 int f() { return 1; }
-### ext_complex  (not read yet)
+### ext_complex
 _Complex double z; __complex__ float w;
 ### ext_ctor_braced_default_multi
 struct S { S(Cfg a = {}, Cfg b = {}, int c = 0) : a_(a) { } Cfg a_; };
@@ -61,7 +61,7 @@ void f(const char* s = "a" PRIx64 "b");
 #error X isn't defined
 #endif
 int x;
-### ext_explicit_inst_extern_fn  (not read yet)
+### ext_explicit_inst_extern_fn
 extern template void f<int>(int);
 ### ext_extension_decl
 __extension__ int x;
@@ -69,7 +69,7 @@ __extension__ int x;
 int x = __extension__ 1;
 ### ext_extension_typedef
 __extension__ typedef unsigned __int128 u128;
-### ext_extension_using  (not read yet)
+### ext_extension_using
 __extension__ using w = unsigned __int128;
 ### ext_float128
 __float128 q = 1.0Q; _Float128 r = 2.0f128;
@@ -89,19 +89,19 @@ int x;
 #if __has_feature(cxx_rvalue_references)
 int x;
 #endif
-### ext_if_0_block  (not read yet)
+### ext_if_0_block
 #if 0
 this is not code at all ' and " unbalanced
 #endif
 int x;
-### ext_if_0_nested  (not read yet)
+### ext_if_0_nested
 #if 0
 #if 1
 garbage
 #endif
 #endif
 int x;
-### ext_ifdef_cplusplus_extern  (not read yet)
+### ext_ifdef_cplusplus_extern
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -109,7 +109,7 @@ int f(int);
 #ifdef __cplusplus
 }
 #endif
-### ext_ifdef_cplusplus_extern_ns  (not read yet)
+### ext_ifdef_cplusplus_extern_ns
 namespace n {
 #ifdef __cplusplus
 extern "C" {
@@ -125,7 +125,7 @@ auto z = 1.0i; auto w = 2.0if;
 #include_next <x.h>
 ### ext_int128
 __int128 x = 0; unsigned __int128 y = 0; __int128_t z = 0;
-### ext_label_addr  (not read yet)
+### ext_label_addr
 void f() { void* p = &&l; l: goto *p; }
 ### ext_lambda_in_braced_default
 void f(Cfg c = {[] { return 1; }});
@@ -157,13 +157,13 @@ void f() { L(1, 2); }
 struct S { int a[2] = {1, 2}; std::array<int, 2> b = {}; };
 ### ext_multichar
 int m = 'abcd';
-### ext_nested_tmpl_ptr_member_arr  (not read yet)
+### ext_nested_tmpl_ptr_member_arr
 template <class T> struct W; W<int (S::*[3])(int)> w;
 ### ext_noexcept_fn_ptr_param
 void f(void (*cb)(int) noexcept);
 ### ext_noreturn_gnu
 __attribute__((noreturn)) void f();
-### ext_nullable  (not read yet)
+### ext_nullable
 void f(int* _Nullable p, int* _Nonnull q);
 ### ext_pragma_clang
 #pragma clang diagnostic push
@@ -201,11 +201,11 @@ const char* s = "pre(x) post(y) = delete(\"z\") ^^T [:s:]";
 __thread int x;
 ### ext_tmpl_arg_braced_default
 void f(std::array<int, 2> a = {1, 2});
-### ext_typeof  (not read yet)
+### ext_typeof
 int x; typeof(x) y; __typeof__(x) z; __typeof(x) w;
 ### ext_union_braced_default
 union U { int a; float b; }; void f(U u = {}) { }
-### ext_va_args_gnu  (not read yet)
+### ext_va_args_gnu
 #define F(a, args...) f(a, ##args)
 void g() { F(1); }
 ### ext_vector_ext
@@ -216,9 +216,9 @@ auto s = LR"delim(a\b)delim"; auto t = u8R"(x)";
 template <class T> using V = std::vector<T>;
 ### s11_alignas
 struct alignas(64) S { char c; };
-### s11_alignas_attr_class  (not read yet)
+### s11_alignas_attr_class
 struct [[nodiscard]] alignas(64) S { char c; };
-### s11_alignas_attr_class_base  (not read yet)
+### s11_alignas_attr_class_base
 template <class T> class [[nodiscard]] alignas(64) S : B<S<T>> { int f() { return 1; } };
 ### s11_alignas_pack
 template <class... T> struct S { alignas(T...) char c; };
@@ -286,11 +286,11 @@ enum class E : int;
 enum E : unsigned char { A };
 ### s11_explicit_conv
 struct S { explicit operator bool() const { return true; } };
-### s11_explicit_inst  (not read yet)
+### s11_explicit_inst
 template class std::vector<int>;
 ### s11_explicit_inst_fn
 template void f<int>(int);
-### s11_explicit_inst_nttp  (not read yet)
+### s11_explicit_inst_nttp
 template class Pingmesh<2>;
 ### s11_extern_c
 extern "C" int f(int);
@@ -299,7 +299,7 @@ extern "C" {
 int f(int);
 int g(int);
 }
-### s11_extern_c_ifdef  (not read yet)
+### s11_extern_c_ifdef
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -309,7 +309,7 @@ int f(int);
 #endif
 ### s11_extern_cpp
 extern "C++" void f();
-### s11_extern_tmpl  (not read yet)
+### s11_extern_tmpl
 extern template class std::vector<int>;
 ### s11_final_class
 struct S final { };
@@ -383,7 +383,7 @@ int a = 0777; int b = 0xFFu; int c = 0XABl;
 void f(S s) { if (s) { } while (!s) { } }
 ### s11_operator_call_sub
 struct S { int operator()(int); int operator[](int); S* operator->(); };
-### s11_operator_explicit_call  (not read yet)
+### s11_operator_explicit_call
 void f(S a, S b) { a.operator+(b); a.operator()(1); }
 ### s11_operator_new_member
 struct S { static void* operator new(std::size_t); static void operator delete(void*); };
@@ -401,25 +401,25 @@ int* (*f())(int);
 int (*p)[3];
 ### s11_ptr_to_member
 int S::*pm = &S::x; void (S::*pf)() = &S::f;
-### s11_ptr_to_member_call  (not read yet)
+### s11_ptr_to_member_call
 void f(S* s, void (S::*pf)()) { (s->*pf)(); (*s.*pf)(); }
 ### s11_ptr_to_member_const
 int (S::*pf)() const = &S::f;
 ### s11_ptr_to_member_noexcept
 void (S::*pf)() noexcept = &S::f;
-### s11_ptr_to_member_tmpl_arg  (not read yet)
+### s11_ptr_to_member_tmpl_arg
 template <class T> struct W; W<void (S::*)()> w;
-### s11_ptr_to_member_tmpl_arg_noexcept  (not read yet)
+### s11_ptr_to_member_tmpl_arg_noexcept
 template <class T> struct W; W<void (S::*)() noexcept> w;
-### s11_ptr_to_member_tmpl_arg_ns  (not read yet)
+### s11_ptr_to_member_tmpl_arg_ns
 template <class T> struct W; W<void (ns::S::*)() noexcept> w;
-### s11_ptr_to_member_tmpl_arg_qual  (not read yet)
+### s11_ptr_to_member_tmpl_arg_qual
 template <class T> struct W; W<int (S::*)(int) const noexcept> w;
-### s11_ptr_to_member_using  (not read yet)
+### s11_ptr_to_member_using
 using F = void (S::*)() noexcept;
-### s11_ptr_to_member_using_ns  (not read yet)
+### s11_ptr_to_member_using_ns
 using F = std::expected<int, E> (ns::C::*)(int, int);
-### s11_ptr_to_member_using_ns_ret  (not read yet)
+### s11_ptr_to_member_using_ns_ret
 using ConsumeFn = std::expected<cntp::PositiveCreditBytes, cntp::IncastError> (cntp::IncastController::*)(cntp::PositiveCreditBytes);
 ### s11_pure_virtual
 struct S { virtual void f() = 0; virtual ~S() = default; };
@@ -479,7 +479,7 @@ template <class A, class B> auto add(A a, B b) -> decltype(a + b) { return a + b
 std::map<int, std::vector<std::vector<int>>> m;
 ### s11_triple_angle_expr
 bool b = std::is_same_v<A<B<C<int>>>, int>;
-### s11_typeid  (not read yet)
+### s11_typeid
 auto& t = typeid(int);
 ### s11_typename_disambig
 template <class T> void f() { typename T::type x; }
@@ -557,13 +557,13 @@ double d = pi<double>;
 struct B { int x; }; struct D : B { int y; }; D d{{1}, 2};
 ### s17_attr_clang
 [[clang::always_inline]] void f();
-### s17_attr_enum  (not read yet)
+### s17_attr_enum
 enum E { A [[deprecated]] = 1, B };
 ### s17_attr_ns
 namespace [[deprecated]] old { }
 ### s17_attr_ns_qualified
 [[gnu::always_inline, gnu::hot]] void f();
-### s17_attr_using  (not read yet)
+### s17_attr_using
 [[using gnu: hot, cold]] void f();
 ### s17_auto_brace
 auto x{1}; auto y = {1, 2};
@@ -605,29 +605,29 @@ template <class... T> auto sum(T... a) { return (a + ...); }
 #if __has_cpp_attribute(nodiscard)
 int x;
 #endif
-### s17_has_include_angle  (not read yet)
+### s17_has_include_angle
 #if __has_include(<optional>)
 int x;
 #endif
-### s17_has_include_defined  (not read yet)
+### s17_has_include_defined
 #if defined(__has_include) && __has_include(<b>)
 int b;
 #endif
-### s17_has_include_elif  (not read yet)
+### s17_has_include_elif
 #if A
 int a;
 #elif __has_include(<b>)
 int b;
 #endif
-### s17_has_include_expr  (not read yet)
+### s17_has_include_expr
 #if __has_include(<a>) && defined(B)
 int x;
 #endif
-### s17_has_include_quote  (not read yet)
+### s17_has_include_quote
 #if __has_include("x.h")
 int x;
 #endif
-### s17_has_include_two  (not read yet)
+### s17_has_include_two
 #if __has_include(<a.h>) && __has_include(<b.h>)
 int x;
 #endif
@@ -681,9 +681,9 @@ template <template <class...> class C> struct S { };
 template <template <class> typename C> struct S { };
 ### s17_u8_char
 char c = u8'a';
-### s17_unknown_attr  (not read yet)
+### s17_unknown_attr
 [[vendor::foo(a b c [x] {y} (z))]] void f();
-### s17_using_pack  (not read yet)
+### s17_using_pack
 template <class... Ts> struct O : Ts... { using Ts::operator()...; };
 ### s20_abbrev_tmpl_ret
 auto f(auto x) -> decltype(x) { return x; }
@@ -695,13 +695,13 @@ template <class T> struct P { T x; T y; }; P p{1, 2};
 template <C T> using A = T;
 ### s20_array_unknown_bound
 void f(int (&a)[]);
-### s20_bitfield_init  (not read yet)
+### s20_bitfield_init
 struct S { int x : 3 = 1; int y : 4 { 2 }; };
 ### s20_capture_eq_this
 struct S { void f() { auto l = [=, this]() { return x; }; } int x; };
 ### s20_char8
 char8_t c = u8'a'; const char8_t* s = u8"x";
-### s20_class_nttp_braced  (not read yet)
+### s20_class_nttp_braced
 S<{1, 2}> s; S<P{1, 2}> t;
 ### s20_concept_call_bool
 template <class T> void f() { if (C<T>) { } }
@@ -757,7 +757,7 @@ std::integral auto x = 1;
 template <std::integral auto N> struct S { };
 ### s20_constrained_param
 template <C T> void f(T);
-### s20_constrained_param_default  (not read yet)
+### s20_constrained_param_default
 template <C T = int> void f(T);
 ### s20_constrained_param_pack
 template <C... T> void f(T...);
@@ -786,7 +786,7 @@ P p{
 };
 ### s20_designated_nested
 struct Q { P p; }; Q q{.p = {.x = 1}};
-### s20_designated_paren  (not read yet)
+### s20_designated_paren
 P p(1, 2); Q q{.p{1, 2}};
 ### s20_designated_return
 P f() { return {.x = 1, .y = 2}; }
@@ -924,7 +924,7 @@ struct P { int x, y; }; P p(1, 2);
 export module m;
 module :private;
 int x;
-### s20_pseudo_dtor  (not read yet)
+### s20_pseudo_dtor
 template <class T> void f(T* p) { p->~T(); p->T::~T(); }
 ### s20_range_for_init
 void f() { for (auto v = g(); auto& x : v) { h(x); } }
@@ -1066,7 +1066,7 @@ auto f = [](this auto self, int n) -> int { return n ? self(n - 1) : 0; };
 struct S { [[nodiscard]] constexpr auto&& value(this auto&& self) noexcept { return self.v; } int v; };
 ### s23_deducing_this_tmpl
 struct S { template <class Self> auto&& f(this Self&& self) { return std::forward<Self>(self).x; } int x; };
-### s23_delimited_esc  (not read yet)
+### s23_delimited_esc
 const char* s = "\x{41}\o{101}\u{1F600}";
 ### s23_elifdef
 #ifdef A
@@ -1090,7 +1090,7 @@ int f() { if (x) { if consteval { return 1; } } return 2; }
 int f() { if consteval { return 1; } return 2; }
 ### s23_if_not_consteval
 int f() { if !consteval { return 1; } return 2; }
-### s23_init_alias_for  (not read yet)
+### s23_init_alias_for
 void f(int n) { for (using T = int; n > 0; --n) { T x = n; } }
 ### s23_init_alias_if
 void f() { if (using T = int; T x = g()) { } }
@@ -1098,23 +1098,23 @@ void f() { if (using T = int; T x = g()) { } }
 void f(V& v) { for (using T = int; auto& x : v) { T y = x; } }
 ### s23_init_alias_switch
 void f() { switch (using T = int; T x = g()) { default: break; } }
-### s23_label_end  (not read yet)
+### s23_label_end
 void f() { { goto end; end: } }
-### s23_label_end_fn  (not read yet)
+### s23_label_end_fn
 void f() { goto end; end: }
 ### s23_lambda_attr_before_body
 auto f = []() [[nodiscard]] { return 1; };
-### s23_lambda_attr_parens  (not read yet)
+### s23_lambda_attr_parens
 auto f = [] [[nodiscard]] () { return 1; };
-### s23_lambda_attr_tparams  (not read yet)
+### s23_lambda_attr_tparams
 auto f = []<class T> [[nodiscard]] (T x) { return x; };
-### s23_lambda_no_parens_attr  (not read yet)
+### s23_lambda_no_parens_attr
 auto f = [] [[nodiscard]] { return 1; };
 ### s23_lambda_no_parens_consteval
 auto f = [] consteval { return 1; };
 ### s23_lambda_no_parens_constexpr
 auto f = [] constexpr { return 1; };
-### s23_lambda_no_parens_multi  (not read yet)
+### s23_lambda_no_parens_multi
 auto f = [] static constexpr noexcept -> int { return 1; };
 ### s23_lambda_no_parens_mutable
 auto f = [x = 0] mutable { return ++x; };
@@ -1124,7 +1124,7 @@ auto f = [] noexcept { return 1; };
 auto f = []<class T> requires C<T> { return 1; };
 ### s23_lambda_no_parens_static
 auto f = [] static { return 1; };
-### s23_lambda_no_parens_trailing  (not read yet)
+### s23_lambda_no_parens_trailing
 auto f = [] -> int { return 1; };
 ### s23_multidim_sub
 int f(A a) { return a[1, 2]; }
@@ -1142,7 +1142,7 @@ void f() { for (auto x : g().h()) { i(x); } }
 int code = 1; // a comment \   
 int not_code = 2;
 int more_code = 3;
-### s23_static_lambda  (not read yet)
+### s23_static_lambda
 auto f = []() static { return 1; };
 ### s23_static_op_call
 struct S { static int operator()(int x) { return x; } };
@@ -1170,21 +1170,21 @@ struct S { [[=Range{0, 10}]] int x; [[=f(1, 2)]] int y; };
 [[=note("x")]] void f();
 ### s26_annotation_member
 struct S { [[=1]] int x; [[=a, =b]] int y; [[=a]] [[=b]] int z; };
-### s26_annotation_mixed  (not read yet)
+### s26_annotation_mixed
 struct S { [[nodiscard, =1]] int f(); };
 ### s26_annotation_param
 void f([[=1]] int x);
-### s26_attr_sb_range  (not read yet)
+### s26_attr_sb_range
 void f(std::map<int,int>& m) { for (auto [k [[maybe_unused]], v] : m) { } }
-### s26_braced_nttp_default  (not read yet)
+### s26_braced_nttp_default
 template <int N = {}> struct S { };
-### s26_concept_ttp  (not read yet)
+### s26_concept_ttp
 template <template <class> concept C> struct S { };
-### s26_concept_ttp_arg  (not read yet)
+### s26_concept_ttp_arg
 template <template <class> concept C> struct S { }; S<std::integral> s;
 ### s26_concept_ttp_use
 S<std::integral> s;
-### s26_consteval_block  (not read yet)
+### s26_consteval_block
 consteval { register_type(^^S); }
 ### s26_constexpr_sb
 struct P { int a, b; }; constexpr auto [a, b] = P{1, 2};
@@ -1214,19 +1214,19 @@ struct S { S& operator=(const S&) = delete("no assign"); };
 template <class T> void f(T) = delete("no");
 ### s26_dollar_ident
 int $x = 1; int a$b = 2;
-### s26_embed  (not read yet)
+### s26_embed
 const unsigned char d[] = {
 #embed "x.bin"
 };
-### s26_embed_angle  (not read yet)
+### s26_embed_angle
 const unsigned char d[] = {
 #embed <x.bin>
 };
-### s26_embed_in_if  (not read yet)
+### s26_embed_in_if
 #if __has_embed("x.bin")
 int x;
 #endif
-### s26_embed_params  (not read yet)
+### s26_embed_params
 const unsigned char d[] = {
 #embed "x.bin" limit(4) prefix(0,) suffix(, 0) if_empty(0)
 };
@@ -1287,7 +1287,7 @@ int f(int n) post(r: r > 0) { return n; }
 int f(int n) post(n > 0) { return n; }
 ### s26_pre
 int f(int n) pre(n > 0) { return n; }
-### s26_pre_attr_after  (not read yet)
+### s26_pre_attr_after
 int f(int n) pre(n > 0) [[gnu::hot]] { return n; }
 ### s26_pre_comment_between
 int f(int n)
@@ -1319,7 +1319,7 @@ int f(int n) pre(n > 0);
 struct S { int f(int n) pre(n > 0); };
 ### s26_pre_deducing_this
 struct S { int f(this S& self, int n) pre(n > 0) { return n; } };
-### s26_pre_default  (not read yet)
+### s26_pre_default
 struct S { S& operator=(const S& o) pre(&o != this) = default; };
 ### s26_pre_dtor
 struct S { ~S() pre(ok()) { } };
@@ -1351,7 +1351,7 @@ int f(int n) noexcept pre(n > 0) post(r: r > n) { return n; }
 int f(int n) pre(::ns::check<int>(n, 0u, 4u)) { return n; }
 ### s26_pre_ref_qual
 struct S { int f() & pre(x) { return 1; } int g() && pre(x) { return 2; } };
-### s26_pre_requires  (not read yet)
+### s26_pre_requires
 template <class T> int f(T n) requires C<T> pre(n > 0) { return n; }
 ### s26_pre_static_member
 struct S { static int f(int n) pre(n > 0) { return n; } };
@@ -1375,7 +1375,7 @@ struct B { virtual int f(int n) pre(n > 0) = 0; };
 constexpr auto r = ^^Widget;
 ### s26_reflect_annotation_query
 constexpr auto a = annotations_of(^^S::x);
-### s26_reflect_builtin  (not read yet)
+### s26_reflect_builtin
 constexpr auto r = ^^int; constexpr auto s = ^^unsigned long long; constexpr auto t = ^^const char*;
 ### s26_reflect_expr
 constexpr auto r = ^^some::nested::Type;
@@ -1400,19 +1400,19 @@ constexpr auto r = ^^std;
 constexpr auto r = ^^std::vector<int>;
 ### s26_reflect_tmpl_name
 constexpr auto r = ^^std::vector;
-### s26_reloc_both  (not read yet)
+### s26_reloc_both
 struct S trivially_relocatable_if_eligible replaceable_if_eligible { int f() { return 1; } };
-### s26_reloc_class  (not read yet)
+### s26_reloc_class
 class S trivially_relocatable_if_eligible : public B { public: int f() { return 1; } };
-### s26_reloc_final  (not read yet)
+### s26_reloc_final
 struct S final trivially_relocatable_if_eligible : B { int f() { return 1; } };
 ### s26_reloc_tmpl
 template <class T> struct S trivially_relocatable_if_eligible { T x; };
 ### s26_replaceable
 struct S replaceable_if_eligible { int f() { return 1; } };
-### s26_sb_attr  (not read yet)
+### s26_sb_attr
 void f(std::pair<int,int> p) { auto [a [[maybe_unused]], b [[maybe_unused]]] = p; }
-### s26_sb_condition_for  (not read yet)
+### s26_sb_condition_for
 void f() { for (; auto [ok, v] = g();) { h(v); } }
 ### s26_sb_condition_if
 void f() { if (auto [ok, v] = g()) { h(v); } }
@@ -1440,7 +1440,7 @@ int x = [:r:];
 int y = obj.[:m:];
 ### s26_splice_member_ptr
 int y = ptr->[:m:];
-### s26_splice_multiline  (not read yet)
+### s26_splice_multiline
 using T = [:
     substitute(^^X, {^^int})
 :];
@@ -1466,32 +1466,32 @@ using T = [:r:];
 typename [:r:]::type v;
 ### s26_splice_typename_var
 typename [:r:] v = 1;
-### s26_static_assert_msg_call  (not read yet)
+### s26_static_assert_msg_call
 static_assert(cond, msg());
-### s26_static_assert_msg_expr  (not read yet)
+### s26_static_assert_msg_expr
 static_assert(sizeof(int) == 4, std::format("{}", 4));
-### s26_static_assert_msg_var  (not read yet)
+### s26_static_assert_msg_var
 static_assert(cond, message_v<T>);
 ### s26_trivially_relocatable
 struct S trivially_relocatable_if_eligible { int f() { return 1; } };
-### s26_unevaluated_str  (not read yet)
+### s26_unevaluated_str
 static_assert(true, "\u{0041}"); [[deprecated("\x41")]] void f();
-### s26_var_tmpl_ttp  (not read yet)
+### s26_var_tmpl_ttp
 template <template <class> auto V> struct S { };
-### s26_variadic_friend  (not read yet)
+### s26_variadic_friend
 template <class... Ts> struct S { friend Ts...; };
-### s26_variadic_friend_tmpl  (not read yet)
+### s26_variadic_friend_tmpl
 template <class... Ts> struct S { friend C<Ts>...; };
-### s26_variadic_friend_typename  (not read yet)
+### s26_variadic_friend_typename
 template <class... Ts> struct S { friend typename Ts::type...; };
-### s2d_conditional_noexcept_compound_req  (not read yet)
+### s2d_conditional_noexcept_compound_req
 template <class T> concept C = requires(T t) { { t.f() } noexcept(true) -> std::same_as<int>; };
 ### s2d_contract_virtual
 struct B { virtual int f(int n) pre(n > 0) post(r: r > 0) = 0; };
 struct D : B { int f(int n) pre(n > 0) post(r: r > 0) override { return n; } };
 ### s2d_default_postfix
 struct S { S& operator++(); S operator++(int) = default; S operator--(int) = default; };
-### s2d_embed_offset  (not read yet)
+### s2d_embed_offset
 const unsigned char d[] = {
 #embed "x" offset(2) limit(4)
 };
@@ -1501,7 +1501,7 @@ template <template <class> class... TT> using F = TT...[0]<int>;
 bool f(bool a, bool b) { return a and b or not a; } int g(int a, int b) { return (a xor b) bitand (a bitor compl b); }
 ### s98_alt_tokens_assign
 void f(int& a, int b) { a and_eq b; a or_eq b; a xor_eq b; }
-### s98_digraphs  (not read yet)
+### s98_digraphs
 int f() <% int a<:3:>; return a<:0:>; %>
 ### s98_member_tmpl_spec
 template <> template <> void S<int>::f<int>(int);

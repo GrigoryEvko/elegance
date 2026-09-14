@@ -11,23 +11,28 @@
 //! So the source is normalized before the parser reads it. Every
 //! rewrite here replaces a span with the SAME NUMBER OF BYTES, because
 //! every offset the report prints is an offset into this text. Spaces
-//! and underscores keep all of them true. A splice becomes underscores
-//! and not spaces because it stands where a name stands: `obj.[:m:]`
-//! has to stay a member access, and `obj.` and then blanks is not one.
+//! and underscores keep all of them true. A span that stood where a
+//! name stands becomes a name, two underscores and then spaces, because
+//! `obj.[:m:]` has to stay a member access and `obj.` and then blanks is
+//! not one.
 //!
 //! None of this is an opinion about the code. It is the smallest edit
-//! that lets the grammar read the shape the compiler reads.
+//! that lets the grammar read the shape the compiler reads. What goes is
+//! what carries no work: an attribute, a contract, a specifier, a
+//! disambiguator. What stays is every call, branch and loop.
 //!
-//! One rule is one function, and `RULES` lists them with the paper that
-//! adds the syntax. A rule states the byte or the word that can start
-//! it, so a file pays for the rules its text can reach and not for all
-//! of them.
+//! One rewrite is one function. `PASSES` lists the rewrites that read
+//! the whole file at one time, and `RULES` lists the rewrites that fire
+//! at one position, each with the paper that adds the syntax. A rule
+//! states the byte or the word that can start it, so a file pays for the
+//! rules its text can reach and not for all of them.
 //!
 //! The grammar moves, and the language moves faster. A construct that
 //! no rule here covers stays a parse error, and `--errors` names the
 //! file and the line. That is the signal to add a rule. The failure
 //! mode is loud on purpose.
 
+use std::ops::Range;
 use std::sync::OnceLock;
 
 use crate::clangfmt::{Kind, Macros};
@@ -36,17 +41,20 @@ use crate::clangfmt::{Kind, Macros};
 // The text under rewrite
 // ---------------------------------------------------------------------
 
-/// The bytes, and which of them are code.
+/// The bytes, which of them are code, and where the quoted literals are.
 struct Text {
     out: Vec<u8>,
     code: Vec<bool>,
+    literals: Vec<Range<usize>>,
 }
 
 impl Text {
-    fn new(src: &[u8]) -> Text {
+    fn new(out: Vec<u8>) -> Text {
+        let (code, literals) = lex(&out);
         Text {
-            code: code_mask(src),
-            out: src.to_vec(),
+            out,
+            code,
+            literals,
         }
     }
 
@@ -108,6 +116,12 @@ impl Text {
         (at..self.len()).find(|&i| self.is_code(i) && !self.out[i].is_ascii_whitespace())
     }
 
+    /// The first byte at or after `at` that is not whitespace, code or
+    /// not. A literal is not code, and a rule that reads one needs this.
+    fn next_any(&self, at: usize) -> Option<usize> {
+        (at..self.len()).find(|&i| !self.out[i].is_ascii_whitespace())
+    }
+
     /// The index of the bracket that closes the `open` bracket at `at`,
     /// counted over code bytes only.
     fn match_close(&self, at: usize, open: u8, shut: u8) -> Option<usize> {
@@ -136,13 +150,36 @@ impl Text {
     }
 
     /// Overwrite a span with `fill`, and leave the line breaks where
-    /// they are. A `delete("...")` reason or a contract predicate can
-    /// run across several lines. A rewrite that removes those breaks
-    /// moves every finding below it onto the wrong line.
-    fn blank(&mut self, range: std::ops::Range<usize>, fill: u8) {
-        for byte in &mut self.out[range] {
-            if *byte != b'\n' && *byte != b'\r' {
-                *byte = fill;
+    /// they are, and the backslashes that join a line to the next. A
+    /// `delete("...")` reason or a contract predicate can run across
+    /// several lines. A rewrite that removes a line break moves every
+    /// finding below it onto the wrong line, and a rewrite that removes
+    /// a splice joins two lines that the compiler reads apart.
+    fn blank(&mut self, range: Range<usize>, fill: u8) {
+        for k in range {
+            let byte = self.out[k];
+            let splice = byte == b'\\'
+                && match self.out.get(k + 1) {
+                    Some(b'\n') => true,
+                    Some(b'\r') => self.out.get(k + 2) == Some(&b'\n'),
+                    _ => false,
+                };
+            if !matches!(byte, b'\n' | b'\r') && !splice {
+                self.out[k] = fill;
+            }
+        }
+    }
+
+    /// Put a name where the span was: two underscores, then spaces. A
+    /// span that runs across lines stays one name, because underscores
+    /// on every line would read as one name for each line.
+    fn name(&mut self, range: Range<usize>) {
+        let start = range.start;
+        let end = range.end;
+        self.blank(range, b' ');
+        for k in start..end.min(start + 2) {
+            if !matches!(self.out[k], b'\n' | b'\r') {
+                self.out[k] = b'_';
             }
         }
     }
@@ -154,7 +191,7 @@ impl Text {
     /// because a rewrite that grows the source or eats a line break
     /// moves every finding below it. Each caller has an answer for
     /// false that is safe.
-    fn overwrite(&mut self, range: std::ops::Range<usize>, text: &[u8]) -> bool {
+    fn overwrite(&mut self, range: Range<usize>, text: &[u8]) -> bool {
         let start = range.start;
         if range.len() < text.len() || self.out[start..start + text.len()].contains(&b'\n') {
             return false;
@@ -169,9 +206,9 @@ impl Text {
 // The lexical layer
 // ---------------------------------------------------------------------
 
-/// Which bytes are code, and not comment or literal text. Every rewrite
-/// reads this first. A `^^` inside a string is a string, and a `pre(`
-/// in a doc comment is prose.
+/// Which bytes are code, and not comment or literal text, and where each
+/// quoted literal is. Every rewrite reads the mask first. A `^^` inside
+/// a string is a string, and a `pre(` in a doc comment is prose.
 ///
 /// Three lexical rules keep the mask true, and each one of them is a
 /// defect if it is missing:
@@ -188,8 +225,9 @@ impl Text {
 /// Without the last two rules, one apostrophe in `#error can't` or in
 /// `1'000` marks the rest of the file as text. Every rewrite below it
 /// then stops, and the file goes to the parser unchanged.
-fn code_mask(src: &[u8]) -> Vec<bool> {
+fn lex(src: &[u8]) -> (Vec<bool>, Vec<Range<usize>>) {
     let mut code = vec![true; src.len()];
+    let mut literals = Vec::new();
     let mut i = 0;
     while i < src.len() {
         match src[i] {
@@ -225,17 +263,18 @@ fn code_mask(src: &[u8]) -> Vec<bool> {
                 code[i..end].fill(false);
                 i = end;
             }
-            // `#error` and `#warning` carry prose, and prose carries
-            // apostrophes. The text after them is not a token sequence.
-            b'#' if directive_is_prose(src, i) => {
-                let end = line_comment_end(src, i);
-                code[i..end].fill(false);
-                i = end;
-            }
+            b'#' => match directive_text(src, i) {
+                Some(text) => {
+                    code[text.clone()].fill(false);
+                    i = text.end;
+                }
+                None => i += 1,
+            },
             b'\'' if digit_separator(src, i) => i += 1,
             b'"' | b'\'' => match literal_end(src, i) {
                 Some(end) => {
                     code[i..end].fill(false);
+                    literals.push(i..end);
                     i = end;
                 }
                 None => i += 1,
@@ -243,7 +282,66 @@ fn code_mask(src: &[u8]) -> Vec<bool> {
             _ => i += 1,
         }
     }
-    code
+    (code, literals)
+}
+
+/// The part of a directive that the grammar reads as raw text, and not
+/// as tokens. That text is not code, for two reasons.
+///
+/// `#error` and `#warning` carry prose, and prose carries apostrophes.
+///
+/// The body of a `#define`, after its name and its parameter list, is
+/// raw text to the grammar, and so is the argument of `#undef`,
+/// `#pragma` and `#line`. A rule that edits that text changes no parse,
+/// and it can damage the directive: a `static_assert` in a macro that
+/// loses its message loses the backslash at the end of its line too,
+/// and the macro stops at that line.
+///
+/// `None` for a directive whose argument the grammar parses, such as
+/// `#if`, `#include` and `#embed`, and for a `#` that does not open its
+/// line, such as the stringize operator.
+fn directive_text(src: &[u8], at: usize) -> Option<Range<usize>> {
+    let line_start = src[..at]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |k| k + 1);
+    if src[line_start..at]
+        .iter()
+        .any(|b| !matches!(b, b' ' | b'\t'))
+    {
+        return None;
+    }
+    let mut end = line_comment_end(src, at);
+    if directive_is_prose(src, at) {
+        return Some(at..end);
+    }
+    let word = (at + 1..end).find(|&k| !matches!(src[k], b' ' | b'\t'))?;
+    let word_stop = word_end(src, word);
+    let start = match &src[word..word_stop] {
+        b"undef" | b"pragma" | b"line" | b"ident" | b"sccs" | b"assert" | b"unassert" => word_stop,
+        b"define" => {
+            let name = (word_stop..end).find(|&k| !matches!(src[k], b' ' | b'\t'))?;
+            let name_stop = word_end(src, name);
+            // A function-like macro writes `(` against its name, and the
+            // grammar parses the parameters in it.
+            if src.get(name_stop) == Some(&b'(') {
+                (name_stop..end)
+                    .find(|&k| src[k] == b')')
+                    .map_or(end, |k| k + 1)
+            } else {
+                name_stop
+            }
+        }
+        _ => return None,
+    };
+    // A block comment that opens in the text and closes on a later line
+    // is still one comment, and the text ends where it does.
+    if let Some(open) = find(&src[..end], start, b"/*")
+        && find(&src[..end], open + 2, b"*/").is_none()
+    {
+        end = find(src, open + 2, b"*/").map_or(src.len(), |close| close + 2);
+    }
+    (start < end).then_some(start..end)
 }
 
 /// The end of the line comment that opens at `at`, past every line that
@@ -353,6 +451,35 @@ fn word_at(src: &[u8], at: usize, want: &[u8]) -> bool {
         && (at == 0 || !is_word(src[at - 1]))
 }
 
+/// The start of each line, and the end of each, the line break not
+/// included.
+fn lines(src: &[u8]) -> impl Iterator<Item = Range<usize>> + '_ {
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        if start > src.len() || (start == src.len() && !src.is_empty()) {
+            return None;
+        }
+        let end = find(src, start, b"\n").unwrap_or(src.len());
+        let line = start..end;
+        start = end + 1;
+        Some(line)
+    })
+}
+
+/// The directive a line holds, as its word: `if` for `#  if 0`.
+fn directive_word(line: &[u8]) -> Option<&[u8]> {
+    let hash = line.iter().position(|&b| !matches!(b, b' ' | b'\t'))?;
+    if line[hash] != b'#' {
+        return None;
+    }
+    let word = hash
+        + 1
+        + line[hash + 1..]
+            .iter()
+            .position(|&b| !matches!(b, b' ' | b'\t'))?;
+    Some(&line[word..word_end(line, word)])
+}
+
 // ---------------------------------------------------------------------
 // What a position means
 // ---------------------------------------------------------------------
@@ -430,6 +557,12 @@ const EXPRESSIONS: [&[u8]; 12] = [
     b"goto",
 ];
 
+/// The words that open the head of a class.
+const CLASS_KEYS: [&[u8]; 3] = [b"class", b"struct", b"union"];
+
+/// The characters an overloaded operator is spelled with.
+const OPERATOR_BYTES: &[u8] = b"+-*/%^&|~!=<>,";
+
 /// True when `at` sits in a `[...]` that opens in the same statement.
 /// A structured binding pack is the one ellipsis that stands in
 /// brackets and before a name.
@@ -454,25 +587,10 @@ fn inside_brackets(t: &Text, at: usize) -> bool {
 /// or another statement that takes one. A contract clause follows the
 /// parameter list of a function, and `if (ready) pre(x);` is a call.
 fn closes_a_condition(t: &Text, at: usize) -> bool {
-    let mut depth = 0u32;
-    for i in (0..=at).rev() {
-        if !t.is_code(i) {
-            continue;
-        }
-        match t.at(i) {
-            b')' => depth += 1,
-            b'(' => {
-                depth -= 1;
-                if depth == 0 {
-                    return t
-                        .prev(i)
-                        .is_some_and(|p| CONDITIONS.contains(&t.word_before(p + 1)));
-                }
-            }
-            _ => {}
-        }
-    }
-    false
+    open_paren_of(t, at).is_some_and(|open| {
+        t.prev(open)
+            .is_some_and(|p| CONDITIONS.contains(&t.word_before(p + 1)))
+    })
 }
 
 /// The `(` that opens the parameter list that `close` ends.
@@ -485,6 +603,27 @@ fn open_paren_of(t: &Text, close: usize) -> Option<usize> {
         match t.at(i) {
             b')' => depth += 1,
             b'(' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The `[` that opens the brackets that `close` ends.
+fn open_bracket_of(t: &Text, close: usize) -> Option<usize> {
+    let mut depth = 0u32;
+    for i in (0..=close).rev() {
+        if !t.is_code(i) {
+            continue;
+        }
+        match t.at(i) {
+            b']' => depth += 1,
+            b'[' => {
                 depth -= 1;
                 if depth == 0 {
                     return Some(i);
@@ -520,25 +659,53 @@ fn angle_open(t: &Text, close: usize) -> Option<usize> {
     None
 }
 
+/// True when a declaration can start at `at`: nothing stands before it,
+/// or a statement ends before it, or a directive line does.
+fn starts_a_statement(t: &Text, at: usize) -> bool {
+    t.prev(at)
+        .is_none_or(|p| matches!(t.at(p), b';' | b'{' | b'}') || on_a_directive(t, p))
+}
+
+/// The start of `operator` when the tokens before the `(` at `open`
+/// spell the name of an operator: `operator=`, `operator()`,
+/// `operator[]`. The `=` in `operator=` is not an assignment.
+fn operator_name_start(t: &Text, open: usize) -> Option<usize> {
+    let mut i = t.prev(open)?;
+    if matches!(t.at(i), b')' | b']') {
+        let pair = if t.at(i) == b')' { b'(' } else { b'[' };
+        i = t.prev(i).filter(|&k| t.at(k) == pair)?;
+        i = t.prev(i)?;
+    } else if OPERATOR_BYTES.contains(&t.at(i)) {
+        while OPERATOR_BYTES.contains(&t.at(i)) {
+            i = t.prev(i)?;
+        }
+    } else {
+        return None;
+    }
+    (t.word_before(i + 1) == b"operator").then(|| i + 1 - b"operator".len())
+}
+
 /// True when the parameter list that ends at `close` belongs to a
 /// declaration, and not to a call in an expression.
 ///
-/// The scan steps over the parameter list and reads back to the start
-/// of the statement. Four things end it. A `]` directly before the list
-/// is the introducer of a lambda, and a lambda takes a contract clause
-/// of its own. An unmatched `(` or `[` means an argument list or a
-/// subscript holds the call, as in `f(g() & pre(h))`. An `=` or one of
-/// the expression keywords before it means an expression, as in
-/// `return g() & pre(2)`. A statement boundary means a declaration.
+/// The scan steps over the parameter list and the name before it, and
+/// reads back to the start of the statement. Four things end it. A `]`
+/// directly before the list is the introducer of a lambda, and a lambda
+/// takes a contract clause of its own. An unmatched `(` or `[` means an
+/// argument list or a subscript holds the call, as in `f(g() & pre(h))`.
+/// An `=` or one of the expression keywords before it means an
+/// expression, as in `return g() & pre(2)`. A statement boundary means a
+/// declaration.
 fn declares_a_function(t: &Text, close: usize) -> bool {
     let Some(open) = open_paren_of(t, close) else {
         return false;
     };
-    if t.prev(open).is_some_and(|p| t.at(p) == b']') {
+    let head = operator_name_start(t, open).unwrap_or(open);
+    if head == open && t.prev(open).is_some_and(|p| t.at(p) == b']') {
         return true;
     }
     let mut depth = 0u32;
-    let mut i = open;
+    let mut i = head;
     while i > 0 {
         i -= 1;
         if !t.is_code(i) {
@@ -571,6 +738,51 @@ fn declares_a_function(t: &Text, close: usize) -> bool {
     true
 }
 
+/// The start of a trailing requires-clause that ends at `last`, when one
+/// does. `f() requires C<T> pre(x)` puts a constraint between the
+/// declarator and the contract clause, and the scan for the declarator
+/// has to step over it.
+///
+/// The scan reads only what a constraint can hold, and it stops at the
+/// declarator. A qualifier such as `noexcept` ends a declarator, and so
+/// does a parameter list, which follows a name where a parenthesized
+/// constraint follows `requires` or an operator. Without those two
+/// stops the scan walks past the declarator into the `requires` of the
+/// template header above it, and every contract clause under such a
+/// header reads as a call.
+fn requires_clause_start(t: &Text, last: usize) -> Option<usize> {
+    let mut i = last;
+    loop {
+        let byte = t.at(i);
+        if is_word(byte) {
+            let word = t.word_before(i + 1);
+            let start = i + 1 - word.len();
+            if word == b"requires" {
+                return Some(start);
+            }
+            if QUALIFIERS.contains(&word) || EXPRESSIONS.contains(&word) {
+                return None;
+            }
+            i = t.prev(start)?;
+            continue;
+        }
+        match byte {
+            b')' => {
+                let open = open_paren_of(t, i)?;
+                let before = t.prev(open)?;
+                if is_word(t.at(before)) && t.word_before(before + 1) != b"requires" {
+                    return None;
+                }
+                i = open;
+            }
+            b'>' => i = angle_open(t, i)?,
+            b':' | b'&' | b'|' | b'!' | b'<' => {}
+            _ => return None,
+        }
+        i = t.prev(i)?;
+    }
+}
+
 /// The position after a contract clause that starts at `at`, or `None`
 /// when `at` starts a call instead.
 ///
@@ -585,7 +797,7 @@ fn declares_a_function(t: &Text, close: usize) -> bool {
 ///
 /// 1. The bytes before it belong to a declarator. A clause follows the
 ///    parameter list, a cv-qualifier or ref-qualifier, `noexcept`, a
-///    virt-specifier, or a trailing return type.
+///    virt-specifier, a trailing return type, or a requires-clause.
 /// 2. The `)` it reads back to closes a parameter list. It does not
 ///    close the condition of an `if`, and the declarator it ends is not
 ///    a call in an expression.
@@ -596,10 +808,11 @@ fn contract_clause(t: &Text, at: usize) -> Option<usize> {
     let close = t.match_paren(open)?;
 
     // 3. What follows a clause is a body, a declaration end, another
-    //    clause, a trailing return type, or the initializer list of a
-    //    constructor. A call is followed by an operator or an argument.
+    //    clause, a trailing return type, the initializer list of a
+    //    constructor, `= default` or `= 0`, or an attribute.
     let follows = t.next(close + 1)?;
     let tail_ok = matches!(t.at(follows), b'{' | b';' | b'-' | b'=' | b':')
+        || t.starts(follows, b"[[")
         || t.word_at(follows, b"pre")
         || t.word_at(follows, b"post")
         || QUALIFIERS.contains(&t.word(follows));
@@ -612,6 +825,9 @@ fn contract_clause(t: &Text, at: usize) -> Option<usize> {
     //    return type has to hold a type name before its `->`.
     let mut saw_word = false;
     let mut i = t.prev(at)?;
+    if let Some(requires) = requires_clause_start(t, i) {
+        i = t.prev(requires)?;
+    }
     loop {
         let byte = t.at(i);
         if byte == b')' {
@@ -649,28 +865,51 @@ fn contract_clause(t: &Text, at: usize) -> Option<usize> {
     }
 }
 
-/// The end of the operand of a `^^` that cannot stand as an expression.
-/// `^^int` reflects on a type keyword, and `^^::` on the global
-/// namespace. Neither is a name, so both become one.
-fn reflect_operand_end(t: &Text, at: usize) -> Option<usize> {
-    let start = t.next(at)?;
-    if t.starts(start, b"::") {
-        return Some(start + 2);
-    }
+/// The end of a type-id that starts at `at` with a type keyword or a
+/// cv-qualifier, as in `unsigned long`, `const char*` or `const
+/// Widget&`. `None` when the tokens at `at` are an expression, and an
+/// expression needs no rewrite to stand where one stands.
+fn keyword_type_end(t: &Text, at: usize) -> Option<usize> {
     let mut end = None;
-    let mut i = start;
-    while let Some(word) = t.next(i) {
-        if word > i && end.is_none() {
-            break;
+    let mut cv = false;
+    let mut named = false;
+    let mut i = at;
+    while let Some(k) = t.next(i) {
+        let byte = t.at(k);
+        if is_word(byte) {
+            let word = t.word(k);
+            if word == b"const" || word == b"volatile" {
+                cv = true;
+            } else if BUILTIN_TYPES.contains(&word) {
+                named = true;
+            } else if cv && !named {
+                // The type a cv-qualifier names, with its scope.
+                named = true;
+                let mut stop = t.word_end(k);
+                while let Some(colons) = t.next(stop).filter(|&c| t.starts(c, b"::")) {
+                    match t.next(colons + 2).filter(|&w| is_word(t.at(w))) {
+                        Some(w) => stop = t.word_end(w),
+                        None => break,
+                    }
+                }
+                end = Some(stop);
+                i = stop;
+                continue;
+            } else {
+                break;
+            }
+            end = Some(t.word_end(k));
+            i = t.word_end(k);
+            continue;
         }
-        let stop = t.word_end(word);
-        if stop == word || !BUILTIN_TYPES.contains(&t.word(word)) {
-            break;
+        if matches!(byte, b'*' | b'&') && named {
+            end = Some(k + 1);
+            i = k + 1;
+            continue;
         }
-        end = Some(stop);
-        i = stop;
+        break;
     }
-    end
+    end.filter(|_| named || cv)
 }
 
 /// True when a qualified name follows `at`. `typename` before one is a
@@ -761,10 +1000,7 @@ fn follows_a_string(t: &Text, at: usize) -> bool {
 /// keywords, so a declaration has to start a statement, and a call such
 /// as `import(path)` keeps its parentheses and stays.
 fn module_declaration(t: &Text, at: usize) -> Option<usize> {
-    let starts_statement = t
-        .prev(at)
-        .is_none_or(|p| matches!(t.at(p), b';' | b'{' | b'}'));
-    if !starts_statement {
+    if !starts_a_statement(t, at) {
         return None;
     }
     let mut i = at;
@@ -787,6 +1023,457 @@ fn module_declaration(t: &Text, at: usize) -> Option<usize> {
     let end = (i..t.len()).find(|&k| t.is_code(k) && t.at(k) == b';')?;
     Some(end + 1)
 }
+
+/// True when the `]` at `close` ends the introducer of a lambda, and
+/// not a subscript, the brackets of `delete[]`, or an attribute.
+fn ends_a_lambda_introducer(t: &Text, close: usize) -> bool {
+    if close > 0 && t.at(close - 1) == b']' {
+        return false;
+    }
+    let Some(open) = open_bracket_of(t, close) else {
+        return false;
+    };
+    if t.get(open + 1) == Some(b'[') {
+        return false;
+    }
+    match t.prev(open) {
+        None => true,
+        // An operand before `[` makes the brackets a subscript. A
+        // keyword that an expression follows does not.
+        Some(p) if is_word(t.at(p)) => {
+            let word = t.word_before(p + 1);
+            EXPRESSIONS.contains(&word) && !matches!(word, b"new" | b"delete")
+        }
+        Some(p) => !matches!(t.at(p), b')' | b']' | b'>' | b'['),
+    }
+}
+
+/// True when `at` sits in the body of a class, and not in the body of a
+/// function, a namespace or an enumeration.
+fn in_a_class_body(t: &Text, at: usize) -> bool {
+    let mut depth = 0u32;
+    let mut i = at;
+    let open = loop {
+        if i == 0 {
+            return false;
+        }
+        i -= 1;
+        if !t.is_code(i) {
+            continue;
+        }
+        match t.at(i) {
+            b'}' => depth += 1,
+            b'{' if depth == 0 => break i,
+            b'{' => depth -= 1,
+            _ => {}
+        }
+    };
+    in_a_class_head(t, open)
+}
+
+/// True when the tokens before `at`, back to the start of the statement,
+/// are the head of a class: a class key stands there, and no `(`, `)`,
+/// `=` or `enum` does.
+fn in_a_class_head(t: &Text, at: usize) -> bool {
+    let mut class = false;
+    let mut k = at;
+    while let Some(p) = t.prev(k) {
+        match t.at(p) {
+            b';' | b'{' | b'}' => break,
+            b'(' | b')' | b'=' => return false,
+            byte if is_word(byte) => {
+                let word = t.word_before(p + 1);
+                if word == b"enum" {
+                    return false;
+                }
+                class |= CLASS_KEYS.contains(&word);
+                k = p + 1 - word.len();
+                continue;
+            }
+            _ => {}
+        }
+        k = p;
+    }
+    class
+}
+
+/// True when `at` sits in the parameter list of a template header.
+fn in_a_template_header(t: &Text, at: usize) -> bool {
+    enclosing_angle(t, at).is_some_and(|open| {
+        t.prev(open)
+            .is_some_and(|p| t.word_before(p + 1) == b"template")
+    })
+}
+
+/// True when `at` sits in the argument list of a template name.
+fn in_template_arguments(t: &Text, at: usize) -> bool {
+    enclosing_angle(t, at).is_some_and(|open| {
+        t.prev(open).is_some_and(|p| {
+            (is_word(t.at(p)) && t.word_before(p + 1) != b"template") || t.at(p) == b'>'
+        })
+    })
+}
+
+/// The `<` that holds `at` when the nearest unmatched bracket before it
+/// is an angle bracket, and not a parenthesis, a bracket or a brace.
+fn enclosing_angle(t: &Text, at: usize) -> Option<usize> {
+    let mut depth = 0u32;
+    let mut angles = 0u32;
+    let mut i = at;
+    while i > 0 {
+        i -= 1;
+        if !t.is_code(i) {
+            continue;
+        }
+        match t.at(i) {
+            b')' | b']' | b'}' => depth += 1,
+            b'(' | b'[' | b'{' if depth > 0 => depth -= 1,
+            b'(' | b'[' | b'{' => return None,
+            b';' if depth == 0 => return None,
+            b'>' if depth == 0 && t.get(i.wrapping_sub(1)) != Some(b'-') => angles += 1,
+            b'<' if depth == 0 && angles > 0 => angles -= 1,
+            b'<' if depth == 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The first word of the template parameter that holds the `=` at `eq`.
+fn template_parameter_head(t: &Text, eq: usize) -> Option<&[u8]> {
+    let mut depth = 0u32;
+    let mut angles = 0u32;
+    let mut i = eq;
+    let start = loop {
+        if i == 0 {
+            return None;
+        }
+        i -= 1;
+        if !t.is_code(i) {
+            continue;
+        }
+        match t.at(i) {
+            b')' | b']' | b'}' => depth += 1,
+            b'(' | b'[' | b'{' => depth = depth.checked_sub(1)?,
+            b'>' if depth == 0 => angles += 1,
+            b'<' | b',' if depth == 0 && angles == 0 => break i,
+            b'<' if depth == 0 => angles -= 1,
+            _ => {}
+        }
+    };
+    let first = t.next(start + 1)?;
+    Some(t.word(first))
+}
+
+/// The positions of the `;` that stand at the top level of the
+/// parentheses from `open` to `close`.
+fn top_level_semicolons(t: &Text, open: usize, close: usize) -> Vec<usize> {
+    let mut depth = 0u32;
+    let mut found = Vec::new();
+    for k in open + 1..close {
+        if !t.is_code(k) {
+            continue;
+        }
+        match t.at(k) {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b';' if depth == 0 => found.push(k),
+            _ => {}
+        }
+    }
+    found
+}
+
+/// True when the tokens from `start` to the `=` at `eq` declare a name:
+/// a type and a declarator, or `auto` and a binding list. An assignment
+/// such as `x = g()`, `*p = g()` or `a.b = g()` is not one.
+fn declares_a_name(t: &Text, start: usize, eq: usize) -> bool {
+    let mut words = 0;
+    let mut angles = 0u32;
+    let mut binding = false;
+    let mut k = start;
+    while let Some(n) = t.next(k).filter(|&n| n < eq) {
+        let byte = t.at(n);
+        if is_word(byte) {
+            words += 1;
+            k = t.word_end(n);
+            continue;
+        }
+        match byte {
+            b'[' => {
+                let Some(close) = t.match_close(n, b'[', b']') else {
+                    return false;
+                };
+                let names = (n + 1..close).all(|j| {
+                    !t.is_code(j) || is_word(t.at(j)) || matches!(t.at(j), b',' | b' ' | b'\t')
+                });
+                if !names || words == 0 {
+                    return false;
+                }
+                binding = true;
+                k = close + 1;
+                continue;
+            }
+            b'<' => angles += 1,
+            b'>' => angles = angles.saturating_sub(1),
+            b',' if angles > 0 => {}
+            b'*' | b'&' => {}
+            b':' if t.get(n + 1) == Some(b':') => {
+                k = n + 2;
+                continue;
+            }
+            _ => return false,
+        }
+        k = n + 1;
+    }
+    if binding {
+        return true;
+    }
+    // A declarator is one name, and a qualified name is an assignment to
+    // a member that already exists.
+    words >= 2
+        && t.prev(eq).is_some_and(|p| {
+            is_word(t.at(p)) && {
+                let start = p + 1 - t.word_before(p + 1).len();
+                t.prev(start).is_none_or(|q| t.at(q) != b':')
+            }
+        })
+}
+
+/// The end of the token that names an operator at `at`, in an explicit
+/// call such as `a.operator+(b)`.
+fn operator_token_end(t: &Text, at: usize) -> Option<usize> {
+    match t.at(at) {
+        b'(' => t.next(at + 1).filter(|&k| t.at(k) == b')').map(|k| k + 1),
+        b'[' => t.next(at + 1).filter(|&k| t.at(k) == b']').map(|k| k + 1),
+        byte if is_word(byte) => {
+            // `new`, `delete`, `co_await`, a conversion to a type, or the
+            // suffix of a literal operator.
+            let mut end = t.word_end(at);
+            while let Some(k) = t.next(end).filter(|&k| t.at(k) != b'(') {
+                match t.at(k) {
+                    b'[' => end = t.next(k + 1).filter(|&c| t.at(c) == b']')? + 1,
+                    b'*' | b'&' => end = k + 1,
+                    b':' if t.starts(k, b"::") => end = k + 2,
+                    byte if is_word(byte) => end = t.word_end(k),
+                    _ => return None,
+                }
+            }
+            Some(end)
+        }
+        byte if OPERATOR_BYTES.contains(&byte) => {
+            let mut end = at;
+            while end < t.len() && OPERATOR_BYTES.contains(&t.at(end)) {
+                end += 1;
+            }
+            Some(end)
+        }
+        _ => None,
+    }
+}
+
+/// True when the rest of the line after `at` holds no code, and the next
+/// line that holds anything is a directive.
+fn directive_below(t: &Text, at: usize) -> bool {
+    let Some(nl) = find(&t.out, at + 1, b"\n") else {
+        return false;
+    };
+    if (at + 1..nl).any(|k| t.is_code(k) && !t.at(k).is_ascii_whitespace()) {
+        return false;
+    }
+    lines(&t.out[nl + 1..])
+        .map(|line| &t.out[nl + 1 + line.start..nl + 1 + line.end])
+        .find(|line| line.iter().any(|b| !b.is_ascii_whitespace()))
+        .is_some_and(|line| directive_word(line).is_some())
+}
+
+/// True when the line before `at` holds no code before it, and the line
+/// above that holds anything is a directive.
+fn directive_above(t: &Text, at: usize) -> bool {
+    let line_start = (0..at)
+        .rev()
+        .find(|&k| t.at(k) == b'\n')
+        .map_or(0, |k| k + 1);
+    if (line_start..at).any(|k| t.is_code(k) && !t.at(k).is_ascii_whitespace()) {
+        return false;
+    }
+    lines(&t.out[..line_start.saturating_sub(1)])
+        .map(|line| &t.out[line])
+        .filter(|line| line.iter().any(|b| !b.is_ascii_whitespace()))
+        .last()
+        .is_some_and(|line| directive_word(line).is_some())
+}
+
+// ---------------------------------------------------------------------
+// The passes
+// ---------------------------------------------------------------------
+
+/// What a pass reads.
+enum Stage {
+    /// The raw bytes, before the mask is built, because what the pass
+    /// changes decides the mask.
+    Bytes(fn(&mut [u8]) -> usize),
+    /// The quoted literals, which the scan of code never visits.
+    Literals(fn(&mut Text) -> usize),
+}
+
+/// A rewrite that reads the whole file at one time, and returns how many
+/// times it fired.
+struct Pass {
+    name: &'static str,
+    paper: &'static str,
+    stage: Stage,
+}
+
+/// P2223. A backslash, then spaces or tabs, then a line break is a line
+/// splice. The grammar knows only the form with no space, and reads the
+/// next line as code where the compiler joins it to the comment above.
+/// The backslash moves to the end of its line, so the two agree.
+fn trailing_splices(out: &mut [u8]) -> usize {
+    let mut count = 0;
+    let mut i = 0;
+    while i < out.len() {
+        if out[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < out.len() && matches!(out[j], b' ' | b'\t') {
+            j += 1;
+        }
+        let breaks = out.get(j) == Some(&b'\n')
+            || (out.get(j) == Some(&b'\r') && out.get(j + 1) == Some(&b'\n'));
+        if j > i + 1 && breaks {
+            out[i] = b' ';
+            out[j - 1] = b'\\';
+            count += 1;
+        }
+        i = j.max(i + 1);
+    }
+    count
+}
+
+/// A group under `#if 0` or `#if false` is not code. The compiler skips
+/// it, and the text in it need not be tokens at all: an apostrophe in a
+/// note, half a function, a quote that never closes. The group goes, up
+/// to the `#else`, `#elif` or `#endif` that ends it, and the directive
+/// lines stay, so the branch still counts as a branch.
+fn skipped_groups(out: &mut [u8]) -> usize {
+    let mut count = 0;
+    // The first byte of the group under the `#if 0`, and how many
+    // conditionals deep the scan is inside it.
+    let mut skipping: Option<(usize, u32)> = None;
+    let spans: Vec<Range<usize>> = lines(out).collect();
+    for line in spans {
+        let (directive, never) = {
+            let text = &out[line.clone()];
+            let Some(word) = directive_word(text) else {
+                continue;
+            };
+            let directive = match word {
+                b"if" | b"ifdef" | b"ifndef" => Directive::Opens,
+                b"endif" => Directive::Closes,
+                b"else" | b"elif" | b"elifdef" | b"elifndef" => Directive::Turns,
+                _ => Directive::Other,
+            };
+            (directive, word == b"if" && condition_is_false(text))
+        };
+        match (skipping, directive) {
+            (None, Directive::Opens) if never => {
+                skipping = Some(((line.end + 1).min(out.len()), 0));
+            }
+            (None, _) => {}
+            (Some((start, depth)), Directive::Opens) => skipping = Some((start, depth + 1)),
+            (Some((start, depth)), Directive::Closes) if depth > 0 => {
+                skipping = Some((start, depth - 1));
+            }
+            (Some((start, 0)), Directive::Closes | Directive::Turns) => {
+                for byte in &mut out[start..line.start] {
+                    if !matches!(*byte, b'\n' | b'\r') {
+                        *byte = b' ';
+                    }
+                }
+                count += 1;
+                skipping = None;
+            }
+            (Some(_), _) => {}
+        }
+    }
+    count
+}
+
+/// What a directive does to the nesting of conditional groups.
+#[derive(Clone, Copy)]
+enum Directive {
+    /// `#if`, `#ifdef`, `#ifndef`.
+    Opens,
+    /// `#endif`.
+    Closes,
+    /// `#else` and the `#elif` family, which end one group and open the
+    /// next at the same depth.
+    Turns,
+    Other,
+}
+
+/// True when an `#if` line tests `0` or `false`, with a comment or not.
+fn condition_is_false(line: &[u8]) -> bool {
+    let Some(at) = find(line, 0, b"if") else {
+        return false;
+    };
+    let rest = &line[at + 2..];
+    let rest = match (find(rest, 0, b"//"), find(rest, 0, b"/*")) {
+        (Some(a), Some(b)) => &rest[..a.min(b)],
+        (Some(a), None) | (None, Some(a)) => &rest[..a],
+        (None, None) => rest,
+    };
+    matches!(rest.trim_ascii(), b"0" | b"false")
+}
+
+/// P2290. `\x{41}`, `\o{101}` and `\u{1F600}` delimit their digits, and
+/// the grammar knows only the older escapes. The text of a literal is
+/// not measured, so the escape becomes underscores inside the literal.
+fn delimited_escapes(t: &mut Text) -> usize {
+    let mut count = 0;
+    for span in t.literals.clone() {
+        let mut k = span.start;
+        while k + 2 < span.end {
+            if t.out[k] != b'\\' {
+                k += 1;
+                continue;
+            }
+            if matches!(t.out[k + 1], b'x' | b'o' | b'u')
+                && t.out[k + 2] == b'{'
+                && let Some(close) = (k + 3..span.end).find(|&j| t.out[j] == b'}')
+            {
+                t.blank(k..close + 1, b'_');
+                count += 1;
+                k = close + 1;
+                continue;
+            }
+            k += 2;
+        }
+    }
+    count
+}
+
+/// Every pass, in the order it runs.
+const PASSES: &[Pass] = &[
+    Pass {
+        name: "line splice after whitespace",
+        paper: "P2223",
+        stage: Stage::Bytes(trailing_splices),
+    },
+    Pass {
+        name: "skipped group",
+        paper: "C++98",
+        stage: Stage::Bytes(skipped_groups),
+    },
+    Pass {
+        name: "delimited escape",
+        paper: "P2290",
+        stage: Stage::Literals(delimited_escapes),
+    },
+];
 
 // ---------------------------------------------------------------------
 // The rules
@@ -817,15 +1504,26 @@ struct Cx<'a> {
 }
 
 /// P2996 reflect. The operand is an ordinary expression once the
-/// operator is gone, unless the operand is a type keyword or the global
-/// namespace, and neither of those is an expression.
+/// operator is gone, unless it is a type-id that opens with a keyword,
+/// or the global namespace. Neither of those is an expression, so the
+/// operator and the operand become one name.
 fn reflect(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     if t.get(i + 1) != Some(b'^') {
         return None;
     }
-    match reflect_operand_end(t, i + 2) {
+    let start = t.next(i + 2);
+    let operand_end = match start {
+        // `^^::` alone names the global namespace. `^^::std::vector`
+        // is a qualified name, which is an expression once `^^` goes.
+        Some(s) if t.starts(s, b"::") && !t.next(s + 2).is_some_and(|k| is_word(t.at(k))) => {
+            Some(s + 2)
+        }
+        Some(s) => keyword_type_end(t, s),
+        None => None,
+    };
+    match operand_end {
         Some(end) => {
-            t.blank(i..end, b'_');
+            t.name(i..end);
             Some(end)
         }
         None => {
@@ -860,42 +1558,75 @@ fn splice(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
             j += 1;
         }
     };
-    t.blank(i..end, b'_');
+    t.name(i..end);
     Some(end)
 }
 
-/// An attribute before `friend`. The grammar reads `friend` and it
-/// reads an attribute, and not the two together. An attribute carries
-/// no complexity, so the declaration keeps everything it had.
-fn attribute_before_friend(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
-    if t.get(i + 1) != Some(b'[') {
+/// An attribute. It states a property of what it is written on, and it
+/// carries no work: not the arguments of `[[gnu::aligned(64)]]`, and not
+/// the expression of `[[assume(x > 0)]]`, which the compiler does not
+/// evaluate. So every one goes.
+///
+/// That is what makes the grammar read them in every position the
+/// language allows: before `friend`, after an enumerator, in a binding,
+/// on a lambda, in `[[using gnu: hot]]`, and as an annotation (P3394).
+/// The grammar reads some of these positions and not the others, and
+/// the language adds positions faster than the grammar does.
+///
+/// `[[:` is not an attribute. P2996 reads it as `[` and a splice.
+fn attribute(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if t.get(i + 1) != Some(b'[') || t.get(i + 2) == Some(b':') {
         return None;
     }
     let close = t.match_close(i, b'[', b']')?;
     if close <= i + 2 || t.at(close - 1) != b']' {
         return None;
     }
-    if !t.next(close + 1).is_some_and(|k| t.word_at(k, b"friend")) {
+    if t.match_close(i + 1, b'[', b']') != Some(close - 1) {
         return None;
     }
     t.blank(i..close + 1, b' ');
     Some(close + 1)
 }
 
-/// P3394 annotation. An attribute that starts with `=` carries an
-/// expression, and an attribute is not a unit of complexity.
-fn annotation(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
-    if t.get(i + 1) != Some(b'[') {
-        return None;
-    }
-    if !t.next(i + 2).is_some_and(|k| t.at(k) == b'=') {
-        return None;
-    }
-    let close = t.match_close(i, b'[', b']')?;
-    if close <= i + 2 || t.at(close - 1) != b']' {
-        return None;
-    }
+/// A GNU attribute, `__attribute__((...))`. It carries no work, for the
+/// reason `attribute` gives, and the grammar reads it before a
+/// declaration and not after a declarator, a namespace name or `enum`.
+fn gnu_attribute(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let open = t.next(t.word_end(i)).filter(|&k| t.at(k) == b'(')?;
+    let close = t.match_paren(open)?;
     t.blank(i..close + 1, b' ');
+    Some(close + 1)
+}
+
+/// `__extension__` tells GCC not to warn about the extension that
+/// follows. It changes nothing that the code does.
+fn extension_keyword(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let end = t.word_end(i);
+    t.blank(i..end, b' ');
+    Some(end)
+}
+
+/// A qualifier the grammar has no rule for, and that carries no work:
+/// the nullability of a pointer, a calling convention, `_Complex`.
+fn qualifier_keyword(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let end = t.word_end(i);
+    t.blank(i..end, b' ');
+    Some(end)
+}
+
+/// GNU `typeof(expr)` and `__typeof__(expr)` in the position of a type.
+/// The operand is not evaluated, so the whole of it becomes one name.
+/// A call to a function named `typeof` is not followed by a declarator,
+/// and it stays.
+fn gnu_typeof(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let open = t.next(t.word_end(i)).filter(|&k| t.at(k) == b'(')?;
+    let close = t.match_paren(open)?;
+    let after = t.next(close + 1)?;
+    if !(is_word(t.at(after)) || matches!(t.at(after), b'*' | b'&')) {
+        return None;
+    }
+    t.name(i..close + 1);
     Some(close + 1)
 }
 
@@ -930,6 +1661,104 @@ fn binding_pack(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     Some(i + 3)
 }
 
+/// P2893 variadic friends, and P0195 pack expansions in a
+/// using-declaration: `friend Ts...;` and `using Ts::operator()...;`.
+/// The ellipsis expands the one declaration for every element, and the
+/// grammar reads the declaration without it.
+fn variadic_declaration(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if !t.starts(i, b"...")
+        || !t
+            .next(i + 3)
+            .is_some_and(|k| matches!(t.at(k), b';' | b','))
+    {
+        return None;
+    }
+    let mut k = i;
+    let declares = loop {
+        let p = t.prev(k)?;
+        match t.at(p) {
+            b';' | b'{' | b'}' => break false,
+            byte if is_word(byte) => {
+                let word = t.word_before(p + 1);
+                if matches!(word, b"friend" | b"using") {
+                    break true;
+                }
+                k = p + 1 - word.len();
+            }
+            _ => k = p,
+        }
+    };
+    if !declares {
+        return None;
+    }
+    t.blank(i..i + 3, b' ');
+    Some(i + 3)
+}
+
+/// P0329 designated initializers. `.p{1, 2}` initializes a member with a
+/// braced list, and the grammar reads a designator only before `=`. The
+/// designator names a member and does no work, so it goes, and the list
+/// stays.
+fn designator_with_braces(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if t.starts(i, b"..") || !t.prev(i).is_some_and(|p| matches!(t.at(p), b'{' | b',')) {
+        return None;
+    }
+    let name = t
+        .next(i + 1)
+        .filter(|&k| is_word(t.at(k)) && !t.at(k).is_ascii_digit())?;
+    let end = t.word_end(name);
+    t.next(end).filter(|&k| t.at(k) == b'{')?;
+    t.blank(i..end, b' ');
+    Some(end)
+}
+
+/// GNU case ranges, `case 1 ... 5:`. The branch is one branch, and the
+/// upper bound goes.
+fn case_range(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if !t.starts(i, b"...") {
+        return None;
+    }
+    let mut k = i;
+    loop {
+        let p = t.prev(k)?;
+        match t.at(p) {
+            b';' | b'{' | b'}' => return None,
+            b':' if !(p > 0 && t.at(p - 1) == b':') && t.get(p + 1) != Some(b':') => return None,
+            byte if is_word(byte) => {
+                let word = t.word_before(p + 1);
+                if word == b"case" {
+                    break;
+                }
+                k = p + 1 - word.len();
+            }
+            _ => k = p,
+        }
+    }
+    let colon = (i + 3..t.len()).find(|&c| {
+        t.is_code(c) && t.at(c) == b':' && t.get(c + 1) != Some(b':') && t.at(c - 1) != b':'
+    })?;
+    t.blank(i..colon, b' ');
+    Some(colon)
+}
+
+/// GNU named variadic parameters in a macro, `#define F(a, args...)`.
+/// The grammar reads only `...`, and the name of the pack is not code.
+fn named_variadic_parameter(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if !t.starts(i, b"...") || i == 0 || !is_word(t.at(i - 1)) {
+        return None;
+    }
+    let line_start = (0..i)
+        .rev()
+        .find(|&k| t.at(k) == b'\n')
+        .map_or(0, |k| k + 1);
+    if directive_word(&t.out[line_start..i]) != Some(b"define") {
+        return None;
+    }
+    let name_start = i - t.word_before(i).len();
+    t.blank(name_start..i, b' ');
+    Some(i + 3)
+}
+
 /// P1306 expansion statement. Drop `template` and keep the `for`.
 fn expansion_statement(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     let after = i + b"template".len();
@@ -938,6 +1767,61 @@ fn expansion_statement(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     }
     t.blank(i..after, b' ');
     Some(after)
+}
+
+/// An explicit instantiation of a class template, `template class
+/// Pool<2>;`, and its `extern` form. The declaration instantiates what
+/// is written elsewhere and holds no work of its own, so it goes, and
+/// its `;` stays. An `extern template` of a function reads once the
+/// `extern` goes.
+fn explicit_instantiation(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if !starts_a_statement(t, i) {
+        return None;
+    }
+    let template = if t.word_at(i, b"extern") {
+        t.next(i + b"extern".len())
+            .filter(|&k| t.word_at(k, b"template"))?
+    } else {
+        i
+    };
+    let after = t.next(template + b"template".len())?;
+    if !CLASS_KEYS.iter().any(|key| t.word_at(after, key)) {
+        if template != i && t.at(after) != b'<' {
+            let end = i + b"extern".len();
+            t.blank(i..end, b' ');
+            return Some(end);
+        }
+        return None;
+    }
+    let end = (after..t.len()).find(|&k| t.is_code(k) && matches!(t.at(k), b';' | b'{'))?;
+    if t.at(end) == b'{' {
+        return None;
+    }
+    t.blank(i..end, b' ');
+    Some(end)
+}
+
+/// `extern "C" {` that opens inside `#ifdef __cplusplus` and closes
+/// inside another. The grammar reads a conditional group as whole
+/// declarations, and half a linkage block is not one. The linkage states
+/// how names are mangled and does no work, so the block's two braces go,
+/// and everything between them stays.
+fn linkage_across_a_conditional(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let quote = t
+        .next_any(i + b"extern".len())
+        .filter(|&k| t.at(k) == b'"')?;
+    let end = literal_end(&t.out, quote)?;
+    if !matches!(&t.out[quote..end], b"\"C\"" | b"\"C++\"") {
+        return None;
+    }
+    let open = t.next(end).filter(|&k| t.at(k) == b'{')?;
+    let close = t.match_close(open, b'{', b'}')?;
+    if !(directive_below(t, open) && directive_above(t, close) && directive_below(t, close)) {
+        return None;
+    }
+    t.blank(close..close + 1, b' ');
+    t.blank(i..open + 1, b' ');
+    Some(open + 1)
 }
 
 /// P2573 `= delete("reason")`. The whole initializer goes, and not only
@@ -974,23 +1858,71 @@ fn explicit_object_parameter(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> 
     Some(end)
 }
 
-/// A lambda specifier with no parameter list. `[] consteval {}` is
-/// C++23, and the grammar reads the word only after a `()` that this
+/// P1102. A lambda specifier with no parameter list. `[] consteval {}`
+/// is C++23, and the grammar reads the word only after a `()` that this
 /// lambda does not write. A specifier states how the body may be called
-/// and adds nothing to measure.
+/// and adds nothing to measure, and `noexcept(true)` takes its condition
+/// with it.
 ///
-/// The introducer is what identifies one. A `]]` before the word closes
-/// an attribute instead, and `[[nodiscard]] constexpr` is an ordinary
-/// declaration that already reads.
+/// The introducer is what identifies one. `]]` closes an attribute, and
+/// `a[i]` is a subscript, and neither one is a lambda.
 fn lambda_specifier(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     if !LAMBDA_SPECIFIERS.contains(&t.word(i)) {
         return None;
     }
-    t.prev(i)
-        .filter(|&p| t.at(p) == b']' && (p == 0 || t.at(p - 1) != b']'))?;
+    let prev = t.prev(i).filter(|&p| t.at(p) == b']')?;
+    if !ends_a_lambda_introducer(t, prev) {
+        return None;
+    }
+    let mut end = t.word_end(i);
+    if t.word_at(i, b"noexcept")
+        && let Some(open) = t.next(end).filter(|&k| t.at(k) == b'(')
+        && let Some(close) = t.match_paren(open)
+    {
+        end = close + 1;
+    }
+    t.blank(i..end, b' ');
+    Some(end)
+}
+
+/// P1169 `static` on a lambda, as in `[]() static {}`. The grammar reads
+/// the other specifiers after a parameter list and not this one.
+fn static_lambda(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let close = t.prev(i).filter(|&p| t.at(p) == b')')?;
+    let open = open_paren_of(t, close)?;
+    let before = t.prev(open)?;
+    let lambda = match t.at(before) {
+        b']' => ends_a_lambda_introducer(t, before),
+        b'>' => angle_open(t, before)
+            .and_then(|lt| t.prev(lt))
+            .is_some_and(|p| t.at(p) == b']' && ends_a_lambda_introducer(t, p)),
+        _ => false,
+    };
+    if !lambda {
+        return None;
+    }
     let end = t.word_end(i);
     t.blank(i..end, b' ');
     Some(end)
+}
+
+/// P1102. A trailing return type on a lambda with no parameter list,
+/// as in `[] -> int {}`. The type states what the body returns and does
+/// no work.
+fn lambda_trailing_return(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if t.get(i + 1) != Some(b'>') {
+        return None;
+    }
+    let prev = t.prev(i).filter(|&p| t.at(p) == b']')?;
+    if !ends_a_lambda_introducer(t, prev) {
+        return None;
+    }
+    let body = (i + 2..t.len()).find(|&k| t.is_code(k) && matches!(t.at(k), b'{' | b';'))?;
+    if t.at(body) != b'{' {
+        return None;
+    }
+    t.blank(i..body, b' ');
+    Some(body)
 }
 
 /// P1938 `if consteval`. The branch is an ordinary branch, and the
@@ -1003,6 +1935,17 @@ fn if_consteval(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
         return None;
     }
     t.overwrite(start..end, b"(true)").then_some(end)
+}
+
+/// P3289 consteval block, `consteval { ... }`. The block is a body that
+/// runs at compile time, and its complexity is real, so it becomes a
+/// function named `_`, the name P2169 gives to what has no name.
+fn consteval_block(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let end = i + b"consteval".len();
+    if !starts_a_statement(t, i) || !t.next(end).is_some_and(|k| t.at(k) == b'{') {
+        return None;
+    }
+    t.overwrite(i..end, b"void _()").then_some(end)
 }
 
 /// P1103 modules. The grammar reads no module declaration, and `export`
@@ -1020,10 +1963,11 @@ fn module(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     None
 }
 
-/// A braced default argument. The grammar reads `= Cfg{}` and `= 0`,
-/// and no `= {}`, which is ordinary C++11. What follows the closing
-/// brace is what says the value is one: a default argument ends at the
-/// next parameter or at the parameter list.
+/// A braced default argument, and P2308 a braced default template
+/// argument. The grammar reads `= Cfg{}` and `= 0`, and no `= {}`. What
+/// follows the closing brace is what says the value is one: a default
+/// ends at the next parameter, at the parameter list, or at the template
+/// header.
 ///
 /// An empty pair states value-initialization and carries no complexity,
 /// so it goes. A pair with something in it becomes parentheses instead
@@ -1035,10 +1979,12 @@ fn braced_default_argument(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     }
     let open = t.next(i + 1).filter(|&k| t.at(k) == b'{')?;
     let close = t.match_close(open, b'{', b'}')?;
-    if !t
-        .next(close + 1)
-        .is_some_and(|k| matches!(t.at(k), b',' | b')'))
-    {
+    let ends = t.next(close + 1).is_some_and(|k| match t.at(k) {
+        b',' | b')' => true,
+        b'>' => in_a_template_header(t, i),
+        _ => false,
+    });
+    if !ends {
         return None;
     }
     if t.next(open + 1) == Some(close) {
@@ -1050,7 +1996,501 @@ fn braced_default_argument(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     Some(close + 1)
 }
 
-/// A qualified name after `typename`. The keyword disambiguates for the
+/// P0734. A constrained template parameter whose default is a type that
+/// opens with a keyword, as in `template <C T = int>`. The grammar reads
+/// `C T` as a value parameter, and `int` is not a value, so the default
+/// becomes a name.
+fn type_default_in_template_header(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if !in_a_template_header(t, i)
+        || template_parameter_head(t, i)
+            .is_none_or(|head| matches!(head, b"class" | b"typename" | b"template"))
+    {
+        return None;
+    }
+    let start = t.next(i + 1)?;
+    let end = keyword_type_end(t, start)?;
+    t.name(start..end);
+    Some(end)
+}
+
+/// P0732. A braced list as a template argument, as in `S<{1, 2}>`. An
+/// empty pair goes, and a pair with something in it becomes parentheses,
+/// for the reason `braced_default_argument` gives.
+fn braced_template_argument(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    t.prev(i).filter(|&p| matches!(t.at(p), b'<' | b','))?;
+    let close = t.match_close(i, b'{', b'}')?;
+    if !t
+        .next(close + 1)
+        .is_some_and(|k| matches!(t.at(k), b'>' | b','))
+        || !in_template_arguments(t, i)
+    {
+        return None;
+    }
+    if t.next(i + 1) == Some(close) {
+        t.blank(i..close + 1, b' ');
+        return Some(close + 1);
+    }
+    t.out[i] = b'(';
+    t.out[close] = b')';
+    Some(close + 1)
+}
+
+/// P2841. A concept or a variable template as a template parameter:
+/// `template <template <class> concept C>` and `template <template
+/// <class> auto V>`. The grammar reads the first as a class template
+/// parameter once `concept` becomes `class`, and the second as a value
+/// parameter once its header goes.
+fn template_template_parameter(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let close = t.prev(i).filter(|&p| t.at(p) == b'>')?;
+    let open = angle_open(t, close)?;
+    let template_end = t
+        .prev(open)
+        .filter(|&p| t.word_before(p + 1) == b"template")?
+        + 1;
+    let template = template_end - b"template".len();
+    if !t
+        .prev(template)
+        .is_some_and(|p| matches!(t.at(p), b'<' | b','))
+    {
+        return None;
+    }
+    let end = t.word_end(i);
+    if t.word_at(i, b"concept") {
+        return t.overwrite(i..end, b"class").then_some(end);
+    }
+    t.blank(template..close + 1, b' ');
+    Some(end)
+}
+
+/// A pointer to member as an abstract declarator, as in `W<void
+/// (S::*)()>` or `using F = int (ns::S::*)(int)`. The grammar reads one
+/// only with a name after the `*`. The class qualifier goes, and what
+/// remains is a pointer to a function, which has the same shape.
+fn member_pointer_declarator(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let start = t.next(i + 1)?;
+    let mut k = start;
+    if t.starts(k, b"::") {
+        k = t.next(k + 2)?;
+    }
+    let star = loop {
+        if !is_word(t.at(k)) {
+            return None;
+        }
+        let mut after = t.next(t.word_end(k))?;
+        if t.at(after) == b'<' {
+            let mut depth = 0u32;
+            let close = (after..t.len()).find(|&j| {
+                if !t.is_code(j) {
+                    return false;
+                }
+                match t.at(j) {
+                    b'<' => depth += 1,
+                    b'>' => {
+                        depth -= 1;
+                        return depth == 0;
+                    }
+                    _ => {}
+                }
+                false
+            })?;
+            after = t.next(close + 1)?;
+        }
+        if !t.starts(after, b"::") {
+            return None;
+        }
+        let next = t.next(after + 2)?;
+        if t.at(next) == b'*' {
+            break next;
+        }
+        k = next;
+    };
+    let after_star = t.next(star + 1)?;
+    let abstract_declarator = matches!(t.at(after_star), b')' | b'[')
+        || t.word_at(after_star, b"const")
+        || t.word_at(after_star, b"volatile");
+    if !abstract_declarator {
+        return None;
+    }
+    t.blank(start..star, b' ');
+    Some(star)
+}
+
+/// `p->*pm`, a member access through a pointer to member. The grammar
+/// reads `.*` and not `->*`, and `->` with the name after it has the
+/// same shape: an access to a member of the object `p` points to.
+fn member_pointer_access(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if !t.starts(i, b"->*")
+        || t.prev(i)
+            .is_some_and(|p| t.word_before(p + 1) == b"operator")
+    {
+        return None;
+    }
+    t.blank(i + 2..i + 3, b' ');
+    Some(i + 3)
+}
+
+/// An explicit call of an operator through a member access, as in
+/// `a.operator+(b)` or `p->operator()(x)`. The call stays a call, and
+/// the operator's name becomes a name.
+fn explicit_operator_call(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let access = t.prev(i)?;
+    let member =
+        t.at(access) == b'.' || (t.at(access) == b'>' && access > 0 && t.at(access - 1) == b'-');
+    if !member {
+        return None;
+    }
+    let token = t.next(i + b"operator".len())?;
+    let end = operator_token_end(t, token)?;
+    t.next(end).filter(|&k| t.at(k) == b'(')?;
+    t.name(i..end);
+    Some(end)
+}
+
+/// A qualified destructor call, as in `p->T::~T()`. The grammar reads
+/// `p->~T()`, and the qualifier names the class the destructor belongs
+/// to and does no work.
+fn qualified_destructor_call(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let colons = t
+        .prev(i)
+        .filter(|&p| t.at(p) == b':' && p > 0 && t.at(p - 1) == b':')?
+        - 1;
+    let mut k = colons;
+    let start = loop {
+        let w = t.prev(k).filter(|&w| is_word(t.at(w)))?;
+        let word_start = w + 1 - t.word_before(w + 1).len();
+        let before = t.prev(word_start)?;
+        if t.at(before) == b':' && before > 0 && t.at(before - 1) == b':' {
+            k = before - 1;
+            continue;
+        }
+        if t.at(before) == b'.' || (t.at(before) == b'>' && before > 0 && t.at(before - 1) == b'-')
+        {
+            break word_start;
+        }
+        return None;
+    };
+    t.blank(start..i, b' ');
+    Some(i)
+}
+
+/// `typeid(T)`. The grammar reads it only as a call, and a type is not
+/// an argument. `sizeof` has the same length and the same shape, and it
+/// takes a type, and neither one evaluates a type operand.
+fn typeid_operand(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let end = i + b"typeid".len();
+    t.next(end).filter(|&k| t.at(k) == b'(')?;
+    t.overwrite(i..end, b"sizeof").then_some(end)
+}
+
+/// P2741 a static assertion with a message that is not a string
+/// literal. The grammar reads only a literal there. The message is text
+/// for a failed build and does no work, so it goes.
+fn static_assert_message(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let open = t
+        .next(i + b"static_assert".len())
+        .filter(|&k| t.at(k) == b'(')?;
+    let close = t.match_paren(open)?;
+    let mut depth = 0u32;
+    let mut angles = 0u32;
+    let mut comma = None;
+    for k in open + 1..close {
+        if !t.is_code(k) {
+            continue;
+        }
+        let byte = t.at(k);
+        match byte {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b'<' if depth == 0
+                && t.prev(k)
+                    .is_some_and(|p| is_word(t.at(p)) || t.at(p) == b'>')
+                && !matches!(t.get(k + 1), Some(b'<' | b'=')) =>
+            {
+                angles += 1;
+            }
+            b'>' if depth == 0 && angles > 0 && t.at(k - 1) != b'-' => angles -= 1,
+            b',' if depth == 0 && angles == 0 => comma = Some(k),
+            _ => {}
+        }
+    }
+    let comma = comma?;
+    let message = t.next_any(comma + 1)?;
+    let prefix = t.word(message);
+    let literal = t.at(message) == b'"'
+        || (matches!(
+            prefix,
+            b"u8" | b"u" | b"U" | b"L" | b"R" | b"u8R" | b"uR" | b"UR" | b"LR"
+        ) && t.get(message + prefix.len()) == Some(b'"'));
+    if literal {
+        return None;
+    }
+    t.blank(comma..close, b' ');
+    Some(close)
+}
+
+/// P2324 a label at the end of a block, as in `{ goto done; done: }`.
+/// The grammar reads a label only before a statement. A label names a
+/// place and does no work, so it goes.
+fn label_at_block_end(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if t.get(i + 1) == Some(b':') || (i > 0 && t.at(i - 1) == b':') {
+        return None;
+    }
+    t.next(i + 1).filter(|&k| t.at(k) == b'}')?;
+    let name_end = t.prev(i).filter(|&p| is_word(t.at(p)))?;
+    let name = t.word_before(name_end + 1);
+    if matches!(name, b"default" | b"public" | b"private" | b"protected") {
+        return None;
+    }
+    let start = name_end + 1 - name.len();
+    if !t
+        .prev(start)
+        .is_none_or(|p| matches!(t.at(p), b';' | b'{' | b'}' | b':'))
+    {
+        return None;
+    }
+    t.blank(start..i + 1, b' ');
+    Some(i + 1)
+}
+
+/// P0683 a default member initializer on a bit-field, as in `int x : 3
+/// = 1;`. The width is a constant that states the layout and does no
+/// work. It goes, and the initializer stays.
+fn bitfield_initializer(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if t.get(i + 1) == Some(b':') || (i > 0 && t.at(i - 1) == b':') {
+        return None;
+    }
+    let name_end = t.prev(i).filter(|&p| is_word(t.at(p)))?;
+    let name = t.word_before(name_end + 1);
+    if matches!(
+        name,
+        b"public" | b"private" | b"protected" | b"default" | b"final"
+    ) {
+        return None;
+    }
+    let before = t.prev(name_end + 1 - name.len())?;
+    let typed = if is_word(t.at(before)) {
+        !matches!(
+            t.word_before(before + 1),
+            b"struct" | b"class" | b"union" | b"enum" | b"case" | b"goto" | b"return" | b"virtual"
+        )
+    } else {
+        matches!(t.at(before), b'*' | b'&' | b'>')
+    };
+    if !typed {
+        return None;
+    }
+    // A `?` or an `=` earlier in the statement makes the `:` part of an
+    // expression, as in `int x = c ? *p : q`, and not the start of a
+    // width.
+    let mut k = name_end + 1 - name.len();
+    while let Some(p) = t.prev(k) {
+        match t.at(p) {
+            b';' | b'{' | b'}' => break,
+            b'?' => return None,
+            b'=' if t.get(p + 1) != Some(b'=')
+                && !matches!(t.get(p.wrapping_sub(1)), Some(b'<' | b'>' | b'!' | b'=')) =>
+            {
+                return None;
+            }
+            _ => {}
+        }
+        k = p;
+    }
+    let mut depth = 0u32;
+    let mut stop = None;
+    for k in i + 1..t.len() {
+        if !t.is_code(k) {
+            continue;
+        }
+        match t.at(k) {
+            b'(' => depth += 1,
+            b')' if depth == 0 => return None,
+            b')' => depth -= 1,
+            b'=' if depth == 0
+                && t.get(k + 1) != Some(b'=')
+                && !matches!(t.at(k - 1), b'<' | b'>' | b'!' | b'=') =>
+            {
+                stop = Some(k);
+                break;
+            }
+            b'{' if depth == 0 => {
+                stop = Some(k);
+                break;
+            }
+            b';' | b',' | b'}' | b'?' if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    let stop = stop?;
+    if !in_a_class_body(t, i) {
+        return None;
+    }
+    t.blank(i..stop, b' ');
+    Some(stop)
+}
+
+/// P2360 an alias declaration as the init-statement of a `for`, as in
+/// `for (using T = int; n > 0; --n)`. The grammar reads the range form
+/// and not the other one. The alias names a type and does no work, so it
+/// goes, and its `;` stays.
+fn alias_in_for_init(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let open = t.next(i + b"for".len()).filter(|&k| t.at(k) == b'(')?;
+    let using = t.next(open + 1).filter(|&k| t.word_at(k, b"using"))?;
+    let close = t.match_paren(open)?;
+    let semicolons = top_level_semicolons(t, open, close);
+    if semicolons.len() < 2 {
+        return None;
+    }
+    t.blank(using..semicolons[0], b' ');
+    Some(semicolons[0])
+}
+
+/// A declaration as the condition of a `for`, as in `for (; T x = g();)`
+/// or `for (; auto [ok, v] = g();)`. The grammar reads a declaration as
+/// the condition of an `if` or a `while` and not of a `for`. The type
+/// and the name go, and the initializer, which does the work, stays.
+fn declaration_as_for_condition(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let open = t.next(i + b"for".len()).filter(|&k| t.at(k) == b'(')?;
+    let close = t.match_paren(open)?;
+    let semicolons = top_level_semicolons(t, open, close);
+    let (first, second) = (*semicolons.first()?, *semicolons.get(1)?);
+    let start = t.next(first + 1).filter(|&k| k < second)?;
+    let eq = (start..second).find(|&k| {
+        t.is_code(k)
+            && t.at(k) == b'='
+            && t.get(k + 1) != Some(b'=')
+            && !matches!(
+                t.at(k - 1),
+                b'<' | b'>' | b'!' | b'=' | b'+' | b'-' | b'*' | b'/'
+            )
+    })?;
+    if !declares_a_name(t, start, eq) {
+        return None;
+    }
+    t.blank(start..eq + 1, b' ');
+    Some(eq + 1)
+}
+
+/// P3822 a condition on `noexcept` in a compound requirement, as in
+/// `{ t.f() } noexcept(true) -> C;`. The grammar reads the bare word.
+fn noexcept_condition_in_a_requirement(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    t.prev(i).filter(|&p| t.at(p) == b'}')?;
+    let open = t.next(i + b"noexcept".len()).filter(|&k| t.at(k) == b'(')?;
+    let close = t.match_paren(open)?;
+    t.blank(open..close + 1, b' ');
+    Some(close + 1)
+}
+
+/// C++98 digraphs, `<%` `%>` `<:` `:>` `%:`, which are the braces, the
+/// brackets and the `#` under other spellings. `<::` is `<` and `::`
+/// unless a `:` or a `>` follows it, as the lexer reads it.
+fn digraph(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let replacement: &[u8] = match (t.at(i), t.get(i + 1)?) {
+        (b'<', b'%') => b"{",
+        (b'%', b'>') => b"}",
+        (b'<', b':') => {
+            if t.get(i + 2) == Some(b':') && !matches!(t.get(i + 3), Some(b':' | b'>')) {
+                return None;
+            }
+            b"["
+        }
+        (b':', b'>') => b"]",
+        (b'%', b':') if t.starts(i, b"%:%:") => {
+            return t.overwrite(i..i + 4, b"##").then_some(i + 4);
+        }
+        (b'%', b':') => b"#",
+        _ => return None,
+    };
+    t.overwrite(i..i + 2, replacement).then_some(i + 2)
+}
+
+/// P0061 `__has_include(<x>)`, and P1967 `__has_embed("x")`. The grammar
+/// reads the operator and not a header name as its operand. The operand
+/// becomes a name.
+fn has_include(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if !on_a_directive(t, i) {
+        return None;
+    }
+    let open = t.next(t.word_end(i)).filter(|&k| t.at(k) == b'(')?;
+    let close = t.match_paren(open)?;
+    if close > open + 1 {
+        t.blank(open + 1..close, b'_');
+    }
+    Some(close + 1)
+}
+
+/// P1967 `#embed`, which the grammar has no directive for. The directive
+/// expands to a list of numbers, and `0` stands where that list stands.
+fn embed_directive(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let line_start = (0..i)
+        .rev()
+        .find(|&k| t.at(k) == b'\n')
+        .map_or(0, |k| k + 1);
+    if (line_start..i).any(|k| !t.at(k).is_ascii_whitespace()) {
+        return None;
+    }
+    t.next(i + 1).filter(|&k| t.word_at(k, b"embed"))?;
+    let end = line_comment_end(&t.out, i);
+    t.overwrite(i..end, b"0").then_some(end)
+}
+
+/// P2786 the class properties `trivially_relocatable_if_eligible` and
+/// `replaceable_if_eligible`. The grammar reads the first one as the
+/// name of the class, and the class then reports under it. A property
+/// states what the compiler may do with the type and does no work.
+fn class_property(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let prev = t.prev(i)?;
+    if !(is_word(t.at(prev)) || t.at(prev) == b'>') {
+        return None;
+    }
+    let end = t.word_end(i);
+    let next = t.next(end)?;
+    let next_ok = matches!(t.at(next), b'{' | b':')
+        || [
+            &b"final"[..],
+            b"trivially_relocatable_if_eligible",
+            b"replaceable_if_eligible",
+        ]
+        .iter()
+        .any(|word| t.word_at(next, word));
+    if !next_ok || !in_a_class_head(t, i) {
+        return None;
+    }
+    t.blank(i..end, b' ');
+    Some(end)
+}
+
+/// GNU labels as values: `&&label` and `goto *p`. The address of a label
+/// reads as the address of a name, and the computed jump as a jump to a
+/// name.
+fn label_address(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    if t.get(i + 1) != Some(b'&') || (i > 0 && t.at(i - 1) == b'&') {
+        return None;
+    }
+    t.next(i + 2)
+        .filter(|&k| is_word(t.at(k)) && !t.at(k).is_ascii_digit())?;
+    let unary = t.prev(i).is_some_and(|p| {
+        if is_word(t.at(p)) {
+            EXPRESSIONS.contains(&t.word_before(p + 1))
+        } else {
+            matches!(t.at(p), b'=' | b'(' | b',' | b'{' | b'?' | b':' | b'[')
+        }
+    });
+    if !unary {
+        return None;
+    }
+    t.blank(i..i + 1, b' ');
+    Some(i + 2)
+}
+
+/// The GNU computed jump, `goto *p`.
+fn computed_goto(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    let star = t.next(i + b"goto".len()).filter(|&k| t.at(k) == b'*')?;
+    t.blank(star..star + 1, b' ');
+    Some(star + 1)
+}
+
+/// A typename before a qualified name. The keyword disambiguates for the
 /// compiler and the grammar has no rule for it here.
 fn typename_qualified(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
     let end = i + b"typename".len();
@@ -1089,12 +2529,10 @@ fn declared_macro(t: &mut Text, i: usize, cx: &Cx) -> Option<usize> {
         .and_then(|open| t.match_paren(open).map(|close| (open, close)));
     let call_end = args.map_or(name_end, |(_, close)| close + 1);
     match kind {
-        // It expands to an attribute, which is not complexity.
-        Kind::Attribute => {
-            t.blank(i..name_end, b' ');
-            Some(name_end)
-        }
-        Kind::Statement => {
+        // It expands to an attribute, which is not complexity, and its
+        // arguments are part of that attribute: `GUARDED_BY(mu)` leaves
+        // nothing behind, and a bare `(mu)` would not parse.
+        Kind::Attribute | Kind::Statement => {
             t.blank(i..call_end, b' ');
             Some(call_end)
         }
@@ -1136,116 +2574,292 @@ fn declared_macro(t: &mut Text, i: usize, cx: &Cx) -> Option<usize> {
     }
 }
 
-/// Every rewrite, in the order the driver tries them at one position.
+macro_rules! rule {
+    ($name:literal, $paper:literal, $trigger:expr, $apply:expr) => {
+        Rule {
+            name: $name,
+            paper: $paper,
+            trigger: $trigger,
+            apply: $apply,
+        }
+    };
+}
+
+/// Every rule, in the order the driver tries them at one position.
 const RULES: &[Rule] = &[
-    Rule {
-        name: "reflect",
-        paper: "P2996",
-        trigger: Trigger::Byte(b'^'),
-        apply: reflect,
-    },
-    Rule {
-        name: "splice",
-        paper: "P2996",
-        trigger: Trigger::Byte(b'['),
-        apply: splice,
-    },
-    Rule {
-        name: "attribute before friend",
-        paper: "P2893",
-        trigger: Trigger::Byte(b'['),
-        apply: attribute_before_friend,
-    },
-    Rule {
-        name: "annotation",
-        paper: "P3394",
-        trigger: Trigger::Byte(b'['),
-        apply: annotation,
-    },
-    Rule {
-        name: "pack index",
-        paper: "P2662",
-        trigger: Trigger::Byte(b'.'),
-        apply: pack_index,
-    },
-    Rule {
-        name: "binding pack",
-        paper: "P1061",
-        trigger: Trigger::Byte(b'.'),
-        apply: binding_pack,
-    },
-    Rule {
-        name: "expansion statement",
-        paper: "P1306",
-        trigger: Trigger::Words(&[b"template"]),
-        apply: expansion_statement,
-    },
-    Rule {
-        name: "delete with a reason",
-        paper: "P2573",
-        trigger: Trigger::Words(&[b"delete"]),
-        apply: delete_reason,
-    },
-    Rule {
-        name: "contract clause",
-        paper: "P2900",
-        trigger: Trigger::Words(&[b"pre", b"post"]),
-        apply: contract,
-    },
-    Rule {
-        name: "explicit object parameter",
-        paper: "P0847",
-        trigger: Trigger::Words(&[b"this"]),
-        apply: explicit_object_parameter,
-    },
-    Rule {
-        name: "lambda specifier",
-        paper: "P1102",
-        trigger: Trigger::Words(&[
+    rule!("reflect", "P2996", Trigger::Byte(b'^'), reflect),
+    rule!("splice", "P2996", Trigger::Byte(b'['), splice),
+    rule!("attribute", "N2761", Trigger::Byte(b'['), attribute),
+    rule!("pack index", "P2662", Trigger::Byte(b'.'), pack_index),
+    rule!("binding pack", "P1061", Trigger::Byte(b'.'), binding_pack),
+    rule!(
+        "variadic friend or using-declaration",
+        "P2893",
+        Trigger::Byte(b'.'),
+        variadic_declaration
+    ),
+    rule!(
+        "designator with braces",
+        "P0329",
+        Trigger::Byte(b'.'),
+        designator_with_braces
+    ),
+    rule!("case range", "GNU", Trigger::Byte(b'.'), case_range),
+    rule!(
+        "named variadic macro parameter",
+        "GNU",
+        Trigger::Byte(b'.'),
+        named_variadic_parameter
+    ),
+    rule!(
+        "member pointer access",
+        "C++98",
+        Trigger::Byte(b'-'),
+        member_pointer_access
+    ),
+    rule!(
+        "lambda trailing return type",
+        "P1102",
+        Trigger::Byte(b'-'),
+        lambda_trailing_return
+    ),
+    rule!(
+        "member pointer declarator",
+        "C++98",
+        Trigger::Byte(b'('),
+        member_pointer_declarator
+    ),
+    rule!(
+        "braced default argument",
+        "N2672",
+        Trigger::Byte(b'='),
+        braced_default_argument
+    ),
+    rule!(
+        "type default in a template header",
+        "P0734",
+        Trigger::Byte(b'='),
+        type_default_in_template_header
+    ),
+    rule!(
+        "braced template argument",
+        "P0732",
+        Trigger::Byte(b'{'),
+        braced_template_argument
+    ),
+    rule!("digraph", "C++98", Trigger::Byte(b'<'), digraph),
+    rule!("digraph", "C++98", Trigger::Byte(b'%'), digraph),
+    rule!("digraph", "C++98", Trigger::Byte(b':'), digraph),
+    rule!(
+        "bit-field initializer",
+        "P0683",
+        Trigger::Byte(b':'),
+        bitfield_initializer
+    ),
+    rule!(
+        "label at the end of a block",
+        "P2324",
+        Trigger::Byte(b':'),
+        label_at_block_end
+    ),
+    rule!(
+        "qualified destructor call",
+        "C++98",
+        Trigger::Byte(b'~'),
+        qualified_destructor_call
+    ),
+    rule!("embed", "P1967", Trigger::Byte(b'#'), embed_directive),
+    rule!("label address", "GNU", Trigger::Byte(b'&'), label_address),
+    rule!(
+        "expansion statement",
+        "P1306",
+        Trigger::Words(&[b"template"]),
+        expansion_statement
+    ),
+    rule!(
+        "explicit instantiation",
+        "C++98",
+        Trigger::Words(&[b"template", b"extern"]),
+        explicit_instantiation
+    ),
+    rule!(
+        "linkage block across a conditional",
+        "C++98",
+        Trigger::Words(&[b"extern"]),
+        linkage_across_a_conditional
+    ),
+    rule!(
+        "delete with a reason",
+        "P2573",
+        Trigger::Words(&[b"delete"]),
+        delete_reason
+    ),
+    rule!(
+        "contract clause",
+        "P2900",
+        Trigger::Words(&[b"pre", b"post"]),
+        contract
+    ),
+    rule!(
+        "explicit object parameter",
+        "P0847",
+        Trigger::Words(&[b"this"]),
+        explicit_object_parameter
+    ),
+    rule!(
+        "lambda specifier",
+        "P1102",
+        Trigger::Words(&[
             b"consteval",
             b"constexpr",
             b"static",
             b"mutable",
-            b"noexcept",
+            b"noexcept"
         ]),
-        apply: lambda_specifier,
-    },
-    Rule {
-        name: "if consteval",
-        paper: "P1938",
-        trigger: Trigger::Words(&[b"consteval"]),
-        apply: if_consteval,
-    },
-    Rule {
-        name: "module declaration",
-        paper: "P1103",
-        trigger: Trigger::Words(&[b"export", b"module", b"import"]),
-        apply: module,
-    },
-    Rule {
-        name: "braced default argument",
-        paper: "N2672",
-        trigger: Trigger::Byte(b'='),
-        apply: braced_default_argument,
-    },
-    Rule {
-        name: "typename before a qualified name",
-        paper: "N1478",
-        trigger: Trigger::Words(&[b"typename"]),
-        apply: typename_qualified,
-    },
-    Rule {
-        name: "macro that expands to a string",
-        paper: "N1653",
-        trigger: Trigger::AnyWord,
-        apply: string_macro,
-    },
-    Rule {
-        name: "macro the project declared",
-        paper: "clang-format",
-        trigger: Trigger::AnyWord,
-        apply: declared_macro,
-    },
+        lambda_specifier
+    ),
+    rule!(
+        "static lambda",
+        "P1169",
+        Trigger::Words(&[b"static"]),
+        static_lambda
+    ),
+    rule!(
+        "noexcept condition in a requirement",
+        "P3822",
+        Trigger::Words(&[b"noexcept"]),
+        noexcept_condition_in_a_requirement
+    ),
+    rule!(
+        "if consteval",
+        "P1938",
+        Trigger::Words(&[b"consteval"]),
+        if_consteval
+    ),
+    rule!(
+        "consteval block",
+        "P3289",
+        Trigger::Words(&[b"consteval"]),
+        consteval_block
+    ),
+    rule!(
+        "module declaration",
+        "P1103",
+        Trigger::Words(&[b"export", b"module", b"import"]),
+        module
+    ),
+    rule!(
+        "typename before a qualified name",
+        "C++98",
+        Trigger::Words(&[b"typename"]),
+        typename_qualified
+    ),
+    rule!(
+        "typeid of a type",
+        "C++98",
+        Trigger::Words(&[b"typeid"]),
+        typeid_operand
+    ),
+    rule!(
+        "static assertion message",
+        "P2741",
+        Trigger::Words(&[b"static_assert"]),
+        static_assert_message
+    ),
+    rule!(
+        "alias in the init-statement of a for",
+        "P2360",
+        Trigger::Words(&[b"for"]),
+        alias_in_for_init
+    ),
+    rule!(
+        "declaration as the condition of a for",
+        "C++98",
+        Trigger::Words(&[b"for"]),
+        declaration_as_for_condition
+    ),
+    rule!(
+        "concept or variable template parameter",
+        "P2841",
+        Trigger::Words(&[b"concept", b"auto"]),
+        template_template_parameter
+    ),
+    rule!(
+        "class property",
+        "P2786",
+        Trigger::Words(&[
+            b"trivially_relocatable_if_eligible",
+            b"replaceable_if_eligible"
+        ]),
+        class_property
+    ),
+    rule!(
+        "explicit operator call",
+        "C++98",
+        Trigger::Words(&[b"operator"]),
+        explicit_operator_call
+    ),
+    rule!(
+        "has include",
+        "P0061",
+        Trigger::Words(&[b"__has_include", b"__has_include_next", b"__has_embed"]),
+        has_include
+    ),
+    rule!(
+        "GNU attribute",
+        "GNU",
+        Trigger::Words(&[b"__attribute__", b"__attribute"]),
+        gnu_attribute
+    ),
+    rule!(
+        "extension keyword",
+        "GNU",
+        Trigger::Words(&[b"__extension__"]),
+        extension_keyword
+    ),
+    rule!(
+        "qualifier keyword",
+        "Clang",
+        Trigger::Words(&[
+            b"_Nullable",
+            b"_Nonnull",
+            b"_Null_unspecified",
+            b"_Nullable_result",
+            b"__cdecl",
+            b"__stdcall",
+            b"__fastcall",
+            b"__vectorcall",
+            b"__thiscall",
+            b"__clrcall",
+            b"_Complex",
+            b"__complex__",
+        ]),
+        qualifier_keyword
+    ),
+    rule!(
+        "typeof",
+        "GNU",
+        Trigger::Words(&[b"typeof", b"__typeof__", b"__typeof"]),
+        gnu_typeof
+    ),
+    rule!(
+        "computed goto",
+        "GNU",
+        Trigger::Words(&[b"goto"]),
+        computed_goto
+    ),
+    rule!(
+        "macro that expands to a string",
+        "C++98",
+        Trigger::AnyWord,
+        string_macro
+    ),
+    rule!(
+        "macro the project declared",
+        "clang-format",
+        Trigger::AnyWord,
+        declared_macro
+    ),
 ];
 
 /// The rules that can fire at a byte, in the order `RULES` gives.
@@ -1258,7 +2872,12 @@ fn dispatch(byte: u8) -> &'static [&'static Rule] {
                 Trigger::Byte(byte) => table[usize::from(byte)].push(rule),
                 Trigger::Words(words) => {
                     for word in words {
-                        table[usize::from(word[0])].push(rule);
+                        let slot = &mut table[usize::from(word[0])];
+                        // Two words with one first byte name the rule
+                        // one time, so it runs one time.
+                        if !slot.iter().any(|seen| std::ptr::eq(*seen, rule)) {
+                            slot.push(rule);
+                        }
                     }
                 }
                 Trigger::AnyWord => {
@@ -1285,9 +2904,26 @@ pub struct Rewritten {
 /// Rewrite the C++ the grammar cannot read. `None` when the source
 /// needs none of it, so the common file is not copied.
 pub fn rewrite(src: &str, macros: &Macros) -> Option<Rewritten> {
-    let mut text = Text::new(src.as_bytes());
-    let cx = Cx { macros };
     let mut fired: Vec<(&'static str, &'static str)> = Vec::new();
+    let mut bytes = src.as_bytes().to_vec();
+    for pass in PASSES {
+        if let Stage::Bytes(apply) = pass.stage {
+            fired.extend(std::iter::repeat_n(
+                (pass.name, pass.paper),
+                apply(&mut bytes),
+            ));
+        }
+    }
+    let mut text = Text::new(bytes);
+    for pass in PASSES {
+        if let Stage::Literals(apply) = pass.stage {
+            fired.extend(std::iter::repeat_n(
+                (pass.name, pass.paper),
+                apply(&mut text),
+            ));
+        }
+    }
+    let cx = Cx { macros };
     let mut i = 0;
     while i < text.len() {
         if !text.is_code(i) {
@@ -1345,11 +2981,15 @@ pub fn rewrites(src: &str, macros: &Macros) -> Vec<(&'static str, &'static str, 
     counts
 }
 
-/// Every rule, by name and paper, for the test that holds each one to a
-/// case that reaches it.
+/// Every pass and every rule, by name and paper, for the test that holds
+/// each one to a case that reaches it.
 #[cfg(test)]
 pub fn rules() -> Vec<(&'static str, &'static str)> {
-    RULES.iter().map(|rule| (rule.name, rule.paper)).collect()
+    PASSES
+        .iter()
+        .map(|pass| (pass.name, pass.paper))
+        .chain(RULES.iter().map(|rule| (rule.name, rule.paper)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -1376,6 +3016,25 @@ mod tests {
         let pack = Lang::Cpp.pack();
         let text = normalize(src).unwrap_or_else(|| src.to_string());
         extract(pack, &mut pack.make_parser(), Path::new("t.cpp"), &text)
+    }
+
+    /// The ERROR and MISSING nodes in the tree, counted the way
+    /// `--errors` counts them. `FileFacts::parse_errors` counts fewer,
+    /// because the walk that fills it does not reach every MISSING node.
+    fn parse_errors(lang: Lang, text: &str) -> usize {
+        let tree = lang
+            .pack()
+            .make_parser()
+            .parse(text, None)
+            .expect("the parser returns a tree");
+        let mut stack = vec![tree.root_node()];
+        let mut count = 0;
+        while let Some(node) = stack.pop() {
+            count += usize::from(node.is_error() || node.is_missing());
+            let mut cursor = node.walk();
+            stack.extend(node.children(&mut cursor));
+        }
+        count
     }
 
     /// The two invariants every rewrite owes the report. A finding
@@ -1472,10 +3131,10 @@ mod tests {
         ),
     ];
 
-    /// Ordinary C++ that happens to spell one of the words a rewrite
-    /// looks for. None of it may change. A rewrite here would delete
-    /// real work, and the complexity of that work would go unreported
-    /// without any sign that it had.
+    /// Ordinary C++ that happens to spell one of the words or the bytes a
+    /// rewrite looks for. None of it may change. A rewrite here would
+    /// delete real work, and the complexity of that work would go
+    /// unreported without any sign that it had.
     const ORDINARY: &[(&str, &str)] = &[
         (
             "pre and post as names",
@@ -1554,7 +3213,6 @@ mod tests {
         ),
         ("import as a call", "void f() { import(3); }"),
         ("exclusive or", "int f(int a, int b) { return a ^ b; }"),
-        ("an attribute", "[[nodiscard]] int f() { return 1; }"),
         (
             "a capture by value",
             "void f() { auto l = [=]() { return 1; }; l(); }",
@@ -1568,6 +3226,145 @@ mod tests {
             "a template member call",
             "void f() { obj.template get<int>(); }",
         ),
+        ("a for with no condition", "void f() { for (;;) { g(); } }"),
+        (
+            "a for whose condition assigns",
+            "void f(int x) { for (; x = g();) { h(x); } }",
+        ),
+        (
+            "a for whose condition compares",
+            "void f(int n) { for (int i = 0; i < n; ++i) { g(i); } }",
+        ),
+        (
+            "a range for over a braced list",
+            "void f() { for (int x : {1, 2}) { g(x); } }",
+        ),
+        (
+            "a range for with a binding",
+            "void f(M& m) { for (auto& [k, v] : m) { g(k, v); } }",
+        ),
+        (
+            "a member access after a subscript",
+            "int f(A* a[]) { return a[0]->b; }",
+        ),
+        (
+            "a ternary in a member initializer",
+            "struct S { int* p; int x = c ? *p : Cfg{}.v; };",
+        ),
+        (
+            "a case label",
+            "void f(int x) { switch (x) { case 1: { g(); break; } default: break; } }",
+        ),
+        (
+            "an enumeration with a base",
+            "enum class E : unsigned char { A, B };",
+        ),
+        (
+            "a class with a base",
+            "struct D : public B { int f() { return 1; } };",
+        ),
+        (
+            "a final class with a base",
+            "class S final : public B { public: int f() { return 1; } };",
+        ),
+        (
+            "a bit-field with no initializer",
+            "struct S { unsigned x : 3; unsigned : 0; };",
+        ),
+        (
+            "a static assertion with a message",
+            "static_assert(sizeof(int) == 4, \"four\");",
+        ),
+        (
+            "a static assertion on a template",
+            "static_assert(std::is_same_v<A, B>);",
+        ),
+        (
+            "a defaulted template parameter",
+            "template <class T = int> void f(T x) { }",
+        ),
+        (
+            "a concept definition",
+            "template <class T> concept C = sizeof(T) > 1;",
+        ),
+        (
+            "an explicit specialization",
+            "template <> struct S<int> { };",
+        ),
+        ("a linkage block", "extern \"C\" {\nint f(int);\n}\n"),
+        ("a live preprocessor group", "#if 1\nint x;\n#endif\n"),
+        (
+            "a comparison in a preprocessor condition",
+            "#if X > 1\nint x;\n#endif\n",
+        ),
+        (
+            "an include",
+            "#include <vector>\n#include \"x.h\"\nint x;\n",
+        ),
+        ("a qualified member call", "void f(D* p) { p->Base::g(); }"),
+        ("a braced argument", "void f() { g(a, {1, 2}); }"),
+        ("a fraction after a comma", "void f() { g(a, .5); }"),
+        (
+            "a nested initializer list",
+            "int a[2][2] = {{1, 2}, {3, 4}};",
+        ),
+        (
+            "a designated initializer with equals",
+            "P p{.x = 1, .y = 2};",
+        ),
+        ("a constructor initializer list", "S::S() : a{1}, b{2} { }"),
+        ("a declared type in a template argument", "S<P{1, 2}> t;"),
+        ("a logical and", "bool f(bool a, bool b) { return a && b; }"),
+        (
+            "a forwarding reference",
+            "template <class T> void f(T&& x) { g(static_cast<T&&>(x)); }",
+        ),
+        ("a goto", "void f() { goto done; done: return; }"),
+        (
+            "an operator declaration",
+            "struct S { S operator+(const S& o) const; bool operator==(const S&) const = default; };",
+        ),
+        ("an address of an operator", "auto p = &S::operator+;"),
+        (
+            "a new array",
+            "void f() { int* q = new int[3]; delete[] q; }",
+        ),
+        ("a bitwise not", "int f(int y) { return ~y; }"),
+        ("a destructor defined out of line", "S::~S() { }"),
+        ("a label before a statement", "void f() { again: g(); }"),
+        (
+            "an access section at the end of a class",
+            "class S {\npublic:\n  int f() { return 1; }\nprivate:\n};\n",
+        ),
+        (
+            "a global qualifier in template arguments",
+            "std::vector<::std::string> v;",
+        ),
+        ("a remainder", "int f(int a, int b) { return a % b; }"),
+        (
+            "a template argument list",
+            "std::map<int, std::vector<int>> m;",
+        ),
+        (
+            "typeof as the name of a function",
+            "int f(V v) { return typeof(v); }",
+        ),
+        (
+            "a lambda with parameters and a trailing return",
+            "auto f = [](int x) -> int { return x; };",
+        ),
+        (
+            "a nested class with a base",
+            "struct S { struct T : B { }; };",
+        ),
+        ("a using-declaration", "struct D : B { using B::f; };"),
+        ("a friend class", "struct S { friend class T; };"),
+        ("a named pointer to member", "void (S::*pf)() = &S::f;"),
+        (
+            "an access through a pointer to member and a dot",
+            "void f(S s, int S::*pm) { s.*pm = 1; }",
+        ),
+        ("a structured binding", "void f(P p) { auto [a, b] = p; }"),
     ];
 
     #[test]
@@ -1656,6 +3453,16 @@ mod tests {
     }
 
     #[test]
+    fn a_splice_across_lines_stays_one_name() {
+        // Underscores on every line would read as one name for each
+        // line, and three names in a row is not a declaration.
+        let src = "using T = [:\n    substitute(^^X, {^^int})\n:];\n";
+        same_length(src);
+        let out = normalize(src).expect("the splice goes");
+        assert_eq!(parse_errors(Lang::Cpp, &out), 0, "{out}");
+    }
+
+    #[test]
     fn an_expansion_statement_is_an_ordinary_loop() {
         let src = "void walk() {\n\
                    \x20 template for (constexpr auto m : members) {\n\
@@ -1685,6 +3492,23 @@ mod tests {
     }
 
     #[test]
+    fn a_contract_clause_reads_after_operator_equals_a_requirement_and_before_an_attribute() {
+        // `operator=` spells an `=` that is not an assignment, a
+        // trailing requires-clause stands between the declarator and the
+        // clause, and an attribute can follow a clause.
+        for src in [
+            "struct S { S& operator=(const S& o) pre(&o != this) = default; };\n",
+            "template <class T> int f(T n) requires C<T> pre(n > 0) { return n; }\n",
+            "int f(int n) pre(n > 0) [[gnu::hot]] { return n; }\n",
+        ] {
+            same_length(src);
+            let out = normalize(src).expect("the clause goes");
+            assert!(!out.contains("pre("), "the clause stayed: {out}");
+            assert_eq!(parse_errors(Lang::Cpp, &out), 0, "{out}");
+        }
+    }
+
+    #[test]
     fn a_call_to_a_function_named_pre_is_left_alone() {
         // `pre` is only a clause where a clause can stand. Blanking a
         // call would delete real work and under-report complexity.
@@ -1710,6 +3534,7 @@ mod tests {
     fn a_file_without_any_of_it_is_not_copied() {
         assert_eq!(normalize("int main() { return 0; }\n"), None);
     }
+
     /// What a project declares, and what each declaration has to do to
     /// the one line under it.
     const DECLARED: &str = "AttributeMacros: [KEEP_ALIVE]\n\
@@ -1746,10 +3571,25 @@ mod tests {
             let text = out.clone().unwrap_or_else(|| src.to_string());
             assert_eq!(text.len(), src.len(), "{what}: a rewrite moved an offset");
             assert!(out.is_some(), "{what}: the declaration was not read");
-            let pack = Lang::Cpp.pack();
-            let f = extract(pack, &mut pack.make_parser(), Path::new("t.cpp"), &text);
-            assert!(!f.low_confidence(), "{what}: still fails to parse");
+            assert_eq!(
+                parse_errors(Lang::Cpp, &text),
+                0,
+                "{what}: still fails to parse"
+            );
         }
+    }
+
+    #[test]
+    fn an_attribute_macro_takes_its_arguments_with_it() {
+        // `GUARDED_BY(mu)` is one attribute. Blanking only the name
+        // leaves `(mu)` after a declarator, and that does not parse.
+        let yaml = "AttributeMacros: [GUARDED_BY, REQUIRES]\n";
+        let src =
+            "struct S {\n  int n GUARDED_BY(mu);\n  int take() REQUIRES(mu) { return n; }\n};\n";
+        let out = with_macros(src, yaml).expect("the macros go");
+        assert_eq!(out.len(), src.len());
+        assert!(!out.contains("(mu)"), "the arguments stayed: {out}");
+        assert_eq!(parse_errors(Lang::Cpp, &out), 0, "{out}");
     }
 
     #[test]
@@ -1789,6 +3629,7 @@ mod tests {
         let src = "int KEEP_ALIVE_2 = 1;\nint f() { return KEEP_ALIVE_2; }\n";
         assert_eq!(with_macros(src, DECLARED), None);
     }
+
     #[test]
     fn typename_before_a_qualified_name_goes_and_a_template_parameter_keeps_it() {
         let dependent = "void f() { g(typename sriov::VfIndex::Trusted{}); }\n";
@@ -1832,6 +3673,7 @@ mod tests {
         let src = "constexpr int operator\"\"_km(unsigned long long v) { return (int)v; }\n";
         assert_eq!(normalize(src), None, "the suffix went with the literal");
     }
+
     #[test]
     fn a_declaration_that_states_a_string_of_its_own_keeps_its_name() {
         // A name after a string is a macro, EXCEPT in the two
@@ -1865,6 +3707,7 @@ mod tests {
         assert!(out.contains("#ifdef KEEP_ALIVE"), "the guard went: {out}");
         assert!(!out.contains("int a KEEP_ALIVE"), "the use stayed: {out}");
     }
+
     #[test]
     fn a_braced_default_argument_parses_and_keeps_the_calls_in_it() {
         for src in [
@@ -1874,6 +3717,7 @@ mod tests {
             "void f(std::type_identity<Row> = {}) { }\n",
             "struct S { S(Cfg c = {}) noexcept : c_{c} {} Cfg c_; };\n",
             "void f(Cfg c = {1, 2}) { }\n",
+            "template <int N = {}> struct S { };\n",
         ] {
             same_length(src);
             assert!(normalize(src).is_some(), "not rewritten: {src}");
@@ -1892,6 +3736,7 @@ mod tests {
             assert_eq!(normalize(kept), None, "rewrote an initializer: {kept}");
         }
     }
+
     #[test]
     fn a_designated_initializer_is_not_a_default_argument() {
         // `.pad = {},` sits in a braced list, where the comma opens the
@@ -1907,23 +3752,47 @@ mod tests {
         assert_eq!(normalize(src), None, "a designator was read as a default");
         assert!(!normalized(src).low_confidence());
     }
+
     #[test]
-    fn an_attribute_before_friend_goes_and_the_declaration_stays() {
-        // The grammar reads `friend`, and it reads an attribute, and
-        // not the two together.
-        for src in [
-            "struct S { [[nodiscard]] friend bool ok(S const& s) { return true; } };\n",
-            "struct S { [[nodiscard]] friend constexpr bool ok(S const& s); };\n",
-            "template <class T> struct S { [[nodiscard]] friend constexpr bool ok(S const& s) { return true; } };\n",
+    fn every_attribute_goes_and_the_declaration_under_it_stays() {
+        // No attribute carries work, and the grammar reads some of their
+        // positions and not the others, so every one goes.
+        for (src, kept) in [
+            (
+                "struct S { [[nodiscard]] friend bool ok(S const& s) { return true; } };\n",
+                "friend bool ok(S const& s) { return true; }",
+            ),
+            (
+                "struct S { [[nodiscard]] friend constexpr bool ok(S const& s); };\n",
+                "friend constexpr bool ok(S const& s);",
+            ),
+            (
+                "[[nodiscard]] int f() { return 1; }\n",
+                "int f() { return 1; }",
+            ),
+            ("enum E { A [[deprecated]] = 1, B };\n", "= 1, B };"),
+            (
+                "void f(P p) { auto [a [[maybe_unused]], b] = p; }\n",
+                ", b] = p; }",
+            ),
+            (
+                "auto f = [] [[nodiscard]] () { return 1; };\n",
+                "() { return 1; };",
+            ),
+            (
+                "struct [[nodiscard]] alignas(64) S { char c; };\n",
+                "alignas(64) S { char c; };",
+            ),
         ] {
             same_length(src);
             let out = normalize(src).expect("the attribute must go");
-            assert!(out.contains("friend"), "the declaration went: {out}");
-            assert!(!out.contains("nodiscard"), "the attribute stayed: {out}");
-            assert!(!normalized(src).low_confidence(), "still fails: {src}");
+            assert!(out.contains(kept), "the declaration changed: {out}");
+            assert!(!out.contains("[["), "an attribute stayed: {out}");
+            assert_eq!(parse_errors(Lang::Cpp, &out), 0, "still fails: {out}");
         }
-        // An attribute that stands anywhere else already parses.
-        assert_eq!(normalize("[[nodiscard]] int f() { return 1; }\n"), None);
+        // `[[:` is `[` and a splice, and not an attribute.
+        let out = normalize("int x = a[[:r:]];\n").expect("the splice goes");
+        assert!(out.contains("a["), "a subscript went: {out}");
     }
 
     #[test]
@@ -1942,6 +3811,7 @@ mod tests {
         assert!(normalize(src).is_some(), "the clause was read as a call");
         assert!(!normalized(src).low_confidence());
     }
+
     #[test]
     fn a_lambda_specifier_with_no_parameter_list_goes() {
         // `[] consteval {}` is C++23. The grammar reads each specifier
@@ -1952,21 +3822,104 @@ mod tests {
             "auto f = [] static { return 1; };\n",
             "auto f = [] mutable { return 1; };\n",
             "auto f = [] noexcept { return 1; };\n",
+            "auto f = [] noexcept(true) { return 1; };\n",
             "auto f = [x] consteval { return x; };\n",
+            "auto f = [] static constexpr noexcept -> int { return 1; };\n",
+            "auto f = []() static { return 1; };\n",
         ] {
             same_length(src);
-            assert!(normalize(src).is_some(), "not rewritten: {src}");
-            assert!(!normalized(src).low_confidence(), "still fails: {src}");
+            let out = normalize(src).expect("the specifier goes");
+            assert_eq!(parse_errors(Lang::Cpp, &out), 0, "still fails: {out}");
         }
-        // A `]]` before the word closes an attribute, and the
-        // declaration under it keeps its specifier.
-        for kept in [
-            "[[nodiscard]] constexpr int f() { return 1; }\n",
-            "struct S { [[nodiscard]] static constexpr int f() { return 1; } };\n",
-            "auto f = []() consteval { return 1; };\n",
+        // A specifier after an attribute, or after a parameter list,
+        // belongs to what the grammar already reads, and it stays.
+        for (src, word) in [
+            (
+                "[[nodiscard]] constexpr int f() { return 1; }\n",
+                "constexpr int f",
+            ),
+            (
+                "struct S { [[nodiscard]] static constexpr int f() { return 1; } };\n",
+                "static constexpr int f",
+            ),
+            ("auto f = []() consteval { return 1; };\n", "() consteval {"),
         ] {
-            assert_eq!(normalize(kept), None, "rewrote a declaration: {kept}");
+            let out = normalize(src).unwrap_or_else(|| src.to_string());
+            assert!(out.contains(word), "a specifier went: {out}");
         }
+        // `noexcept(true)` takes its condition with it, so the condition
+        // does not stay behind as a parameter list.
+        let out = normalize("auto f = [] noexcept(true) { return 1; };\n").unwrap();
+        assert!(!out.contains("(true)"), "{out}");
+    }
+
+    #[test]
+    fn a_relocatable_class_keeps_its_own_name() {
+        // Unrewritten, the grammar reads the property as the name of the
+        // class, and the class reports under a keyword. No parse error
+        // shows that.
+        let src = "struct Pool trivially_relocatable_if_eligible replaceable_if_eligible {\n\
+                   \x20 int take() { return 1; }\n\
+                   };\n";
+        same_length(src);
+        let f = normalized(src);
+        // A class is not a unit, and its method carries the class in
+        // the qualified name.
+        let names: Vec<&str> = f.units[1..].iter().map(|u| &*u.qualname).collect();
+        assert_eq!(names, ["Pool::take"]);
+    }
+
+    #[test]
+    fn a_line_splice_after_trailing_spaces_joins_the_comment_as_the_compiler_does() {
+        // C++23 reads a backslash, spaces and a line break as a splice.
+        // The grammar reads the next line as code, and a function the
+        // compiler never sees reports as a unit.
+        let src = "int code = 1; // a comment \\   \n\
+                   int not_code() { return 1; }\n\
+                   int code_too() { return 2; }\n";
+        same_length(src);
+        let names: Vec<String> = normalized(src).units[1..]
+            .iter()
+            .map(|u| u.name.to_string())
+            .collect();
+        assert_eq!(names, ["code_too"]);
+    }
+
+    #[test]
+    fn a_group_under_if_0_is_not_code_and_its_else_branch_is() {
+        let src = "#if 0\nint dead() { return 'x; }\n#else\nint live() { return 1; }\n#endif\n";
+        same_length(src);
+        let out = normalize(src).expect("the dead group goes");
+        assert_eq!(parse_errors(Lang::Cpp, &out), 0, "{out}");
+        let names: Vec<String> = normalized(src).units[1..]
+            .iter()
+            .map(|u| u.name.to_string())
+            .collect();
+        assert_eq!(names, ["live"]);
+        // A nested conditional inside the dead group does not end it.
+        let nested = "#if 0\n#ifdef X\ngarbage '\n#endif\nmore garbage \"\n#endif\nint live() { return 1; }\n";
+        let out = normalize(nested).expect("the dead group goes");
+        assert_eq!(parse_errors(Lang::Cpp, &out), 0, "{out}");
+    }
+
+    #[test]
+    fn a_linkage_block_split_by_ifdef_keeps_the_declarations_in_it() {
+        let src = "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\
+                   int take(int n) { return n; }\n\
+                   #ifdef __cplusplus\n}\n#endif\n";
+        same_length(src);
+        let out = normalize(src).expect("the braces go");
+        assert_eq!(parse_errors(Lang::Cpp, &out), 0, "{out}");
+        assert!(out.contains("int take(int n) { return n; }"), "{out}");
+    }
+
+    #[test]
+    fn a_typeid_of_a_type_reads_and_its_member_call_stays() {
+        let src = "const char* n = typeid(int).name();\nconst char* m = typeid(x).name();\n";
+        same_length(src);
+        let out = normalize(src).expect("typeid becomes sizeof");
+        assert_eq!(parse_errors(Lang::Cpp, &out), 0, "{out}");
+        assert_eq!(out.matches(".name()").count(), 2, "{out}");
     }
 
     /// One short source for each construct of the language that carries
@@ -2007,25 +3960,6 @@ mod tests {
             rest = &body[len..];
         }
         probes
-    }
-
-    /// The ERROR and MISSING nodes in the tree, counted the way
-    /// `--errors` counts them. `FileFacts::parse_errors` counts fewer,
-    /// because the walk that fills it does not reach every MISSING node.
-    fn parse_errors(lang: Lang, text: &str) -> usize {
-        let tree = lang
-            .pack()
-            .make_parser()
-            .parse(text, None)
-            .expect("the parser returns a tree");
-        let mut stack = vec![tree.root_node()];
-        let mut count = 0;
-        while let Some(node) = stack.pop() {
-            count += usize::from(node.is_error() || node.is_missing());
-            let mut cursor = node.walk();
-            stack.extend(node.children(&mut cursor));
-        }
-        count
     }
 
     #[test]
