@@ -346,6 +346,20 @@ impl Lang {
         }
     }
 
+    /// The rewrites `normalize` makes to this source, by name and by the
+    /// paper that adds the syntax, with how many times each one fired.
+    /// Empty for a language that needs none. `--errors` prints them.
+    pub fn rewrites(
+        self,
+        src: &str,
+        macros: &crate::clangfmt::Macros,
+    ) -> Vec<(&'static str, &'static str, usize)> {
+        match self {
+            Lang::Cpp | Lang::Cuda => cpp::rewrites(src, macros),
+            _ => Vec::new(),
+        }
+    }
+
     /// The language a file is MEASURED as. `.h` is the one extension in
     /// this tool that underdetermines its language, and reading it as C
     /// unconditionally is measurably wrong: of leveldb's 56 headers 47

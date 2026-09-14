@@ -741,6 +741,12 @@ fn debug_errors(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
     for name in lang.pack().unresolved() {
         println!("{lang:?} pack drift: {name} does not exist in this grammar");
     }
+    // Then what the rewrite changed before the grammar read the file. A
+    // parse error that remains after a rule fired near it points at
+    // that rule, and one with no rule near it points at a missing rule.
+    for (name, paper, count) in lang.rewrites(&raw, clangfmt::for_file(path)) {
+        println!("{lang:?} rewrite: {name} ({paper}), {count} times");
+    }
     let tree = lang
         .pack()
         .make_parser()
