@@ -1116,9 +1116,17 @@ fn in_template_arguments(t: &Text, at: usize) -> bool {
 
 /// The `<` that holds `at` when the nearest unmatched bracket before it
 /// is an angle bracket, and not a parenthesis, a bracket or a brace.
+///
+/// The scan stops at the ninth braced group that it passes at the top
+/// level. A template argument list holds one such group for each braced
+/// argument, and a table holds one for each row. Without the stop, each
+/// row of a table scans back to the first row: v8's gay-fixed.cc has
+/// 100000 rows, and its rewrite took hours.
 fn enclosing_angle(t: &Text, at: usize) -> Option<usize> {
+    const BRACED_GROUPS: u32 = 8;
     let mut depth = 0u32;
     let mut angles = 0u32;
+    let mut groups = 0u32;
     let mut i = at;
     while i > 0 {
         i -= 1;
@@ -1127,6 +1135,13 @@ fn enclosing_angle(t: &Text, at: usize) -> Option<usize> {
         }
         match t.at(i) {
             b')' | b']' | b'}' => depth += 1,
+            b'{' if depth == 1 => {
+                depth = 0;
+                groups += 1;
+                if groups > BRACED_GROUPS {
+                    return None;
+                }
+            }
             b'(' | b'[' | b'{' if depth > 0 => depth -= 1,
             b'(' | b'[' | b'{' => return None,
             b';' if depth == 0 => return None,
@@ -2001,14 +2016,17 @@ fn braced_default_argument(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
 /// `C T` as a value parameter, and `int` is not a value, so the default
 /// becomes a name.
 fn type_default_in_template_header(t: &mut Text, i: usize, _cx: &Cx) -> Option<usize> {
+    // The type comes first because it reads a few bytes forward, and the
+    // header test scans back. `enum { A = 1, B = 2 }` is one scan for
+    // each `=` without it.
+    let start = t.next(i + 1)?;
+    let end = keyword_type_end(t, start)?;
     if !in_a_template_header(t, i)
         || template_parameter_head(t, i)
             .is_none_or(|head| matches!(head, b"class" | b"typename" | b"template"))
     {
         return None;
     }
-    let start = t.next(i + 1)?;
-    let end = keyword_type_end(t, start)?;
     t.name(start..end);
     Some(end)
 }
@@ -3991,6 +4009,33 @@ mod tests {
         // parses, and nothing here may touch it.
         for kept in ["int x = {};\n", "struct S { int x = {}; };\n"] {
             assert_eq!(normalize(kept), None, "rewrote an initializer: {kept}");
+        }
+    }
+
+    /// A table of braced rows and an enum of many values cost one pass
+    /// each. The template tests scan back, and a scan across every row
+    /// before it made v8's gay-fixed.cc, a table of 100000 rows, take
+    /// hours.
+    #[test]
+    fn a_large_table_costs_one_pass() {
+        let rows = 40_000;
+        let mut table = String::from("static const Row kRows[] = {\n");
+        let mut values = String::from("enum class Code {\n");
+        for n in 0..rows {
+            table.push_str(&format!("  {{{n}.5e+14, {n}, \"{n}\", -{n}}},\n"));
+            values.push_str(&format!("  kCode{n} = {n},\n"));
+        }
+        table.push_str("};\n");
+        values.push_str("};\n");
+        for src in [&table, &values] {
+            let started = std::time::Instant::now();
+            let _ = normalize(src);
+            let spent = started.elapsed();
+            assert!(
+                spent < std::time::Duration::from_secs(20),
+                "{} bytes took {spent:?}",
+                src.len()
+            );
         }
     }
 
