@@ -403,6 +403,7 @@ impl Lang {
         match by_extension {
             Lang::C | Lang::Cpp if looks_like_cuda(source) => Some(Lang::Cuda),
             Lang::C if path.extension()? == "h" && looks_like_cpp(source) => Some(Lang::Cpp),
+            Lang::TypeScript if is_linguist_catalog(source) => None,
             lang => Some(lang),
         }
     }
@@ -419,8 +420,9 @@ impl Lang {
         };
         match by_extension {
             // Every C-family extension is readable: `.h` may be any of
-            // the three, and `.cpp`/`.hpp` may be CUDA.
-            lang @ (Lang::C | Lang::Cpp) => match std::fs::read_to_string(path) {
+            // the three, and `.cpp`/`.hpp` may be CUDA. `.ts` may be a
+            // Qt Linguist catalog, which is no code at all.
+            lang @ (Lang::C | Lang::Cpp | Lang::TypeScript) => match std::fs::read_to_string(path) {
                 Ok(source) => Lang::of_source(path, &source),
                 Err(_) => Some(lang),
             },
@@ -1393,6 +1395,18 @@ fn looks_like_cpp(source: &str) -> bool {
                 .strip_prefix("class ")
                 .is_some_and(|rest| rest.starts_with(|c: char| c.is_alphabetic() || c == '_'))
     })
+}
+
+/// A Qt Linguist catalog: XML under the extension of TypeScript. Qt
+/// keeps its translations that way, MuseScore in 142 files of 2 MB and
+/// bitcoin in 101, and the TypeScript grammar reads each one as errors
+/// only. No TypeScript file opens with an XML declaration or a `TS`
+/// element.
+fn is_linguist_catalog(source: &str) -> bool {
+    let head = source.trim_start_matches('\u{feff}').trim_start();
+    ["<?xml", "<!DOCTYPE TS", "<TS ", "<TS>"]
+        .iter()
+        .any(|opening| head.starts_with(opening))
 }
 
 /// Does this declared type text name one of the language's escape
@@ -3717,6 +3731,21 @@ fn beta(items: Vec<i64>) -> i64 {
             .filter(|s| f.clone_sites.iter().filter(|t| t.hash == s.hash).count() >= 2)
             .collect();
         assert!(!dup.is_empty(), "renamed twin functions must collide");
+    }
+
+    #[test]
+    fn a_qt_linguist_catalog_is_not_typescript() {
+        let catalog = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE TS>\n\
+                       <TS version=\"2.1\" language=\"de\">\n</TS>\n";
+        assert_eq!(Lang::of_source(Path::new("locale/app_de.ts"), catalog), None);
+        // bitcoin's catalogs open with the element and no declaration.
+        let bare = "<TS version=\"2.1\" language=\"kn\">\n</TS>\n";
+        assert_eq!(Lang::of_source(Path::new("locale/app_kn.ts"), bare), None);
+        let code = "export const x: number = 1;\n";
+        assert_eq!(
+            Lang::of_source(Path::new("src/x.ts"), code),
+            Some(Lang::TypeScript)
+        );
     }
 
     #[test]
