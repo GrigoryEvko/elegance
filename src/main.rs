@@ -107,7 +107,16 @@ struct Args {
     helm: bool,
     /// Render each environment and measure the manifests that ship.
     render: bool,
+    /// The C++ seed of this project, when it is not at the usual place.
+    /// `cargo xtask seed collect` of the tree-sitter-cpp fork writes it.
+    cpp_seed: Option<PathBuf>,
 }
+
+/// Where a C++ project keeps its seed, below the first root.
+///
+/// The directory is the one the ratchet and the trend ledger already
+/// use, so a project that seeds its parse grows no new directory.
+const CPP_SEED: &str = ".elegance/cpp.seed";
 
 fn main() -> Result<(), Box<dyn Error>> {
     // `tidy` sends every argument after it to clang-tidy as written, so it
@@ -130,6 +139,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let macros = clangfmt::Registry::discover(scope);
     let declared = macros.count();
     clangfmt::install(macros);
+    // Also before any file is read: the names the C++ project declares.
+    // A parser of one file cannot know them, because it parses no
+    // header.
+    lang::cppseed::install(cpp_seed(&args)?);
     if single_file_mode(&args)? {
         return Ok(());
     }
@@ -189,6 +202,41 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     present(&args, &mut agg)
+}
+
+/// The seed of this run: the file `--cpp-seed` names, or
+/// `.elegance/cpp.seed` below the first path when that file is there.
+///
+/// A FILE THAT THE READER REFUSES STOPS THE RUN. It is not a file the
+/// parser can skip: the scanner reads a seed of another version as no
+/// name, with no message and no ERROR node, so a run that went on would
+/// measure the trees of a parser with no seed while every reader of the
+/// report believed it was seeded. The message names the version in the
+/// file, the version this build reads, and the command that writes the
+/// file again.
+///
+/// A project with no seed file at the usual place gets no seed and no
+/// message. That is not a fall back, because there is nothing to fall
+/// back from. `--cpp-seed` on a file that is not there is an error, so a
+/// misspelled path never reads as a project with no seed.
+fn cpp_seed(args: &Args) -> Result<Option<lang::cppseed::Seed>, Box<dyn Error>> {
+    let (path, named) = match &args.cpp_seed {
+        Some(path) => (path.clone(), true),
+        None => (args.roots[0].join(CPP_SEED), false),
+    };
+    if !named && !path.exists() {
+        return Ok(None);
+    }
+    let seed = lang::cppseed::Seed::read(&path)?;
+    // On stderr, so that a machine reader of stdout still reads one
+    // document. Every C++ number of this run is a function of this file.
+    eprintln!(
+        "C++ seed: {} names from {}, id {}",
+        seed.names(),
+        path.display(),
+        seed.id()
+    );
+    Ok(Some(seed))
 }
 
 /// Modes that own the whole run: each walks what it needs, decides its
@@ -573,6 +621,7 @@ fn defaults() -> Args {
         deps: false,
         helm: false,
         render: false,
+        cpp_seed: None,
     }
 }
 
@@ -653,6 +702,8 @@ usage: elegance [paths...]                 report; defaults to .
   --helm                                   values-overlay drift and credentials in YAML
   --render                                 render each environment, measure what ships
   --errors FILE                            parse errors and pack drift (pack developers)
+  --cpp-seed FILE                          the names this C++ project declares; the default is
+                                           .elegance/cpp.seed below the first path
 
   elegance calibrate <gold-dirs...>        re-derive budgets, write calibration.toml
   elegance install-hook|uninstall-hook     pre-commit hook running --diff HEAD
@@ -670,6 +721,7 @@ fn takes_value(flag: &str) -> bool {
             | "--top"
             | "--explain"
             | "--history"
+            | "--cpp-seed"
     )
 }
 
@@ -680,6 +732,7 @@ fn set_valued(args: &mut Args, flag: &str, value: &str) -> Result<(), Box<dyn Er
         "--diff" => args.diff = Some(value.to_string()),
         "--api" => args.api = Some(value.to_string()),
         "--errors" => args.errors = Some(PathBuf::from(value)),
+        "--cpp-seed" => args.cpp_seed = Some(PathBuf::from(value)),
         "--fail-on" => args.fail_on = value.parse()?,
         "--top" => args.top = value.parse()?,
         // `file:line` where the suffix is digits, else a bare path: a

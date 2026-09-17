@@ -17,6 +17,12 @@ pub const SCHEMA_VERSION: u32 = 2;
 #[derive(Serialize)]
 struct Report<'a> {
     schema_version: u32,
+    /// The SHA-256 of the C++ seed this run read, absent when it read
+    /// none. THE TREE OF A C++ FILE IS A FUNCTION OF THE FILE AND THE
+    /// SEED, so every C++ number below is a function of this id, and a
+    /// report that names no seed cannot be read again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cpp_seed: Option<String>,
     files: u32,
     units: u64,
     lines: u64,
@@ -541,6 +547,7 @@ pub fn render_json(agg: &mut Agg) -> String {
 
     let report = Report {
         schema_version: SCHEMA_VERSION,
+        cpp_seed: crate::lang::cppseed::of_run().map(crate::lang::cppseed::Seed::id),
         files: agg.files,
         units: agg.units,
         lines: agg.lines,
