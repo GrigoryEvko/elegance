@@ -291,7 +291,8 @@ fn is_destructor(def: Node) -> bool {
     false
 }
 
-/// `&&`/`||` from the shared binary kind; `else if` flattens as in C.
+/// `&&`/`||` from the shared binary kind; `else if` flattens as in C, and
+/// so does an `else` before a macro that reads as an `if`.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     let sem = match sem == Sem::Call && node.kind() == "macro_invocation" {
         true => macro_sem(node),
@@ -300,13 +301,7 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
     match sem {
         Sem::None if super::c::spliced_include(node, src) => Sem::Import,
         Sem::If if node.parent().is_some_and(|p| p.kind() == "else_clause") => Sem::ElseIf,
-        Sem::Else
-            if node
-                .named_child(0)
-                .is_some_and(|c| c.kind() == "if_statement") =>
-        {
-            Sem::None
-        }
+        Sem::Else if node.named_child(0).is_some_and(is_an_if) => Sem::None,
         Sem::BoolOp => match field_text_is(node, "operator", src) {
             Some("&&" | "||") => Sem::BoolOp,
             _ => Sem::None,
@@ -317,6 +312,16 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         // language, so the four named casts are reclassified here.
         Sem::Call if is_a_named_cast(node, src) => Sem::Cast,
         _ => sem,
+    }
+}
+
+/// An `if` statement, or a macro invocation with an `else`, which is one
+/// after expansion. See `macro_sem`.
+fn is_an_if(node: Node) -> bool {
+    match node.kind() {
+        "if_statement" => true,
+        "macro_invocation" => node.child_by_field_name("alternative").is_some(),
+        _ => false,
     }
 }
 
@@ -347,6 +352,9 @@ enum MacroScope {
 ///   gtest's `TEST(Suite, Case) { ... }` expands to the definition of
 ///   `Suite_Case_Test::TestBody`, and GCC and Clang accept no statement
 ///   there.
+/// - A macro with a body and an `else` after it is an `if` statement:
+///   only an `if` takes an `else` (GCC `cp_parser_selection_statement`),
+///   and Boost defines `BOOST_IF_CONSTEXPR` as `if constexpr` or as `if`.
 /// - A macro with arguments at statement scope is a call, as the C pack
 ///   reads every function-like macro. The grammar itself reads
 ///   `ASSERT(x);` as a call expression, and the same line with no `;`,
@@ -363,6 +371,7 @@ fn macro_sem(node: Node) -> Sem {
     let has = |field: &str| node.child_by_field_name(field).is_some();
     match macro_scope(node) {
         MacroScope::Declaration if has("body") => Sem::FnDef,
+        MacroScope::Statement if has("alternative") => Sem::If,
         MacroScope::Statement if has("arguments") => Sem::Call,
         _ => Sem::None,
     }
@@ -940,6 +949,59 @@ mod tests {
         let main = f.units.iter().find(|u| &*u.name == "main").expect("main");
         assert_eq!(main.assert_calls, 3, "an assertion with no `;` asserts too");
         assert_eq!(f.units[0].assert_calls, 0, "a static assertion is no call");
+    }
+
+    #[test]
+    fn a_macro_with_an_else_is_an_if() {
+        // The chain of boost uuid/detail/to_chars_x86.hpp, with the
+        // statements of each branch cut to one call. Only an `if` takes
+        // an `else`, so the chain costs what the same chain of `if`
+        // statements costs.
+        let chain = |head: &str| {
+            format!(
+                "template< typename Char >\n\
+                 inline void to_chars_simd(Char* out)\n\
+                 {{\n\
+                 \x20   {head} (sizeof(Char) == 1u)\n\
+                 \x20   {{\n\
+                 \x20       store(out);\n\
+                 \x20   }}\n\
+                 \x20   else {head} (sizeof(Char) == 2u)\n\
+                 \x20   {{\n\
+                 \x20       widen(out);\n\
+                 \x20   }}\n\
+                 \x20   else\n\
+                 \x20   {{\n\
+                 \x20       widen4(out);\n\
+                 \x20   }}\n\
+                 }}\n"
+            )
+        };
+        let macro_chain = chain("BOOST_IF_CONSTEXPR");
+        assert_eq!(
+            sems_of(&macro_chain, "macro_invocation"),
+            [(4, Sem::If), (8, Sem::ElseIf)]
+        );
+        assert_eq!(
+            sems_of(&macro_chain, "else_clause"),
+            [(8, Sem::None), (12, Sem::Else)],
+            "an `else` before an `if` flattens into the chain"
+        );
+        let f = facts(&macro_chain);
+        let g = facts(&chain("if"));
+        assert!(!f.low_confidence() && !g.low_confidence());
+        let events = |facts: &crate::facts::FileFacts| -> Vec<(Sem, u32, u8)> {
+            let unit = &facts.units[1];
+            unit.ctrl
+                .iter()
+                .map(|c| (c.sem, c.line, c.cog_depth))
+                .collect()
+        };
+        assert_eq!(events(&f), events(&g));
+        assert_eq!(
+            crate::metrics::complexity(&f.units[1]),
+            crate::metrics::complexity(&g.units[1])
+        );
     }
 
     #[test]
