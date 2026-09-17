@@ -23,13 +23,22 @@ serde_json = "1.0.151"
 toml = "1.1.4"
 # The runtime and the C++ grammar come from the forks of GrigoryEvko, each
 # pinned to a commit. The runtime is tree-sitter 0.27.0 with the patches of
-# the C++ fork (tag v0.27.0-cpp-fork.1). It reads the grammars of ABI 14 and
+# the C++ fork (tag v0.27.0-cpp-fork.3). It reads the grammars of ABI 14 and
 # ABI 15 below and the ABI of the C++ fork, so one runtime serves every
 # grammar. The `[patch.crates-io]` table at the end holds the same commit.
-tree-sitter = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "02f8732e4ccf7b8abb979630b976c57556134d43" }
+#
+# THE TWO PINS MOVE TOGETHER. The C++ grammar below has ABI 1018, and the
+# tag v0.27.0-cpp-fork.1 read a maximum of ABI 1017. A runtime that does
+# not read the ABI of the grammar panics at `set_language` in every rayon
+# worker, so the pair is one decision and not two.
+tree-sitter = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "80ad99f30e37aec91401d0379777941b9ebe0a14" }
 tree-sitter-bash = "0.25.1"
 tree-sitter-c = "0.24.2"
-tree-sitter-cpp = { git = "https://github.com/GrigoryEvko/tree-sitter-cpp", rev = "6e1adae1c8ac7ce4124d36daed1f7b891c0112c3" }
+# THE SEED FORMAT IS PART OF THIS PIN. `src/lang/cppseed.rs` reads a seed
+# file, and the scanner of this commit reads version 3 of that format. A
+# seed that `cargo xtask seed collect` of another commit wrote can hold
+# another version, and the reader then stops the run by name.
+tree-sitter-cpp = { git = "https://github.com/GrigoryEvko/tree-sitter-cpp", rev = "65add10fb89624c1ebd7d5df89fecc9718d5743b" }
 tree-sitter-cuda = "0.21.2"
 tree-sitter-go = "0.25.0"
 tree-sitter-javascript = "0.25.0"
@@ -86,5 +95,5 @@ strip = "debuginfo"
 # So tree-sitter-language comes from the same commit. At that commit it is
 # byte for byte the crates.io release 0.1.8, which that commit published.
 [patch.crates-io]
-tree-sitter = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "02f8732e4ccf7b8abb979630b976c57556134d43" }
-tree-sitter-language = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "02f8732e4ccf7b8abb979630b976c57556134d43" }
+tree-sitter = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "80ad99f30e37aec91401d0379777941b9ebe0a14" }
+tree-sitter-language = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "80ad99f30e37aec91401d0379777941b9ebe0a14" }

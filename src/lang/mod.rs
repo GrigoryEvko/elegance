@@ -5,6 +5,9 @@
 
 mod c;
 mod cpp;
+/// The names a C++ project declares, which the parser of one file
+/// cannot know. The whole run reads one seed, before any file.
+pub(crate) mod cppseed;
 mod csharp;
 mod elixir;
 /// The C++ text with what a Clang does not read removed, and the
@@ -1057,11 +1060,19 @@ impl Pack {
         refined
     }
 
+    /// A parser of this grammar, with the seed of the run where the
+    /// grammar reads one.
+    ///
+    /// THE SEED GOES ON EVERY PARSER AND NOT ON ONE. The walk builds a
+    /// parser for each rayon task, so a seed set in one place reaches
+    /// one thread of the walk and the run then measures two kinds of
+    /// tree with no sign of it.
     pub fn make_parser(&self) -> Parser {
         let mut parser = Parser::new();
         parser
             .set_language(&self.ts)
             .expect("grammar/runtime version mismatch");
+        cppseed::install_in(&mut parser, self.lang);
         parser
     }
 
@@ -3704,7 +3715,7 @@ let classify items limit =
             .collect();
         assert_eq!(
             pinned.join(", "),
-            "py 15, rs 15, ts 14, tsx 14, go 15, js 15, zig 14, lua 15, rb 14, pl 15, php 15, java 14, cs 15, swift 15, scala 15, ex 14, sol 15, c 15, ml 15, sh 15, cpp 1017, cu 15"
+            "py 15, rs 15, ts 14, tsx 14, go 15, js 15, zig 14, lua 15, rb 14, pl 15, php 15, java 14, cs 15, swift 15, scala 15, ex 14, sol 15, c 15, ml 15, sh 15, cpp 1018, cu 15"
         );
     }
 
