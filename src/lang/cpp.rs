@@ -131,7 +131,14 @@ const CUDA_ONLY: &[(&str, Sem)] = &[
 /// expression: a line with no `;`, a name with a block after it, an item
 /// at file scope. Most of them stand where a statement stands, so the
 /// table says `Call`, and `refine` reads the position. See `macro_sem`.
-const FORK_ONLY: &[(&str, Sem)] = &[("macro_invocation", Sem::Call)];
+///
+/// Qt's `foreach (x, xs)` and `Q_FOREACH` expand to a `for` statement,
+/// and `forever` to `for (;;)`. Each is a loop.
+const FORK_ONLY: &[(&str, Sem)] = &[
+    ("macro_invocation", Sem::Call),
+    ("qt_foreach_statement", Sem::Loop),
+    ("qt_forever_statement", Sem::Loop),
+];
 
 pub fn pack(dialect: Dialect) -> Pack {
     let (lang, ts): (Lang, tree_sitter::Language) = match dialect {
@@ -1122,6 +1129,44 @@ mod tests {
                 .collect()
         };
         assert_eq!(events(&f), events(&g));
+        assert_eq!(
+            crate::metrics::complexity(&f.units[1]),
+            crate::metrics::complexity(&g.units[1])
+        );
+    }
+
+    #[test]
+    fn a_qt_loop_is_a_loop() {
+        // The text of qt-creator src/libs/utils/commandline.cpp:131-141
+        // and of the qtbase containers snippet, which spell the loops of
+        // Qt. After expansion each one is the `for` statement below it.
+        let qt = "QStringList ProcessArgs::splitArgsWin(const QString &args)\n\
+                  {\n\
+                  \x20   forever {\n\
+                  \x20       forever {\n\
+                  \x20           if (p == length)\n\
+                  \x20               return ret;\n\
+                  \x20           if (!isWhiteSpaceWin(args.unicode()[p].unicode()))\n\
+                  \x20               break;\n\
+                  \x20           ++p;\n\
+                  \x20       }\n\
+                  \x20       foreach (const QString &str, values)\n\
+                  \x20           qDebug() << str;\n\
+                  \x20   }\n\
+                  }\n";
+        let plain = qt.replacen("forever", "for (;;)", 2).replace(
+            "foreach (const QString &str, values)",
+            "for (const QString &str : values)",
+        );
+        let (f, g) = (facts(qt), facts(&plain));
+        assert!(!f.low_confidence() && !g.low_confidence());
+        assert_eq!(
+            sems_of(qt, "qt_forever_statement"),
+            [(3, Sem::Loop), (4, Sem::Loop)]
+        );
+        assert_eq!(sems_of(qt, "qt_foreach_statement"), [(11, Sem::Loop)]);
+        assert_eq!(ctrl_of(&f), ctrl_of(&g));
+        assert_eq!(f.units[1].max_loop_depth, 2);
         assert_eq!(
             crate::metrics::complexity(&f.units[1]),
             crate::metrics::complexity(&g.units[1])
