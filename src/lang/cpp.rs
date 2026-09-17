@@ -279,9 +279,30 @@ fn declares_a_method(field: Node) -> bool {
         if inner.kind() == "function_declarator" {
             return true;
         }
-        d = inner.child_by_field_name("declarator");
+        d = inner_declarator(inner);
     }
     false
+}
+
+/// The declarator that a declarator wraps. An `attributed_declarator`
+/// fields no child: in `void f [[deprecated]] (int a)` it holds the name
+/// and the attribute as two unnamed children, and a drill that reads
+/// only the `declarator` field stops there.
+fn inner_declarator(node: Node) -> Option<Node> {
+    if node.kind() != "attributed_declarator" {
+        return node.child_by_field_name("declarator");
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).find(|c| {
+        !matches!(
+            c.kind(),
+            "attribute_declaration"
+                | "attribute_macro"
+                | "attribute_specifier"
+                | "alignas_qualifier"
+                | "comment"
+        )
+    })
 }
 
 /// `virtual int a() = 0;`: the grammar records the `= 0` as a default
@@ -296,7 +317,7 @@ fn is_destructor(def: Node) -> bool {
         if inner.kind() == "destructor_name" {
             return true;
         }
-        d = inner.child_by_field_name("declarator");
+        d = inner_declarator(inner);
     }
     false
 }
@@ -546,7 +567,7 @@ fn name_node(node: Node) -> Option<Node> {
         return None;
     }
     let mut d = node.child_by_field_name("declarator")?;
-    while let Some(inner) = d.child_by_field_name("declarator") {
+    while let Some(inner) = inner_declarator(d) {
         d = inner;
     }
     // `Store::get` and `~Store` both name the unit.
@@ -1133,6 +1154,46 @@ mod tests {
             crate::metrics::complexity(&f.units[1]),
             crate::metrics::complexity(&g.units[1])
         );
+    }
+
+    #[test]
+    fn an_attribute_on_the_name_of_a_function_keeps_the_name() {
+        // The text of llvm-project libc/test/src/__support/OSUtil/linux/
+        // vdso_test.cpp:106 and clang/test/CodeGen/noduplicate-cxx11-test.cpp:8.
+        // The attribute appertains to the declarator id, and the grammar
+        // wraps the name in an `attributed_declarator` with no fields.
+        let src = "static void sigprof_handler [[gnu::used]] (int) { flag = true; }\n\
+                   \n\
+                   int noduplicatedfun [[clang::noduplicate]] (int a) {\n\
+                   \n\
+                   \x20 return a+1;\n\
+                   \n\
+                   }\n\
+                   struct Reader {\n\
+                   \x20 virtual int read [[nodiscard]] (char* b) = 0;\n\
+                   \x20 virtual ~Reader [[gnu::cold]] () = default;\n\
+                   };\n";
+        assert_eq!(
+            sems_of(src, "attributed_declarator").len(),
+            4,
+            "each attribute wraps its name"
+        );
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        let units: Vec<(&str, usize)> = f.units[1..]
+            .iter()
+            .map(|u| (&*u.name, u.params.len()))
+            .collect();
+        assert_eq!(
+            units,
+            [
+                ("sigprof_handler", 1),
+                ("noduplicatedfun", 1),
+                ("~Reader", 0)
+            ]
+        );
+        assert_eq!(f.interfaces.len(), 1, "a pure virtual behind an attribute");
+        assert_eq!(f.interfaces[0].methods, 1, "the destructor is not one");
     }
 
     #[test]
