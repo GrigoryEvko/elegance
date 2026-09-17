@@ -21,10 +21,15 @@ rayon = "1.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 toml = "1.1.4"
-tree-sitter = "0.26"
+# The runtime and the C++ grammar come from the forks of GrigoryEvko, each
+# pinned to a commit. The runtime is tree-sitter 0.27.0 with the patches of
+# the C++ fork (tag v0.27.0-cpp-fork.1). It reads the grammars of ABI 14 and
+# ABI 15 below and the ABI of the C++ fork, so one runtime serves every
+# grammar. The `[patch.crates-io]` table at the end holds the same commit.
+tree-sitter = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "02f8732e4ccf7b8abb979630b976c57556134d43" }
 tree-sitter-bash = "0.25.1"
 tree-sitter-c = "0.24.2"
-tree-sitter-cpp = "0.23.4"
+tree-sitter-cpp = { git = "https://github.com/GrigoryEvko/tree-sitter-cpp", rev = "6e1adae1c8ac7ce4124d36daed1f7b891c0112c3" }
 tree-sitter-cuda = "0.21.1"
 tree-sitter-go = "0.25.0"
 tree-sitter-javascript = "0.25.0"
@@ -71,3 +76,15 @@ panic = "abort"
 # trade for a parser that meets code nobody here has seen. Almost all of
 # the binary is the twenty-two vendored grammars.
 strip = "debuginfo"
+
+# Each crate that asks crates.io for tree-sitter gets the fork runtime, so the
+# build links one runtime. Keep the commit equal to the dependency above.
+#
+# The runtime takes tree-sitter-language from the workspace of its own
+# repository, and each grammar crate takes it from crates.io. The two copies
+# declare the same `links` value, and cargo refuses a graph that holds two.
+# So tree-sitter-language comes from the same commit. At that commit it is
+# byte for byte the crates.io release 0.1.8, which that commit published.
+[patch.crates-io]
+tree-sitter = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "02f8732e4ccf7b8abb979630b976c57556134d43" }
+tree-sitter-language = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "02f8732e4ccf7b8abb979630b976c57556134d43" }
