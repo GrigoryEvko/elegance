@@ -3685,7 +3685,7 @@ let classify items limit =
             .collect();
         assert_eq!(
             pinned.join(", "),
-            "py 15, rs 15, ts 14, tsx 14, go 15, js 15, zig 14, lua 15, rb 14, pl 15, php 15, java 14, cs 15, swift 15, scala 15, ex 14, sol 15, c 15, ml 14, sh 15, cpp 1017, cu 15"
+            "py 15, rs 15, ts 14, tsx 14, go 15, js 15, zig 14, lua 15, rb 14, pl 15, php 15, java 14, cs 15, swift 15, scala 15, ex 14, sol 15, c 15, ml 15, sh 15, cpp 1017, cu 15"
         );
     }
 

@@ -504,9 +504,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-cuda"
-version = "0.21.1"
+version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "715eecfee69b15991de5b9f78009c6d4cb34e18d20d028304a75d38528cddb45"
+checksum = "e88ed4ad300c2fb7ed7dde1d9c1b0926bd93fc8ae1c8766898191bd85f2220f5"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -569,9 +569,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-ocaml"
-version = "0.24.2"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d19db582b3855f56b5f9ec484170fbfb9ee60b938ec7720d76d2ee788e8b640"
+checksum = "43adb10fcccbcbbce0f4adc9dab7cd55f0a5eafc2d71bd4c03fcc5d6767066e0"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -619,9 +619,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-scala"
-version = "0.26.0"
+version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de5a4a7ff23a55474ce6a741d52aaeca7a82fe9421bb982b86e98c6ac8629397"
+checksum = "24e0ab4505990bfe30051761d40a7bf4033ce5a81c9eda9e20e987a5cdc84826"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -669,9 +669,9 @@ dependencies = [
 
 [[package]]
 name = "ts-parser-perl"
-version = "1.2.1"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d125f7bfdd1fd82a7e87d2e85793f486ad1b5f465144e9e22132dbe5bd80e694"
+checksum = "db3cd8574afc19af4d3db44fe0cf94a5e8fc3f4056c0326baf5ba01a29666129"
 dependencies = [
  "cc",
  "tree-sitter-language",
