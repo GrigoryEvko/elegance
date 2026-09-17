@@ -162,10 +162,14 @@ fn built(ts: tree_sitter::Language) -> Pack {
 }
 
 /// `let f x = ...` names the binding; the pattern holds the name.
+///
+/// `let _ = ...` names it `_`. tree-sitter-ocaml 0.24 spelled that pattern
+/// as a `value_name` and 0.26 spells it as an `any_pattern`, so both kinds
+/// are read. Without the second, each such unit loses its name.
 fn name_node(node: Node) -> Option<Node> {
     (node.kind() == "let_binding")
         .then(|| node.child_by_field_name("pattern"))?
-        .filter(|p| p.kind() == "value_name")
+        .filter(|p| matches!(p.kind(), "value_name" | "any_pattern"))
 }
 
 /// Naming a module makes it visible, so every module path is an
@@ -426,5 +430,22 @@ type t = Dune_lang.Decoder.t
         let impl_pack = crate::lang::Lang::OCaml.pack_for(Path::new("t.ml"));
         assert!(std::ptr::eq(impl_pack, crate::lang::Lang::OCaml.pack()));
         assert!(!std::ptr::eq(iface, impl_pack));
+    }
+
+    /// A top-level `let _ = ...` is a unit named `_`. The grammar spells
+    /// that pattern as `any_pattern` from tree-sitter-ocaml 0.26 and as a
+    /// `value_name` before it, and the name must not depend on which.
+    #[test]
+    fn a_wildcard_binding_is_named_by_its_pattern() {
+        let pack = crate::lang::Lang::OCaml.pack();
+        let mut parser = pack.make_parser();
+        let f = crate::facts::extract(
+            pack,
+            &mut parser,
+            Path::new("t.ml"),
+            "let _ = print_string \"x\"\nlet f x = x + 1\n",
+        );
+        let names: Vec<&str> = f.units[1..].iter().map(|u| &*u.name).collect();
+        assert_eq!(names, ["_", "f"]);
     }
 }
