@@ -925,12 +925,16 @@ mod tests {
             1,
             "a kernel's guard is an ordinary branch"
         );
-        // And the same source is unreadable to the plain C++ grammar,
-        // which is why the dialect exists.
-        assert!(
-            facts("void host(float* a, int n) {\n  add<<<grid, block>>>(a, n);\n}\n")
-                .low_confidence(),
-            "if C++ could read a launch there would be nothing to add"
+        // The C++ grammar of the fork reads a launch too: one call
+        // expression with the launch geometry in its `configuration`
+        // field. That field is no call, so the launch is one call there
+        // as well.
+        let launch = "void host(float* a, int n) {\n  add<<<grid, block>>>(a, n);\n}\n";
+        assert!(!facts(launch).low_confidence(), "the fork reads a launch");
+        assert_eq!(sems_of(launch, "call_expression"), [(2, Sem::Call)]);
+        assert_eq!(
+            sems_of(launch, "cuda_execution_configuration"),
+            [(2, Sem::None)]
         );
     }
 
