@@ -871,6 +871,9 @@ impl<'a> Extractor<'a> {
             _ => {}
         }
         self.record_ctrl(node, sem, ctx);
+        if sem == Sem::None && node.child_count() == 0 {
+            self.record_unparsed_ctrl(node, ctx);
+        }
         // Asked of EVERY node, because what escapes the language is
         // not always a call: Python's metaclass is a TypeDef, Perl's
         // `eval "..."` is the same node as its try block, and
@@ -986,6 +989,21 @@ impl<'a> Extractor<'a> {
             key: joined.join("\u{1f}").into(),
             line: node.start_position().row as u32 + 1,
         });
+    }
+
+    /// The control events in the text of a leaf that the grammar did not
+    /// parse, such as a skipped preprocessor branch. Each one sits at the
+    /// depth of the leaf plus its own nesting in the text. The text has
+    /// no tree, so a call or a statement in it counts nothing.
+    fn record_unparsed_ctrl(&mut self, node: Node, ctx: Ctx) {
+        for event in self.pack.unparsed_ctrl(node, self.src) {
+            self.facts.units[ctx.unit].ctrl.push(CtrlFact {
+                sem: event.sem,
+                line: event.line,
+                cog_depth: ctx.cog.saturating_add(event.nesting),
+                new_seq: true,
+            });
+        }
     }
 
     /// A control event, tagged with the cognitive nesting depth it sits

@@ -114,6 +114,7 @@ pub fn pack() -> Pack {
         file_level_scope: false,
         is_override: |_, _| false,
         spooky,
+        unparsed_ctrl: |_, _| Vec::new(),
         negation_operand,
         catch_sin,
         swallows_error,

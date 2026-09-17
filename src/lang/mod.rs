@@ -632,6 +632,19 @@ pub type RecordKeys = fn(Node, &[u8]) -> Option<Vec<Box<str>>>;
 /// The byte range of a definition's documentation, when it has any.
 pub type DocSpan = fn(Node, &[u8]) -> Option<(u32, u32)>;
 
+/// A control event in text that the grammar kept as one token and did
+/// not parse: a directive line in a preprocessor branch that the parser
+/// skipped.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TextCtrl {
+    pub sem: Sem,
+    /// 1-based line of the event.
+    pub line: u32,
+    /// The nesting of the event under the node that holds the text. The
+    /// core adds it to the cognitive depth of that node.
+    pub nesting: u8,
+}
+
 /// What a parameter contributes to interface metrics.
 #[derive(Clone, Default)]
 pub struct ParamInfo {
@@ -804,6 +817,12 @@ pub struct Pack {
     /// Consulted for EVERY node: seeing only calls and typedefs leaves
     /// Solidity's `assembly` block and Perl's `eval "..."` invisible.
     spooky: fn(Node, Sem, &[u8]) -> bool,
+    /// The control events in the text of a leaf that the grammar did not
+    /// parse. The C++ fork keeps each preprocessor branch that its parser
+    /// skipped as one `preproc_skipped` token, and the `#elif`, `#else`
+    /// and nested `#if` lines of that text are branches of the source.
+    /// Consulted for each leaf that the pack classifies as `Sem::None`.
+    unparsed_ctrl: fn(Node, &[u8]) -> Vec<TextCtrl>,
     /// If this node is a logical NOT, its operand.
     negation_operand: for<'t> fn(Node<'t>, &[u8]) -> Option<Node<'t>>,
     /// Error-handling sin of a Catch node, if any.

@@ -31,7 +31,7 @@
 
 use tree_sitter::Node;
 
-use super::{CatchSin, Lang, Pack, ParamInfo, field_text_is, sem_table};
+use super::{CatchSin, Lang, Pack, ParamInfo, TextCtrl, field_text_is, sem_table};
 use crate::sem::Sem;
 
 pub enum Dialect {
@@ -76,7 +76,9 @@ const KINDS: &[(&str, Sem)] = &[
     ("preproc_include", Sem::Import),
     // Inside a class or enum body `#include` is not a declaration
     // position, and the grammar reads the line as the generic
-    // `preproc_call` it shares with `#pragma` and `#error`.
+    // `preproc_call` it shares with `#pragma` and `#error`. The fork also
+    // reads each line of a conditional group that it cannot keep as one
+    // node as a `preproc_call`, and `refine` reads those by their name.
     ("preproc_call", Sem::Import),
     // `using_declaration` is absent by decision: it names a namespace
     // member, and the graph resolves against file paths. See `imports`.
@@ -176,6 +178,7 @@ pub fn pack(dialect: Dialect) -> Pack {
         file_level_scope: false,
         is_override: |_, _| false,
         spooky,
+        unparsed_ctrl,
         negation_operand: |node, src| {
             (node.kind() == "unary_expression" && field_text_is(node, "operator", src) == Some("!"))
                 .then(|| node.child_by_field_name("argument"))?
@@ -294,6 +297,14 @@ fn is_destructor(def: Node) -> bool {
 /// `&&`/`||` from the shared binary kind; `else if` flattens as in C, and
 /// so does an `else` before a macro that reads as an `if`.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
+    if sem == Sem::Import
+        && node.kind() == "preproc_call"
+        && let Some(event) = field_text_is(node, "directive", src)
+            .and_then(directive_name)
+            .and_then(conditional_event)
+    {
+        return event;
+    }
     let sem = match sem == Sem::Call && node.kind() == "macro_invocation" {
         true => macro_sem(node),
         false => sem,
@@ -400,6 +411,119 @@ fn macro_scope(node: Node) -> MacroScope {
         }
     }
     MacroScope::Declaration
+}
+
+/// The name of the directive that a line starts, without its `#` or
+/// `%:`: `if` for `#  if A`. None for a line that starts no directive.
+fn directive_name(line: &str) -> Option<&str> {
+    let rest = line.trim_start_matches([' ', '\t']);
+    let rest = rest
+        .strip_prefix('#')
+        .or_else(|| rest.strip_prefix("%:"))?
+        .trim_start_matches([' ', '\t']);
+    let end = rest
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// The control event of a conditional directive, as a structured group
+/// counts it: `#if`, `#ifdef` and `#ifndef` open a branch, the `#elif`
+/// family and `#else` continue the chain, and `#endif` closes the group
+/// with no event, which is `Sem::None`. None for every other directive.
+///
+/// The fork keeps a group as `preproc_if` or `preproc_ifdef` only where
+/// each branch holds whole declarations or statements. A group inside an
+/// expression or a function head is lines: each directive line of the
+/// branch that the parser reads is a `preproc_call`, and the text of the
+/// other branches is one `preproc_skipped` token.
+fn conditional_event(name: &str) -> Option<Sem> {
+    match name {
+        "if" | "ifdef" | "ifndef" => Some(Sem::If),
+        "elif" | "elifdef" | "elifndef" => Some(Sem::ElseIf),
+        "else" => Some(Sem::Else),
+        "endif" => Some(Sem::None),
+        _ => None,
+    }
+}
+
+/// The conditional directive lines in the text of a branch that the
+/// parser skipped, as a structured group counts them.
+///
+/// The text runs from the first skipped line to the line before the
+/// `#endif` of the group. It holds the `#elif` and `#else` lines of the
+/// group, and the whole of each group nested in it, so a nested `#if`
+/// takes the nesting of the groups that the text opens before it. The
+/// text has no tree: a call, a statement or a C++ `if` in it counts
+/// nothing, and that is a loss against a structured group.
+///
+/// A line that starts in a block comment is not a directive. A raw
+/// string literal that holds a line starting with `#if` is read as a
+/// directive. Cost: O(length of the text).
+fn unparsed_ctrl(node: Node, src: &[u8]) -> Vec<TextCtrl> {
+    if node.kind() != "preproc_skipped" {
+        return Vec::new();
+    }
+    let Ok(text) = node.utf8_text(src) else {
+        return Vec::new();
+    };
+    let first = node.start_position().row as u32 + 1;
+    let mut events = Vec::new();
+    let mut depth = 0u8;
+    let mut in_comment = false;
+    for (offset, line) in text.lines().enumerate() {
+        let starts_in_comment = in_comment;
+        in_comment = comment_open_after(line, in_comment);
+        let event = match starts_in_comment {
+            true => None,
+            false => directive_name(line).and_then(conditional_event),
+        };
+        let nesting = depth;
+        match event {
+            None => continue,
+            Some(Sem::None) => depth = depth.saturating_sub(1),
+            Some(sem) => {
+                if sem == Sem::If {
+                    depth = depth.saturating_add(1);
+                }
+                events.push(TextCtrl {
+                    sem,
+                    line: first + offset as u32,
+                    nesting,
+                });
+            }
+        }
+    }
+    events
+}
+
+/// Is a block comment open at the end of `line`, given that one was open
+/// at its start or not? A `//` ends the line, and a quoted literal hides
+/// the comment markers in it. Cost: O(length of the line).
+fn comment_open_after(line: &str, mut open: bool) -> bool {
+    let bytes = line.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let pair = (bytes[i], bytes.get(i + 1).copied());
+        match (open, quote, pair) {
+            (true, _, (b'*', Some(b'/'))) => {
+                open = false;
+                i += 1;
+            }
+            (false, Some(_), (b'\\', _)) => i += 1,
+            (false, Some(q), (b, _)) if b == q => quote = None,
+            (false, None, (b'/', Some(b'/'))) => return false,
+            (false, None, (b'/', Some(b'*'))) => {
+                open = true;
+                i += 1;
+            }
+            (false, None, (b @ (b'"' | b'\''), _)) => quote = Some(b),
+            _ => {}
+        }
+        i += 1;
+    }
+    open
 }
 
 /// The declarator chain, as in C, ending at an identifier or at a
@@ -1001,6 +1125,137 @@ mod tests {
         assert_eq!(
             crate::metrics::complexity(&f.units[1]),
             crate::metrics::complexity(&g.units[1])
+        );
+    }
+
+    /// The (event, line) pairs of each unit after the module, in order.
+    fn ctrl_of(f: &crate::facts::FileFacts) -> Vec<Vec<(Sem, u32)>> {
+        f.units[1..]
+            .iter()
+            .map(|u| u.ctrl.iter().map(|c| (c.sem, c.line)).collect())
+            .collect()
+    }
+
+    #[test]
+    fn a_conditional_group_of_lines_counts_each_directive() {
+        // The text of bde balb_pipecontrolchannel.cpp:355-383, and of the
+        // tables of baljsn_encodeimplutil.t.cpp:177-188 and
+        // bdlsb_memoutstreambuf.t.cpp:1290-1309. The fork keeps no group
+        // node where a branch holds a part of a statement. Each directive
+        // line that it reads is a `preproc_call`, and the other branches
+        // are one `preproc_skipped` token of text.
+        let src = "void PipeControlChannel::backgroundProcessor()\n\
+                   {\n\
+                   \x20           if (0 == bytesRead) {\n\
+                   \x20               continue;\n\
+                   \x20           }\n\
+                   \x20           else if (0 > bytesRead) {\n\
+                   #if EAGAIN != EWOULDBLOCK\n\
+                   \x20               if (EAGAIN == savedErrno || EWOULDBLOCK == savedErrno) {\n\
+                   #else\n\
+                   \x20               if (EAGAIN == savedErrno) {\n\
+                   #endif\n\
+                   \x20                   continue;\n\
+                   \x20               } else {\n\
+                   \x20                   bail();\n\
+                   \x20               }\n\
+                   \x20           }\n\
+                   }\n\
+                   void testEncode()\n\
+                   {\n\
+                   \x20   static const struct {\n\
+                   \x20       int         d_line;\n\
+                   \x20       Int64       d_value;\n\
+                   \x20       const char *d_result;\n\
+                   \x20   } DATA[] = {\n\
+                   \x20       { L_,   UINT_MAX,           \"4294967295\" },\n\
+                   #if   defined(BSLS_PLATFORM_CPU_32_BIT)                                       \\\n\
+                   \x20 || (defined(BSLS_PLATFORM_CPU_64_BIT) && defined(BSLS_PLATFORM_OS_WINDOWS))\n\
+                   \x20       { L_,   LONG_MAX,           \"2147483647\" },\n\
+                   #elif defined(BSLS_PLATFORM_CPU_64_BIT)\n\
+                   \x20       { L_,   LONG_MAX,  \"9223372036854775807\" },\n\
+                   #else\n\
+                   # error \"baljsn_encoder.t.cpp does not support the platform's bitness.\"\n\
+                   #endif\n\
+                   \x20       { L_,  LLONG_MAX,  \"9223372036854775807\" },\n\
+                   \x20   };\n\
+                   }\n\
+                   void testReserve()\n\
+                   {\n\
+                   \x20   static const struct { int d_line; int d_size; } DATA[] = {\n\
+                   \x20              { L_,   INIT_BUFSIZE, IBPO,           TWICE_INIT_BUFSIZE },\n\
+                   #if   defined(BSLS_PLATFORM_OS_WINDOWS)\n\
+                   \x20 #if   defined(BSLS_PLATFORM_CPU_32_BIT)\n\
+                   \x20              { L_,   0,            SZ_INT_MAX/8,   SZ_INT_MAX/8 +1    },\n\
+                   \x20 #elif defined(BSLS_PLATFORM_CPU_64_BIT)\n\
+                   \x20              { L_,   0,            SZ_INT_MAX/2,   SZ_INT_MAX/2 +1    },\n\
+                   \x20 #else\n\
+                   \x20       #error \"Unknown CPU\"\n\
+                   \x20 #endif\n\
+                   #elif defined(BSLS_PLATFORM_OS_UNIX)\n\
+                   \x20 /* #if defined(BSLS_PLATFORM_CPU_16_BIT)\n\
+                   #if a comment line starts no group\n\
+                   \x20 */\n\
+                   \x20 #if   defined(BSLS_PLATFORM_CPU_32_BIT)\n\
+                   \x20              { L_,   0,            SZ_INT_MAX/4,   SZ_INT_MAX/4 +1    },\n\
+                   \x20 #elif defined(BSLS_PLATFORM_CPU_64_BIT)\n\
+                   \x20              { L_,   0,            SZ_INT_MAX,    (SZ_INT_MAX+1)*1    },\n\
+                   \x20 #else\n\
+                   \x20       #error \"Unknown CPU\"\n\
+                   \x20 #endif\n\
+                   #else\n\
+                   \x20   #error \"Unknown OS\"\n\
+                   #endif\n\
+                   \x20           };\n\
+                   }\n";
+        let f = facts(src);
+        assert!(!f.low_confidence(), "the fork reads each group as lines");
+        assert_eq!(
+            sems_of(src, "preproc_call")
+                .into_iter()
+                .map(|(line, sem)| (sem, line))
+                .collect::<Vec<_>>(),
+            [
+                (Sem::If, 7),
+                (Sem::None, 11),
+                (Sem::If, 26),
+                (Sem::None, 33),
+                (Sem::If, 41),
+                (Sem::If, 42),
+                (Sem::None, 48),
+                (Sem::None, 62),
+            ],
+            "a directive line counts by its name, and `#endif` closes with no event"
+        );
+        use Sem::{Else, ElseIf, If, Jump};
+        assert_eq!(
+            ctrl_of(&f),
+            [
+                vec![
+                    (If, 3),
+                    (Jump, 4),
+                    (ElseIf, 6),
+                    (If, 7),
+                    (If, 8),
+                    (Sem::BoolOp, 8),
+                    (Else, 9),
+                    (Jump, 12),
+                    (Else, 13),
+                ],
+                vec![(If, 26), (ElseIf, 29), (Else, 31)],
+                vec![
+                    (If, 41),
+                    (If, 42),
+                    (ElseIf, 44),
+                    (Else, 46),
+                    (ElseIf, 49),
+                    (If, 53),
+                    (ElseIf, 55),
+                    (Else, 57),
+                    (Else, 60),
+                ],
+            ],
+            "the skipped text counts its `#elif`, `#else` and nested `#if` lines, and a comment counts none"
         );
     }
 

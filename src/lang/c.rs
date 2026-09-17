@@ -109,6 +109,7 @@ pub fn pack() -> Pack {
         file_level_scope: false,
         is_override: |_, _| false,
         spooky,
+        unparsed_ctrl: |_, _| Vec::new(),
         negation_operand: |node, src| {
             (node.kind() == "unary_expression" && field_text_is(node, "operator", src) == Some("!"))
                 .then(|| node.child_by_field_name("argument"))?

@@ -130,6 +130,7 @@ fn built(ts: tree_sitter::Language) -> Pack {
         file_level_scope: false,
         is_override: |_, _| false,
         spooky,
+        unparsed_ctrl: |_, _| Vec::new(),
         negation_operand: |_, _| None,
         catch_sin: |_, _| None,
         swallows_error: |_, _| false,

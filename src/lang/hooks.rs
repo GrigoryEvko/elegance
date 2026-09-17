@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tree_sitter::Node;
 
-use super::{CatchSin, ImportInfo, Lang, Pack, ParamInfo};
+use super::{CatchSin, ImportInfo, Lang, Pack, ParamInfo, TextCtrl};
 use crate::facts::InterfaceFact;
 use crate::sem::Sem;
 
@@ -116,6 +116,7 @@ hooks! {
     doc_span(node: Node, src: &[u8]) -> Option<(u32, u32)>;
     is_override(node: Node, src: &[u8]) -> bool;
     spooky(node: Node, sem: Sem, src: &[u8]) -> bool;
+    unparsed_ctrl(node: Node, src: &[u8]) -> Vec<TextCtrl>;
     negation_operand<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>>;
     catch_sin(node: Node, src: &[u8]) -> Option<CatchSin>;
     swallows_error(node: Node, src: &[u8]) -> bool;
