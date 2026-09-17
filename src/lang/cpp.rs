@@ -1201,6 +1201,246 @@ mod tests {
     }
 
     #[test]
+    fn an_attribute_macro_on_a_function_is_no_call_and_no_name() {
+        // The text of firefox xpcom/threads/Monitor.h:30-37. The fork
+        // reads each macro after a parameter list as an
+        // `attribute_macro` of the function declarator.
+        let src = "class Monitor {\n\
+                   \x20public:\n\
+                   \x20 [[nodiscard]] bool TryLock() MOZ_TRY_ACQUIRE(true) {\n\
+                   \x20   return mMutex.TryLock();\n\
+                   \x20 }\n\
+                   \x20 void Unlock() MOZ_CAPABILITY_RELEASE() { mMutex.Unlock(); }\n\
+                   \n\
+                   \x20 void Wait() MOZ_REQUIRES(this) { mCondVar.Wait(); }\n\
+                   };\n";
+        assert_eq!(
+            sems_of(src, "attribute_macro"),
+            [(3, Sem::None), (6, Sem::None), (8, Sem::None)]
+        );
+        assert_eq!(
+            sems_of(src, "call_expression"),
+            [(4, Sem::Call), (6, Sem::Call), (8, Sem::Call)],
+            "the member calls and nothing else"
+        );
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        let units: Vec<(&str, bool, usize)> = f.units[1..]
+            .iter()
+            .map(|u| (&*u.name, u.is_method, u.params.len()))
+            .collect();
+        assert_eq!(
+            units,
+            [("TryLock", true, 0), ("Unlock", true, 0), ("Wait", true, 0)]
+        );
+    }
+
+    #[test]
+    fn a_type_macro_and_a_scope_macro_are_no_calls() {
+        // The text of firefox xpcom/base/CycleCollectedJSRuntime.h:30-37 and
+        // xpcom/base/nsCycleCollectionParticipant.h:548-559.
+        let src = "class JSGCThingParticipant : public nsCycleCollectionParticipant {\n\
+                   \x20public:\n\
+                   \x20 NS_IMETHOD_(void) Root(void*) override {\n\
+                   \x20   MOZ_ASSERT(false, \"Don't call Root on GC things\");\n\
+                   \x20 }\n\
+                   };\n\
+                   template <typename T>\n\
+                   struct DowncastCCParticipantImpl<T, true> {\n\
+                   \x20 static T* Run(void* aPtr) {\n\
+                   \x20   nsISupports* s = static_cast<nsISupports*>(aPtr);\n\
+                   \x20   T* rval = NS_CYCLE_COLLECTION_CLASSNAME(T)::Downcast(s);\n\
+                   \x20   NS_CHECK_FOR_RIGHT_PARTICIPANT(rval);\n\
+                   \x20   return rval;\n\
+                   \x20 }\n\
+                   };\n";
+        assert_eq!(sems_of(src, "macro_type_specifier"), [(3, Sem::None)]);
+        assert_eq!(sems_of(src, "macro_scope_specifier"), [(11, Sem::None)]);
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        let root = f.units.iter().find(|u| &*u.name == "Root").expect("Root");
+        assert_eq!(root.params.len(), 1);
+        assert_eq!(root.assert_calls, 1, "the assertion in the body");
+        let run = f.units.iter().find(|u| &*u.name == "Run").expect("Run");
+        assert_eq!(run.casts, 1, "static_cast is still a cast");
+        assert_eq!(
+            sems_of(src, "call_expression"),
+            [
+                (4, Sem::Call),
+                (10, Sem::Cast),
+                (11, Sem::Call),
+                (12, Sem::Call)
+            ],
+            "the call through a scope macro is one call, and the macro is none"
+        );
+    }
+
+    #[test]
+    fn a_call_with_a_token_tree_is_one_call() {
+        // The text of qt-creator src/libs/utils/fancymainwindow.cpp:602-606.
+        // An argument that is no expression, `return nullptr`, gives the
+        // call a `token_tree`, and the tokens in it are no calls.
+        let src = "QDockWidget *FancyMainWindow::addDockForWidget(QWidget *widget, bool immutable)\n\
+                   {\n\
+                   \x20   QTC_ASSERT(widget, return nullptr);\n\
+                   \x20   QTC_CHECK(widget->objectName().size());\n\
+                   }\n";
+        assert_eq!(sems_of(src, "token_tree"), [(3, Sem::None)]);
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        assert_eq!(f.units[1].assert_calls, 1, "QTC_ASSERT asserts");
+        assert_eq!(
+            sems_of(src, "call_expression").len(),
+            4,
+            "QTC_ASSERT, QTC_CHECK, objectName and size"
+        );
+    }
+
+    #[test]
+    fn a_qt_emit_is_the_call_it_emits() {
+        // The text of qt-creator src/libs/utils/fancylineedit.cpp:100-106.
+        let src = "class HistoryCompleterPrivate {\n\
+                   public:\n\
+                   \x20   void setKeySequence(const QKeySequence &key)\n\
+                   \x20   {\n\
+                   \x20       if (m_key != key) {\n\
+                   \x20           m_key = key;\n\
+                   \x20           emit keyChanged(key);\n\
+                   \x20       }\n\
+                   \x20   }\n\
+                   };\n";
+        assert_eq!(sems_of(src, "qt_emit_statement"), [(7, Sem::None)]);
+        assert_eq!(sems_of(src, "call_expression"), [(7, Sem::Call)]);
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        assert_eq!(ctrl_of(&f), [vec![(Sem::If, 5)]]);
+    }
+
+    #[test]
+    fn a_lambda_declarator_opens_no_unit() {
+        // The text of firefox xpcom/base/AvailableMemoryWatcherLinux.cpp:
+        // 331-339, with the call closed after the lambda.
+        let src = "nsresult nsAvailableMemoryWatcher::StartPolling(const MutexAutoLock&) {\n\
+                   \x20 bool isTesting = mIsTesting;\n\
+                   \x20 nsresult rv = mThread->Dispatch(NS_NewRunnableFunction(\n\
+                   \x20     \"MemoryPoller\", [self = RefPtr{this}, isTesting]() {\n\
+                   \x20       if (self->IsMemoryLow()) {\n\
+                   \x20         self->HandleLowMemory();\n\
+                   \x20       } else {\n\
+                   \x20         self->MaybeHandleHighMemory();\n\
+                   \x20       }\n\
+                   \x20     }));\n\
+                   \x20 return rv;\n\
+                   }\n";
+        assert_eq!(sems_of(src, "lambda_expression"), [(4, Sem::Lambda)]);
+        assert_eq!(sems_of(src, "lambda_declarator"), [(4, Sem::None)]);
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        let names: Vec<&str> = f.units[1..].iter().map(|u| &*u.name).collect();
+        assert_eq!(names, ["StartPolling"], "a lambda is no unit");
+        let depths: Vec<(Sem, u8)> = f.units[1]
+            .ctrl
+            .iter()
+            .map(|c| (c.sem, c.cog_depth))
+            .collect();
+        assert_eq!(
+            depths,
+            [(Sem::If, 1), (Sem::Else, 2)],
+            "the branch in the lambda nests under it"
+        );
+    }
+
+    #[test]
+    fn a_case_range_is_one_arm() {
+        // The text of serenity Userland/Libraries/LibGL/Texture.cpp:395-404,
+        // with the GNU range `case GL_TEXTURE0 ... GL_TEXTURE31:`.
+        let src = "void GLContext::gl_tex_env(GLenum param_enum, GLenum pname)\n\
+                   {\n\
+                   \x20           switch (param_enum) {\n\
+                   \x20           case GL_CONSTANT:\n\
+                   \x20           case GL_PREVIOUS:\n\
+                   \x20           case GL_PRIMARY_COLOR:\n\
+                   \x20           case GL_TEXTURE:\n\
+                   \x20           case GL_TEXTURE0 ... GL_TEXTURE31:\n\
+                   \x20               m_active_texture_unit->set_alpha_source(pname - GL_SRC0_ALPHA, param_enum);\n\
+                   \x20               break;\n\
+                   \x20           default:\n\
+                   \x20               RETURN_WITH_ERROR_IF(true, GL_INVALID_ENUM);\n\
+                   \x20           }\n\
+                   }\n";
+        let f = facts(src);
+        assert!(!f.low_confidence(), "the range parses");
+        let arms = f.units[1]
+            .ctrl
+            .iter()
+            .filter(|c| c.sem == Sem::CaseArm)
+            .count();
+        assert_eq!(
+            arms, 6,
+            "five labels and `default`, the range among them once"
+        );
+        assert_eq!(f.units[1].magic_numbers, 0);
+    }
+
+    #[test]
+    fn an_operator_spelled_like_a_call_is_no_call() {
+        // The text of nlohmann-json single_include/nlohmann/json.hpp:
+        // 6734-6743, fmt include/fmt/std.h:660-666, bde
+        // bsla_nullterminated.t.cpp:150-156 and bslmf_ispolymorphic.h:
+        // 157-159. `noexcept`, `typeid`, `va_arg` and `__is_polymorphic`
+        // are operators, and the fork gives each a kind of its own. The
+        // stock grammar read `noexcept(...)` and `va_arg(...)` as calls.
+        let src = "struct to_json_fn\n\
+                   {\n\
+                   \x20   template<typename BasicJsonType, typename T>\n\
+                   \x20   auto operator()(BasicJsonType& j, T&& val) const noexcept(noexcept(to_json(j, std::forward<T>(val))))\n\
+                   \x20   -> decltype(to_json(j, std::forward<T>(val)), void())\n\
+                   \x20   {\n\
+                   \x20       return to_json(j, std::forward<T>(val));\n\
+                   \x20   }\n\
+                   };\n\
+                   template <typename OutputIt>\n\
+                   auto write(OutputIt out, const std::exception& ex) const -> OutputIt {\n\
+                   \x20   out = detail::write_demangled_name(out, typeid(ex));\n\
+                   \x20   return out;\n\
+                   }\n\
+                   void join(char *outputBuffer, ...)\n\
+                   {\n\
+                   \x20       va_list ap;\n\
+                   \x20       va_start(ap, outputBuffer);\n\
+                   \x20       const char *next;\n\
+                   \x20       for (bool first = 1; (next = va_arg(ap, const char *)); first = 0) {\n\
+                   \x20           ::strcat(outputBuffer, next);\n\
+                   \x20       }\n\
+                   }\n\
+                   template <class t_TYPE>\n\
+                   struct IsPolymorphic_Imp {\n\
+                   \x20   enum { Value = __is_polymorphic(t_TYPE) };\n\
+                   };\n";
+        for kind in [
+            "noexcept_expression",
+            "typeid_expression",
+            "va_arg_expression",
+            "type_trait_expression",
+        ] {
+            let sems = sems_of(src, kind);
+            assert_eq!(sems.len(), 1, "{kind}");
+            assert_eq!(sems[0].1, Sem::None, "{kind} is no call");
+        }
+        let calls: Vec<usize> = sems_of(src, "call_expression")
+            .into_iter()
+            .filter(|(_, sem)| *sem == Sem::Call)
+            .map(|(line, _)| line)
+            .collect();
+        assert_eq!(
+            calls,
+            [4, 4, 5, 5, 5, 7, 7, 12, 18, 21],
+            "the calls inside an operator still count"
+        );
+        assert!(!facts(src).low_confidence());
+    }
+
+    #[test]
     fn a_qt_loop_is_a_loop() {
         // The text of qt-creator src/libs/utils/commandline.cpp:131-141
         // and of the qtbase containers snippet, which spell the loops of
