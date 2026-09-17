@@ -15,10 +15,12 @@
 //! and the drill takes that node's `name` child, so an out-of-line
 //! definition is named `get` and the class stays in the declarator.
 //!
-//! Tests arrive as macros. `TEST(Pool, TakesASlot) { ... }` is the only
-//! declaration form the grammar can read. Catch2's `TEST_CASE("a pool
-//! takes a slot")` puts a STRING where a parameter belongs and parses
-//! as an error, so Catch2 files declare no tests here.
+//! Tests arrive as macros. The grammar reads `TEST(Pool, TakesASlot) {
+//! ... }` as a `macro_invocation` with a body, which is a function
+//! definition after expansion, and the unit is named `Pool.TakesASlot`.
+//! Catch2's `TEST_CASE("a pool takes a slot") { ... }` has the same
+//! shape, and its unit keeps the name of the macro: nothing here reads
+//! the string as the name of a test.
 //!
 //! CUDA rides this pack the way TSX rides TypeScript: a second grammar,
 //! the same tables, one extra entry. `__global__` and `__device__` are
@@ -119,6 +121,16 @@ const CUDA_ONLY: &[(&str, Sem)] = &[
     ("launch_bounds", Sem::None),
 ];
 
+/// The kinds that only the C++ grammar of the GrigoryEvko fork spells.
+/// The CUDA dialect reads with the stock CUDA grammar, which has none of
+/// them, so they sit in a table of their own.
+///
+/// `macro_invocation` is a macro that the grammar did not read as a call
+/// expression: a line with no `;`, a name with a block after it, an item
+/// at file scope. Most of them stand where a statement stands, so the
+/// table says `Call`, and `refine` reads the position. See `macro_sem`.
+const FORK_ONLY: &[(&str, Sem)] = &[("macro_invocation", Sem::Call)];
+
 pub fn pack(dialect: Dialect) -> Pack {
     let (lang, ts): (Lang, tree_sitter::Language) = match dialect {
         Dialect::Cpp => (Lang::Cpp, tree_sitter_cpp::LANGUAGE.into()),
@@ -126,7 +138,7 @@ pub fn pack(dialect: Dialect) -> Pack {
     };
     let kinds: &[&[(&str, Sem)]] = match lang {
         Lang::Cuda => &[KINDS, CUDA_ONLY],
-        _ => &[KINDS],
+        _ => &[KINDS, FORK_ONLY],
     };
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
@@ -279,6 +291,10 @@ fn is_destructor(def: Node) -> bool {
 
 /// `&&`/`||` from the shared binary kind; `else if` flattens as in C.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
+    let sem = match sem == Sem::Call && node.kind() == "macro_invocation" {
+        true => macro_sem(node),
+        false => sem,
+    };
     match sem {
         Sem::None if super::c::spliced_include(node, src) => Sem::Import,
         Sem::If if node.parent().is_some_and(|p| p.kind() == "else_clause") => Sem::ElseIf,
@@ -309,17 +325,70 @@ fn is_a_named_cast(call: Node, src: &[u8]) -> bool {
     )
 }
 
+/// Where a macro invocation stands, which is what decides what it
+/// expands to when no macro table is at hand.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MacroScope {
+    /// A translation unit, a namespace body or a class body. Only
+    /// declarations stand here, and nothing runs.
+    Declaration,
+    /// A block, a case body, a label or a substatement.
+    Statement,
+    /// An item of an enumerator list, an initializer list or a template
+    /// parameter list: a part of that list after expansion.
+    List,
+}
+
+/// What a `macro_invocation` is after expansion.
+///
+/// A macro with a body at declaration scope is a function definition:
+/// gtest's `TEST(Suite, Case) { ... }` expands to the definition of
+/// `Suite_Case_Test::TestBody`, and GCC and Clang accept no statement
+/// there. Every other macro invocation is not a unit.
+fn macro_sem(node: Node) -> Sem {
+    let has_body = node.child_by_field_name("body").is_some();
+    match macro_scope(node) {
+        MacroScope::Declaration if has_body => Sem::FnDef,
+        _ => Sem::None,
+    }
+}
+
+/// The scope of a macro invocation, read from its nearest ancestor that
+/// is neither a conditional group nor an ERROR node. A group holds the
+/// items of the scope around it, and an ERROR node holds what the parser
+/// could not place. Cost: O(depth) calls to `Node::parent`, and each one
+/// walks down from the root.
+fn macro_scope(node: Node) -> MacroScope {
+    let mut up = node.parent();
+    while let Some(p) = up {
+        match p.kind() {
+            _ if p.is_error() => up = p.parent(),
+            "preproc_if" | "preproc_ifdef" | "preproc_elif" | "preproc_elifdef"
+            | "preproc_else" => up = p.parent(),
+            "translation_unit"
+            | "declaration_list"
+            | "field_declaration_list"
+            | "export_declaration" => return MacroScope::Declaration,
+            "enumerator_list" | "initializer_list" | "template_parameter_list" => {
+                return MacroScope::List;
+            }
+            _ => return MacroScope::Statement,
+        }
+    }
+    MacroScope::Declaration
+}
+
 /// The declarator chain, as in C, ending at an identifier or at a
 /// `qualified_identifier`, which is how an out-of-line definition
 /// carries its class. `int Store::get(...)` is named through that
 /// node's `name` child, so the unit is `get` and the class stays in
 /// the declarator.
 fn name_node(node: Node) -> Option<Node> {
-    if node.kind() != "function_definition" {
-        return None;
-    }
     if let Some(case) = macro_case_name(node) {
         return Some(case);
+    }
+    if node.kind() != "function_definition" {
+        return None;
     }
     let mut d = node.child_by_field_name("declarator")?;
     while let Some(inner) = d.child_by_field_name("declarator") {
@@ -336,19 +405,56 @@ fn name_node(node: Node) -> Option<Node> {
     .then_some(d)
 }
 
-/// A macro invocation followed by a block — `TEST(Pool, TakesASlot)
-/// { ... }` — which the grammar can only read as a function called
-/// TEST. A definition with NO return type whose "parameters" are bare
-/// type names carrying no declarator: they are not parameters at all.
-/// Returns (macro, last argument), which is the name a human reads.
-/// Without this every gtest unit reports under the macro's own four
-/// letters, and every test-quality metric judges `TEST` instead of the
-/// case.
+/// A macro followed by a block whose arguments are two or more bare
+/// names: `TEST(Pool, TakesASlot) { ... }`. Returns (macro, first
+/// argument, last argument). The last argument is the name a human
+/// reads. Without this every gtest unit reports under the macro's own
+/// four letters, and every test-quality metric judges `TEST` instead of
+/// the case.
 ///
-/// A constructor also has no return type, but its parameters are
-/// named; the only collision is a constructor whose every parameter is
-/// unnamed, which could not use them.
-fn test_macro(node: Node) -> Option<(Node, Node)> {
+/// The grammar spells the block in two shapes, and both are read:
+///
+/// - A `macro_invocation` with a `body`. The fork reads an uppercase
+///   name, its argument tokens and a block that way.
+/// - A `function_definition` with no return type whose "parameters" are
+///   bare type names with no declarator, which are not parameters at
+///   all. The fork keeps this shape for a lowercase macro, and for a
+///   block that is a function try block. A constructor also has no
+///   return type, but its parameters are named. The only collision is a
+///   constructor whose every parameter is unnamed, which could not use
+///   them.
+fn test_macro(node: Node) -> Option<(Node, Node, Node)> {
+    let (macro_name, names) = match node.kind() {
+        "macro_invocation" => invoked_names(node)?,
+        "function_definition" => declared_names(node)?,
+        _ => return None,
+    };
+    match names[..] {
+        [first, .., last] => Some((macro_name, first, last)),
+        _ => None,
+    }
+}
+
+/// The macro and the argument names of a `macro_invocation` with a body,
+/// when every argument is one bare name. `TEST(a::B, C)` gives three
+/// identifiers and a `::` token, and names no test.
+fn invoked_names(node: Node) -> Option<(Node, Vec<Node>)> {
+    node.child_by_field_name("body")?;
+    let macro_name = node.child_by_field_name("name")?;
+    let args = node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let tokens: Vec<Node> = args.children(&mut cursor).collect();
+    let bare = tokens.iter().all(|t| match t.is_named() {
+        true => t.kind() == "identifier",
+        false => matches!(t.kind(), "(" | ")" | ","),
+    });
+    let names: Vec<Node> = tokens.into_iter().filter(|t| t.is_named()).collect();
+    bare.then_some((macro_name, names))
+}
+
+/// The macro and the "parameter" names of a `function_definition` that a
+/// macro spells, when every parameter is a bare type name.
+fn declared_names(node: Node) -> Option<(Node, Vec<Node>)> {
     if node.child_by_field_name("type").is_some() {
         return None;
     }
@@ -366,14 +472,11 @@ fn test_macro(node: Node) -> Option<(Node, Node)> {
         .filter_map(|a| a.child_by_field_name("type"))
         .filter(|t| t.kind() == "type_identifier")
         .collect();
-    match names.len() == args.len() && names.len() >= 2 {
-        true => Some((macro_name, *names.last()?)),
-        false => None,
-    }
+    (names.len() == args.len()).then_some((macro_name, names))
 }
 
 fn macro_case_name(node: Node) -> Option<Node> {
-    test_macro(node).map(|(_, case)| case)
+    test_macro(node).map(|(_, _, case)| case)
 }
 
 /// `TEST(args_test, basic)` names one test in two parts, and gtest
@@ -389,20 +492,12 @@ fn composed_name(node: Node, src: &[u8]) -> Option<String> {
     if !declares_test(node, src) {
         return None;
     }
-    let (_, case) = test_macro(node)?;
-    let suite = suite_argument(node)?;
+    let (_, suite, case) = test_macro(node)?;
     Some(format!(
         "{}.{}",
         suite.utf8_text(src).ok()?,
         case.utf8_text(src).ok()?
     ))
-}
-
-fn suite_argument(node: Node) -> Option<Node> {
-    let params = node
-        .child_by_field_name("declarator")?
-        .child_by_field_name("parameters")?;
-    params.named_child(0)?.child_by_field_name("type")
 }
 
 /// `#include <x>` keeps its brackets (definitionally external), and an
@@ -556,13 +651,13 @@ fn panicky(call: Node, src: &[u8]) -> bool {
     matches!(callee_name(call, src), Some("abort" | "terminate"))
 }
 
-/// The gtest family, the one that parses: every one of these takes two
-/// identifiers and a block. Catch2's string-argument macros are absent
-/// because the grammar rejects them, and google/benchmark's
+/// The gtest family: every one of these takes two identifiers and a
+/// block. Catch2's string-argument macros are absent because no name
+/// here is read from a string, and google/benchmark's
 /// `BENCHMARK(BM_Foo);` is a statement naming a function defined
 /// elsewhere, not a declaration of anything.
 fn declares_test(node: Node, src: &[u8]) -> bool {
-    let Some(name) = test_macro(node).and_then(|(m, _)| m.utf8_text(src).ok()) else {
+    let Some(name) = test_macro(node).and_then(|(m, _, _)| m.utf8_text(src).ok()) else {
         return false;
     };
     matches!(
@@ -599,6 +694,31 @@ mod tests {
     fn cuda(src: &str) -> crate::facts::FileFacts {
         let pack = Lang::Cuda.pack();
         extract(pack, &mut pack.make_parser(), Path::new("k.cu"), src)
+    }
+
+    /// Each node of `kind` in the C++ tree of `src`, as (1-based line,
+    /// the pack's verdict). The kind pins the shape of the fork's tree,
+    /// so a grammar that stops spelling it fails here and not in a count.
+    fn sems_of(src: &str, kind: &str) -> Vec<(usize, Sem)> {
+        let pack = Lang::Cpp.pack();
+        let tree = pack
+            .make_parser()
+            .parse(src, None)
+            .expect("the parse finishes");
+        let mut out = Vec::new();
+        let mut stack = vec![tree.root_node()];
+        while let Some(node) = stack.pop() {
+            if node.kind() == kind {
+                out.push((
+                    node.start_position().row + 1,
+                    pack.sem_of(node, src.as_bytes()),
+                ));
+            }
+            let mut cursor = node.walk();
+            stack.extend(node.children(&mut cursor));
+        }
+        out.sort_by_key(|(line, _)| *line);
+        out
     }
 
     #[test]
@@ -700,6 +820,66 @@ mod tests {
         let ctor = facts("struct S {\n  S(int a, int b) { x = a + b; }\n};\n");
         assert_eq!(&*ctor.units[1].name, "S");
         assert!(!ctor.units[1].named_test);
+    }
+
+    #[test]
+    fn a_macro_with_a_body_at_declaration_scope_is_a_definition() {
+        // The text of firefox xpcom/tests/gtest: TestThreadUtils.cpp
+        // writes the brace on the next line, and
+        // TestAvailableMemoryWatcherWin.cpp writes TEST_F. The fork reads
+        // each one as a `macro_invocation` with a body. After expansion
+        // it defines `Suite_Case_Test::TestBody`, which is one unit.
+        let src = "namespace mozilla {\n\
+                   TEST(ThreadUtils, NewRunnableFunction)\n\
+                   {\n\
+                   \x20 EXPECT_TRUE(ran);\n\
+                   }\n\
+                   }  // namespace mozilla\n\
+                   #ifdef XP_WIN\n\
+                   TEST_F(AvailableMemoryWatcherFixture, AlwaysActive) {\n\
+                   \x20 StartUserInteraction();\n\
+                   }\n\
+                   #endif\n\
+                   void Helper() {\n\
+                   \x20 FOREACH(item, items) { use(item); }\n\
+                   }\n";
+        let sems = sems_of(src, "macro_invocation");
+        assert_eq!(
+            sems,
+            [(2, Sem::FnDef), (8, Sem::FnDef), (13, Sem::None)],
+            "a block at declaration scope defines a function, and a block in a function does not"
+        );
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        let units: Vec<(&str, &str, bool, u16)> = f.units[1..]
+            .iter()
+            .map(|u| (&*u.name, &*u.qualname, u.named_test, u.params.len() as u16))
+            .collect();
+        assert_eq!(
+            units,
+            [
+                (
+                    "ThreadUtils.NewRunnableFunction",
+                    "ThreadUtils.NewRunnableFunction",
+                    true,
+                    0
+                ),
+                (
+                    "AvailableMemoryWatcherFixture.AlwaysActive",
+                    "AvailableMemoryWatcherFixture.AlwaysActive",
+                    true,
+                    0
+                ),
+                ("Helper", "Helper", false, 0),
+            ],
+            "the suite and the case name the test, and a test body takes no parameters"
+        );
+        assert_eq!(f.units[1].assert_calls, 1, "the body belongs to the test");
+        // A name that is not one bare identifier names no test, and the
+        // unit keeps the name of its macro.
+        let qualified = facts("TEST(mozilla::Suite, Case) {\n  f();\n}\n");
+        assert_eq!(&*qualified.units[1].name, "TEST");
+        assert!(!qualified.units[1].named_test);
     }
 
     #[test]
