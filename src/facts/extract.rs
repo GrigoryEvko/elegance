@@ -175,6 +175,11 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
     let mut facts = blank_facts(pack, path, blank.len as u32, blank.count() as u32);
     let Some(tree) = parse_bounded(parser, source, parse_limit(source.len())) else {
         facts.parse_errors = 1;
+        // The dump holds a row for this file too. A file that the parser
+        // gives up on in one scan and reads in another is the difference
+        // most worth seeing, and a file missing from one dump would read
+        // as a file with no unit.
+        crate::factsdump::file(&facts, 0);
         return facts;
     };
     let mut ex = Extractor {
@@ -213,7 +218,9 @@ pub fn extract(pack: &Pack, parser: &mut Parser, path: &Path, source: &str) -> F
         },
     );
     let mass = root.map_or(0, |sub| sub.mass);
+    let hash = if crate::factsdump::armed() { crate::factsdump::tree_hash(&tree) } else { 0 };
     finish(ex, &blank, mass);
+    crate::factsdump::file(&facts, hash);
     facts
 }
 
@@ -1049,6 +1056,18 @@ impl<'a> Extractor<'a> {
 
     fn record_call(&mut self, node: Node<'a>, ctx: Ctx) {
         let unit_idx = ctx.unit;
+        // A call reaches no field of the facts, so an instrument that
+        // compares two scans has to read it here. `-` stands for a
+        // callee whose name the pack cannot read, which is a call the
+        // scan counted and could not name.
+        if crate::factsdump::armed() {
+            crate::factsdump::call(
+                &self.facts.path,
+                &self.facts.units[unit_idx].qualname,
+                node.start_position().row as u32 + 1,
+                self.callee_simple_name(node).unwrap_or("-"),
+            );
+        }
         if let Some(name) = self.callee_simple_name(node).map(Box::<str>::from) {
             // A statement-position call, unawaited, result thrown away.
             // If the name resolves to a same-file async unit once the

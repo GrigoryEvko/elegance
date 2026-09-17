@@ -10,6 +10,7 @@ mod deps;
 mod diff;
 mod docparam;
 mod facts;
+mod factsdump;
 mod git;
 mod graph;
 mod helm;
@@ -110,6 +111,9 @@ struct Args {
     /// The C++ seed of this project, when it is not at the usual place.
     /// `cargo xtask seed collect` of the tree-sitter-cpp fork writes it.
     cpp_seed: Option<PathBuf>,
+    /// Pack development aid: every unit, call and control event of the
+    /// scan as rows, so that two scans can be compared site by site.
+    facts_dump: Option<PathBuf>,
 }
 
 /// Where a C++ project keeps its seed, below the first root.
@@ -143,7 +147,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     // A parser of one file cannot know them, because it parses no
     // header.
     lang::cppseed::install(cpp_seed(&args)?);
+    if let Some(path) = &args.facts_dump {
+        factsdump::open(path)?;
+    }
     if single_file_mode(&args)? {
+        factsdump::close();
         return Ok(());
     }
 
@@ -185,6 +193,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let wants = wants_for(shape);
     let mut agg = scan(&files, layers, complete, wants);
+    // Every file is read by now, and a mode below can leave through
+    // `process::exit`. A buffered writer that nothing flushes loses its
+    // last rows, and a dump short by its last file reads as a scan that
+    // found less.
+    factsdump::close();
     // Which pack hooks this corpus actually reached. A diagnostic, not a
     // report: the counters only exist under debug assertions, and a
     // release binary built with `-C debug-assertions=on` measures a whole
@@ -622,6 +635,7 @@ fn defaults() -> Args {
         helm: false,
         render: false,
         cpp_seed: None,
+        facts_dump: None,
     }
 }
 
@@ -704,6 +718,7 @@ usage: elegance [paths...]                 report; defaults to .
   --errors FILE                            parse errors and pack drift (pack developers)
   --cpp-seed FILE                          the names this C++ project declares; the default is
                                            .elegance/cpp.seed below the first path
+  --facts-dump FILE                        every unit, call and control event as rows (pack developers)
 
   elegance calibrate <gold-dirs...>        re-derive budgets, write calibration.toml
   elegance install-hook|uninstall-hook     pre-commit hook running --diff HEAD
@@ -722,6 +737,7 @@ fn takes_value(flag: &str) -> bool {
             | "--explain"
             | "--history"
             | "--cpp-seed"
+            | "--facts-dump"
     )
 }
 
@@ -733,6 +749,7 @@ fn set_valued(args: &mut Args, flag: &str, value: &str) -> Result<(), Box<dyn Er
         "--api" => args.api = Some(value.to_string()),
         "--errors" => args.errors = Some(PathBuf::from(value)),
         "--cpp-seed" => args.cpp_seed = Some(PathBuf::from(value)),
+        "--facts-dump" => args.facts_dump = Some(PathBuf::from(value)),
         "--fail-on" => args.fail_on = value.parse()?,
         "--top" => args.top = value.parse()?,
         // `file:line` where the suffix is digits, else a bare path: a
