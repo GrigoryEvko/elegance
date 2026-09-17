@@ -158,7 +158,9 @@ pub fn pack(dialect: Dialect) -> Pack {
         scope_sep: "::",
         return_type_field: "type",
         bool_op_field: "operator",
-        call_target_fields: &["function"],
+        // A call expression fields its target as `function`, and a
+        // macro invocation fields its name as `name`.
+        call_target_fields: &["function", "name"],
         types_declared: true,
         refine,
         name_node,
@@ -341,14 +343,27 @@ enum MacroScope {
 
 /// What a `macro_invocation` is after expansion.
 ///
-/// A macro with a body at declaration scope is a function definition:
-/// gtest's `TEST(Suite, Case) { ... }` expands to the definition of
-/// `Suite_Case_Test::TestBody`, and GCC and Clang accept no statement
-/// there. Every other macro invocation is not a unit.
+/// - A macro with a body at declaration scope is a function definition:
+///   gtest's `TEST(Suite, Case) { ... }` expands to the definition of
+///   `Suite_Case_Test::TestBody`, and GCC and Clang accept no statement
+///   there.
+/// - A macro with arguments at statement scope is a call, as the C pack
+///   reads every function-like macro. The grammar itself reads
+///   `ASSERT(x);` as a call expression, and the same line with no `;`,
+///   `ASSERT(x)`, is this node. It counts wrongly where the macro
+///   expands to no call: `Q_UNUSED(x)` is a cast to `void`. With a body,
+///   as in `FOREACH(item, items) { ... }`, the macro opens a loop, a
+///   branch or a scope that nothing here can name, and the body counts
+///   as plain statements of the unit.
+/// - A name with no arguments is an object-like macro, and nothing here
+///   can tell a call inside its expansion: bde's `T_` prints a tab.
+/// - At declaration scope a macro with no body expands to declarations,
+///   and nothing runs there. In a list it expands to items of the list.
 fn macro_sem(node: Node) -> Sem {
-    let has_body = node.child_by_field_name("body").is_some();
+    let has = |field: &str| node.child_by_field_name(field).is_some();
     match macro_scope(node) {
-        MacroScope::Declaration if has_body => Sem::FnDef,
+        MacroScope::Declaration if has("body") => Sem::FnDef,
+        MacroScope::Statement if has("arguments") => Sem::Call,
         _ => Sem::None,
     }
 }
@@ -573,9 +588,12 @@ fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {
     callee_name(call, src) == Some(unit_name)
 }
 
-/// The called name, through the member and template spellings.
+/// The called name, through the member and template spellings. A macro
+/// invocation names its macro in `name`.
 fn callee_name<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
-    let f = call.child_by_field_name("function")?;
+    let f = call
+        .child_by_field_name("function")
+        .or_else(|| call.child_by_field_name("name"))?;
     let named = match f.kind() {
         "field_expression" => f.child_by_field_name("field")?,
         "qualified_identifier" => f.child_by_field_name("name")?,
@@ -714,10 +732,11 @@ mod tests {
                     pack.sem_of(node, src.as_bytes()),
                 ));
             }
+            // Reversed, so that the stack gives the nodes in source order.
             let mut cursor = node.walk();
-            stack.extend(node.children(&mut cursor));
+            let children: Vec<_> = node.children(&mut cursor).collect();
+            stack.extend(children.into_iter().rev());
         }
-        out.sort_by_key(|(line, _)| *line);
         out
     }
 
@@ -846,7 +865,7 @@ mod tests {
         let sems = sems_of(src, "macro_invocation");
         assert_eq!(
             sems,
-            [(2, Sem::FnDef), (8, Sem::FnDef), (13, Sem::None)],
+            [(2, Sem::FnDef), (8, Sem::FnDef), (13, Sem::Call)],
             "a block at declaration scope defines a function, and a block in a function does not"
         );
         let f = facts(src);
@@ -880,6 +899,47 @@ mod tests {
         let qualified = facts("TEST(mozilla::Suite, Case) {\n  f();\n}\n");
         assert_eq!(&*qualified.units[1].name, "TEST");
         assert!(!qualified.units[1].named_test);
+    }
+
+    #[test]
+    fn a_macro_with_arguments_in_a_block_is_a_call() {
+        // The text of bde ball_userfieldvalue.t.cpp and its header. The
+        // grammar reads `ASSERT(x);` as a call expression, and the same
+        // line with no `;` as a macro invocation, which is the same call.
+        let src = "BSLMF_ASSERT(sizeof SUFFICIENTLY_LONG_STRING > sizeof(bsl::string));\n\
+                   class UserFieldValue {\n\
+                   \x20 public:\n\
+                   \x20   BSLMF_NESTED_TRAIT_DECLARATION(UserFieldValue,\n\
+                   \x20                                  bslma::UsesBslmaAllocator);\n\
+                   };\n\
+                   int main(int argc, char *argv[])\n\
+                   {\n\
+                   \x20   ball::UserFieldValue valueB(5);\n\
+                   \x20   ASSERT(ball::UserFieldType::e_INT64 == valueB.type());\n\
+                   \x20   ASSERT(5                            == valueB.theInt64())\n\
+                   //\n\
+                   \x20   ASSERT(valueA != valueB);\n\
+                   \x20   if (veryVerbose) { T_ T_ P_(CONFIG) P(X) }\n\
+                   \x20   return testStatus;\n\
+                   }\n";
+        assert_eq!(
+            sems_of(src, "macro_invocation"),
+            [
+                (1, Sem::None),
+                (4, Sem::None),
+                (11, Sem::Call),
+                (14, Sem::None),
+                (14, Sem::None),
+                (14, Sem::Call),
+                (14, Sem::Call),
+            ],
+            "a declaration scope runs nothing, and a name with no arguments is no call site"
+        );
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        let main = f.units.iter().find(|u| &*u.name == "main").expect("main");
+        assert_eq!(main.assert_calls, 3, "an assertion with no `;` asserts too");
+        assert_eq!(f.units[0].assert_calls, 0, "a static assertion is no call");
     }
 
     #[test]
