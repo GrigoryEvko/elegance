@@ -570,9 +570,20 @@ fn name_node(node: Node) -> Option<Node> {
     while let Some(inner) = inner_declarator(d) {
         d = inner;
     }
-    // `Store::get` and `~Store` both name the unit.
-    if matches!(d.kind(), "qualified_identifier" | "destructor_name") {
+    // `Store::get` names the unit `get`, and the class stays in the
+    // declarator. `Store::~Store` reaches its `destructor_name` through
+    // the same field, and that node reads `~Store`.
+    if d.kind() == "qualified_identifier" {
         return d.child_by_field_name("name").or(Some(d));
+    }
+    // A DESTRUCTOR KEEPS ITS `~`. The grammar gained the field `name` on
+    // `destructor_name`, and that field holds the CLASS. A unit named for
+    // the class would collide with the constructor of the same class, and
+    // the ratchet identifies a violation by (metric, path, unit), so the
+    // two would become one row. The same line served both kinds only
+    // while the field was missing and the fallback answered for it.
+    if d.kind() == "destructor_name" {
+        return Some(d);
     }
     matches!(
         d.kind(),
