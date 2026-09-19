@@ -23,7 +23,7 @@ serde_json = "1.0.151"
 toml = "1.1.4"
 # The runtime and the C++ grammar come from the forks of GrigoryEvko, each
 # pinned to a commit. The runtime is tree-sitter 0.27.0 with the patches of
-# the C++ fork (tag v0.27.0-cpp-fork.3). It reads the grammars of ABI 14 and
+# the C++ fork (tag v0.27.0-cpp-fork.4). It reads the grammars of ABI 14 and
 # ABI 15 below and the ABI of the C++ fork, so one runtime serves every
 # grammar. The `[patch.crates-io]` table at the end holds the same commit.
 #
@@ -31,7 +31,14 @@ toml = "1.1.4"
 # tag v0.27.0-cpp-fork.1 read a maximum of ABI 1017. A runtime that does
 # not read the ABI of the grammar panics at `set_language` in every rayon
 # worker, so the pair is one decision and not two.
-tree-sitter = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "80ad99f30e37aec91401d0379777941b9ebe0a14" }
+#
+# THE TAG MUST HOLD THE THREE ABI GATES, or the 19 upstream grammars below
+# run with the limits of the C++ fork. The tag v0.27.0-cpp-fork.3 held two
+# of the three and left the summary depth at 256 for every grammar, and
+# TypeScript then cost 11,488 Ginstr over 2,392 files against 1,830 for
+# the published runtime, 6.28 times. The tag v0.27.0-cpp-fork.4 holds the
+# third gate, and the same run costs 1,806 Ginstr, 0.987 times.
+tree-sitter = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "8a552c948ab9dfcd0fd8c24446da3f218fac8be3" }
 tree-sitter-bash = "0.25.1"
 tree-sitter-c = "0.24.2"
 # THE SEED FORMAT IS PART OF THIS PIN. `src/lang/cppseed.rs` reads a seed
@@ -95,5 +102,5 @@ strip = "debuginfo"
 # So tree-sitter-language comes from the same commit. At that commit it is
 # byte for byte the crates.io release 0.1.8, which that commit published.
 [patch.crates-io]
-tree-sitter = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "80ad99f30e37aec91401d0379777941b9ebe0a14" }
-tree-sitter-language = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "80ad99f30e37aec91401d0379777941b9ebe0a14" }
+tree-sitter = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "8a552c948ab9dfcd0fd8c24446da3f218fac8be3" }
+tree-sitter-language = { git = "https://github.com/GrigoryEvko/tree-sitter", rev = "8a552c948ab9dfcd0fd8c24446da3f218fac8be3" }

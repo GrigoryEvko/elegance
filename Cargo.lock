@@ -454,7 +454,7 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 [[package]]
 name = "tree-sitter"
 version = "0.27.0"
-source = "git+https://github.com/GrigoryEvko/tree-sitter?rev=80ad99f30e37aec91401d0379777941b9ebe0a14#80ad99f30e37aec91401d0379777941b9ebe0a14"
+source = "git+https://github.com/GrigoryEvko/tree-sitter?rev=8a552c948ab9dfcd0fd8c24446da3f218fac8be3#8a552c948ab9dfcd0fd8c24446da3f218fac8be3"
 dependencies = [
  "cc",
  "regex",
@@ -555,7 +555,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-language"
 version = "0.1.8"
-source = "git+https://github.com/GrigoryEvko/tree-sitter?rev=80ad99f30e37aec91401d0379777941b9ebe0a14#80ad99f30e37aec91401d0379777941b9ebe0a14"
+source = "git+https://github.com/GrigoryEvko/tree-sitter?rev=8a552c948ab9dfcd0fd8c24446da3f218fac8be3#8a552c948ab9dfcd0fd8c24446da3f218fac8be3"
 
 [[package]]
 name = "tree-sitter-lua"
