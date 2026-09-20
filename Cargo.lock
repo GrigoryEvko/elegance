@@ -496,7 +496,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-cpp"
 version = "0.23.4"
-source = "git+https://github.com/GrigoryEvko/tree-sitter-cpp?rev=5f77109da0bf0e517329326970fa53eeb46f16cb#5f77109da0bf0e517329326970fa53eeb46f16cb"
+source = "git+https://github.com/GrigoryEvko/tree-sitter-cpp?rev=c19c6bdfeb1398b70ad035d2d8ef94687f1286ce#c19c6bdfeb1398b70ad035d2d8ef94687f1286ce"
 dependencies = [
  "cc",
  "tree-sitter-language",

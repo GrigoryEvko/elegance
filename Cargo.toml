@@ -47,7 +47,7 @@ tree-sitter-c = "0.24.2"
 # file, and the scanner of this commit reads version 3 of that format. A
 # seed that `cargo xtask seed collect` of another commit wrote can hold
 # another version, and the reader then stops the run by name.
-tree-sitter-cpp = { git = "https://github.com/GrigoryEvko/tree-sitter-cpp", rev = "5f77109da0bf0e517329326970fa53eeb46f16cb" }
+tree-sitter-cpp = { git = "https://github.com/GrigoryEvko/tree-sitter-cpp", rev = "c19c6bdfeb1398b70ad035d2d8ef94687f1286ce" }
 tree-sitter-cuda = "0.21.2"
 tree-sitter-go = "0.25.0"
 tree-sitter-javascript = "0.25.0"
