@@ -321,11 +321,32 @@ fn compare_modes(args: &Args, cfg: &config::Config) -> Result<(), Box<dyn Error>
     Ok(())
 }
 
+/// The text of the one source file that a flag names.
+///
+/// A bare `Os { code: 2, kind: NotFound }` names no path and no flag. The
+/// reader of it cannot know which of the two happened: a file that is not
+/// there, or a flag that reads where the reader wanted it to write.
+/// `--errors` and `--explain` each READ one source file. `--errors`
+/// stands beside `--facts-dump` in the usage, whose argument IS a path to
+/// write, and the message below is what tells the two apart.
+///
+/// The message is one line, because `main` prints an error through
+/// `Debug` and a line break arrives at the reader as the two characters
+/// `\n`.
+fn read_source(path: &std::path::Path, flag: &str) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| {
+        format!(
+            "cannot read {}: {e}. {flag} reads one source file. It writes no file",
+            path.display()
+        )
+    })
+}
+
 /// Modes that read ONE file and never scan a tree. Returns whether one
 /// ran, so main can stop.
 fn single_file_mode(args: &Args) -> Result<bool, Box<dyn Error>> {
     if let Some((path, line)) = &args.explain {
-        let source = std::fs::read_to_string(path)?;
+        let source = read_source(path, "--explain")?;
         let (lang, text) = measurable(path, &source).ok_or("no code in this file")?;
         let pack = lang.pack();
         let f = facts::extract(pack, &mut pack.make_parser(), path, &text);
@@ -715,7 +736,7 @@ usage: elegance [paths...]                 report; defaults to .
   --deps                                   look inside the dependencies you did not write
   --helm                                   values-overlay drift and credentials in YAML
   --render                                 render each environment, measure what ships
-  --errors FILE                            parse errors and pack drift (pack developers)
+  --errors FILE                            parse errors and pack drift, read from one source file
   --cpp-seed FILE                          the names this C++ project declares; the default is
                                            .elegance/cpp.seed below the first path
   --facts-dump FILE                        every unit, call and control event as rows (pack developers)
@@ -818,7 +839,7 @@ fn hook(root: &std::path::Path, install: bool, fail_on: u8) -> Result<(), Box<dy
 /// outright.
 fn debug_errors(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
     use std::io::Write;
-    let raw = std::fs::read_to_string(path)?;
+    let raw = read_source(path, "--errors")?;
     let (lang, text) = measurable(path, &raw).ok_or("unsupported file type")?;
     let source = text.into_owned();
     let lines: Vec<&str> = source.lines().collect();
