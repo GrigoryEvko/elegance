@@ -350,6 +350,14 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         // reader, and `reinterpret_cast` is the loudest one in the
         // language, so the four named casts are reclassified here.
         Sem::Call if is_a_named_cast(node, src) => Sem::Cast,
+        // A callee that the grammar names as a TYPE builds a value of
+        // that type. It calls no function of that name, so an edge to
+        // the name is an edge to a function that nothing calls.
+        Sem::Call => match type_callee_arguments(node) {
+            Some(1) => Sem::Cast,
+            Some(_) => Sem::None,
+            None => Sem::Call,
+        },
         _ => sem,
     }
 }
@@ -368,6 +376,65 @@ fn is_a_named_cast(call: Node, src: &[u8]) -> bool {
     matches!(
         callee_name(call, src),
         Some("static_cast" | "dynamic_cast" | "reinterpret_cast" | "const_cast")
+    )
+}
+
+/// The number of arguments of a call whose callee names a TYPE, or None
+/// when the callee names no type.
+///
+/// `T(x)` converts, and `Point(1, 2)` builds an object. The two call no
+/// function named `T` or `Point`. The grammar gives such a callee a KIND
+/// of its own: `type_identifier`, or `template_type` for `Vec<int>(n)`.
+/// The callee of `f(x)` is an `identifier`.
+///
+/// THE KIND IS THE ONLY DIFFERENCE, and the table of this pack gives
+/// `identifier` and `type_identifier` one `Sem::Ident`. So each of these
+/// counted as a call, and the graph held an edge to a function that
+/// nothing calls.
+///
+/// ONE ARGUMENT IS A CONVERSION. C++ makes `T(x)` equivalent to the cast
+/// `(T)x`, so it takes `Sem::Cast` with the four named casts. Each other
+/// count builds an object through a constructor, which is no cast and no
+/// call to the name.
+///
+/// THE PROJECT DECIDES THE KIND, AND NOT THE FILE. The scanner of the
+/// C++ fork names a callee `type_identifier` only where a source of the
+/// parse declares the name. A file that includes a header declares
+/// nothing, so a run with no seed reaches a small number of these sites.
+/// Refer to `cppseed`.
+///
+/// A `new_expression` and a `macro_invocation` reach this function as
+/// `Sem::Call` and carry no `function` field, so each one stays a call.
+/// `callee_name` shows the second one: it reads the `name` field where
+/// there is no `function` field. The test
+/// `a_macro_with_arguments_in_a_block_is_a_call` pins the reading.
+///
+/// THE ARGUMENT LIST COMES FROM THE KIND OF A CHILD AND NOT FROM THE
+/// FIELD. A `template_type` callee carries an `arguments` field of its
+/// own, the `template_argument_list` of `Vec<int>`, and
+/// `child_by_field_name("arguments")` on the call gives that list. It
+/// counts the TYPE arguments of the callee and not the arguments of the
+/// call. The test pins the count of each shape, so a grammar that
+/// renames `argument_list` fails there.
+///
+/// A call whose arguments are a `token_tree` stays a call. The tokens of
+/// such a list are no expressions, and no count of them is a count of
+/// arguments.
+fn type_callee_arguments(call: Node) -> Option<usize> {
+    let callee = call.child_by_field_name("function")?;
+    if !matches!(callee.kind(), "type_identifier" | "template_type") {
+        return None;
+    }
+    let mut children = call.walk();
+    let arguments = call
+        .named_children(&mut children)
+        .find(|child| child.kind() == "argument_list")?;
+    let mut cursor = arguments.walk();
+    Some(
+        arguments
+            .named_children(&mut cursor)
+            .filter(|argument| argument.kind() != "comment")
+            .count(),
     )
 }
 
@@ -910,6 +977,48 @@ mod tests {
             stack.extend(children.into_iter().rev());
         }
         out
+    }
+
+    /// A CALLEE THAT THE GRAMMAR NAMES AS A TYPE IS NO CALL.
+    ///
+    /// `Alpha(x)` converts, and `Point(1, 2)` builds an object. The two
+    /// call no function named `Alpha` or `Point`. A data flow graph that
+    /// records one holds an edge to a function that nothing calls. Line
+    /// 9 is the control: the same shape with a callee that no source
+    /// declares as a type stays a call. That is the reading a run with
+    /// no seed gets everywhere.
+    ///
+    /// `new Point(1, 2)` is a `new_expression` and it stays a call,
+    /// because `operator new` runs.
+    ///
+    /// `Vec<int>(1, 2)` pins the ARGUMENTS THAT THE COUNT READS. The
+    /// callee carries a `template_argument_list` of one item under the
+    /// same field name, and a count of that list makes this line a
+    /// conversion of one argument.
+    #[test]
+    fn a_callee_that_is_a_type_is_a_conversion_or_a_construction() {
+        let src = "class Alpha {};\n\
+                   class Point { public: Point(int, int); };\n\
+                   template <class T> class Vec { public: Vec(int, int); };\n\
+                   int one(int x) { return Alpha(x); }\n\
+                   Point two() { return Point(1, 2); }\n\
+                   Alpha three() { return Alpha(); }\n\
+                   Vec<int> four() { return Vec<int>(1, 2); }\n\
+                   Point* five() { return new Point(1, 2); }\n\
+                   int six(int x) { return undeclared(x); }\n\
+                   int seven(int x) { return Alpha(/* why */ x); }\n";
+        assert_eq!(
+            sems_of(src, "call_expression"),
+            [
+                (4, Sem::Cast),
+                (5, Sem::None),
+                (6, Sem::None),
+                (7, Sem::None),
+                (9, Sem::Call),
+                (10, Sem::Cast),
+            ]
+        );
+        assert_eq!(sems_of(src, "new_expression"), [(8, Sem::Call)]);
     }
 
     #[test]
