@@ -1578,140 +1578,53 @@ mod tests {
     }
 
     #[test]
-    fn the_readme_cannot_drift_from_the_calibration() {
-        // The README quotes gold numbers in prose, and stale prose
-        // about fresh data teaches readers to distrust both. Every
-        // quoted number must be the compiled calibration's number.
-        use crate::lang::Lang;
-        // Newline-folded: prose wraps wherever the formatter likes.
-        let readme = include_str!("../../README.md").replace('\n', " ");
-        let readme = readme.as_str();
+    fn the_readme_budget_table_agrees_with_the_calibration() {
+        // The README shows one row of gold p99 budgets for each language.
+        // Each row must agree with the compiled calibration. A cell holds
+        // `-` when the corpus gives no budget for that language.
+        let readme = include_str!("../../README.md");
         let cal = LangBudgets::calibrated();
-        let hi = |lang: Lang, m: usize| cal.for_lang(lang).0[m].1.expect("calibrated");
-        let trio = format!(
-            "cognitive p99 lands at py {:.0}, rs {:.0}, ts {:.0}",
-            hi(Lang::Python, COGNITIVE),
-            hi(Lang::Rust, COGNITIVE),
-            hi(Lang::TypeScript, COGNITIVE),
-        );
-        assert!(readme.contains(&trio), "README drifted: {trio:?} missing");
-        let ml = format!(
-            "cognitive p99 = {:.0} and length p99 = {:.0}",
-            hi(Lang::OCaml, COGNITIVE),
-            hi(Lang::OCaml, LENGTH),
-        );
-        assert!(readme.contains(&ml), "README drifted: {ml:?} missing");
-        let against = format!(
-            "Python's {:.0}/{:.0}, Rust's {:.0}/{:.0} and TypeScript's {:.0}/{:.0}",
-            hi(Lang::Python, COGNITIVE),
-            hi(Lang::Python, LENGTH),
-            hi(Lang::Rust, COGNITIVE),
-            hi(Lang::Rust, LENGTH),
-            hi(Lang::TypeScript, COGNITIVE),
-            hi(Lang::TypeScript, LENGTH),
-        );
-        assert!(
-            readme.contains(&against),
-            "README drifted: {against:?} missing"
-        );
-        let docs = format!(
-            "p99 = {:.0} prose words in Rust, {:.0} in TypeScript and {:.0} in Python",
-            hi(Lang::Rust, FN_DOC),
-            hi(Lang::TypeScript, FN_DOC),
-            hi(Lang::Python, FN_DOC),
-        );
-        assert!(readme.contains(&docs), "README drifted: {docs:?} missing");
-        let comments = format!(
-            "comment ceiling to {:.0}%",
-            hi(Lang::Rust, COMMENT_RATIO) * 100.0
-        );
-        assert!(
-            readme.contains(&comments),
-            "README drifted: {comments:?} missing"
-        );
-        let cpp = format!(
-            "cognitive p99 = {:.0} and length p99 = {:.0}, against C's {:.0} and {:.0}",
-            hi(Lang::Cpp, COGNITIVE),
-            hi(Lang::Cpp, LENGTH),
-            hi(Lang::C, COGNITIVE),
-            hi(Lang::C, LENGTH),
-        );
-        assert!(readme.contains(&cpp), "README drifted: {cpp:?} missing");
-        // The prose does not just quote those four numbers, it draws a
-        // conclusion from them, so the conclusion is pinned too.
-        assert!(
-            hi(Lang::Cpp, COGNITIVE) * 2.0 < hi(Lang::C, COGNITIVE),
-            "README claims C++ branches less than half as hard as C; it no longer does"
-        );
-        assert!(
-            hi(Lang::Cpp, LENGTH) * 3.0 < hi(Lang::C, LENGTH) * 2.0,
-            "README claims C++ units are under two thirds of C's length; they no longer are"
-        );
+        for lang in crate::lang::LANGS {
+            let cell = |m: usize| match (is_pinned(lang, m), cal.for_lang(lang).0[m].1) {
+                (true, Some(hi)) => format!("{hi:.0}"),
+                _ => "-".to_string(),
+            };
+            let row = format!(
+                "| `{}` | {} | {} | {} | {} | {} | {} |",
+                lang.name(),
+                cell(COGNITIVE),
+                cell(CYCLOMATIC),
+                cell(LENGTH),
+                cell(PARAMS),
+                cell(MAGIC_NUMBERS),
+                cell(FN_DOC),
+            );
+            assert!(readme.contains(&row), "README drifted: {row:?} is missing");
+        }
     }
 
     #[test]
-    fn the_readme_cuda_numbers_cannot_drift_either() {
-        // A two-point [cu] length move leaves the prose quoting 247
-        // against a calibration saying 249. Unpinned quoted numbers are
-        // the failure the drift tests exist for, so the CUDA paragraph
-        // gets its own.
+    fn the_readme_statements_agree_with_the_calibration() {
+        // The README makes two statements about the budget table. Each
+        // statement must be in the README, and the calibration must
+        // agree with it.
         use crate::lang::Lang;
         let readme = include_str!("../../README.md").replace('\n', " ");
         let cal = LangBudgets::calibrated();
         let hi = |lang: Lang, m: usize| cal.for_lang(lang).0[m].1.expect("calibrated");
-        let cu = format!(
-            "params p99 = {:.0} against C++'s {:.0}, magic numbers {:.0} against {:.0}, and length {:.0} against {:.0}",
-            hi(Lang::Cuda, PARAMS),
-            hi(Lang::Cpp, PARAMS),
-            hi(Lang::Cuda, MAGIC_NUMBERS),
-            hi(Lang::Cpp, MAGIC_NUMBERS),
-            hi(Lang::Cuda, LENGTH),
-            hi(Lang::Cpp, LENGTH),
-        );
-        assert!(readme.contains(&cu), "README drifted: {cu:?} missing");
-    }
-
-    #[test]
-    fn the_readme_perl_era_numbers_cannot_drift_either() {
-        // Four languages added at once, each with a quoted number the
-        // prose draws a conclusion from. Same rule as everywhere else:
-        // a number in the README is pinned to the calibration or it is
-        // a claim nobody is checking.
-        use crate::lang::Lang;
-        let readme = include_str!("../../README.md").replace('\n', " ");
-        let cal = LangBudgets::calibrated();
-        let hi = |lang: Lang, m: usize| cal.for_lang(lang).0[m].1.expect("calibrated");
-        let ruby = format!(
-            "tightest function length in the corpus at {:.0}",
-            hi(Lang::Ruby, LENGTH)
-        );
-        assert!(readme.contains(&ruby), "README drifted: {ruby:?} missing");
-        let against = format!(
-            "against OCaml's {:.0} and Python's {:.0}",
-            hi(Lang::OCaml, LENGTH),
-            hi(Lang::Python, LENGTH)
-        );
-        assert!(
-            readme.contains(&against),
-            "README drifted: {against:?} missing"
-        );
-        // The prose calls Ruby's the tightest; that is a claim about
-        // every other language, so it is checked against every other
-        // language rather than against the two it names.
-        let tightest = crate::lang::LANGS
+        assert!(readme.contains("Ruby has the smallest `length` budget of the 22 languages"));
+        let smallest = crate::lang::LANGS
             .iter()
             .filter(|l| **l != Lang::Ruby)
-            .all(|l| {
-                cal.for_lang(*l).0[LENGTH]
-                    .1
-                    .is_none_or(|v| v > hi(Lang::Ruby, LENGTH))
-            });
+            .all(|l| hi(*l, LENGTH) > hi(Lang::Ruby, LENGTH));
+        assert!(smallest, "Ruby no longer has the smallest `length` budget");
         assert!(
-            tightest,
-            "README calls Ruby's function length the tightest in the corpus; it no longer is"
+            readme.contains("The C++ budget for `cognitive` is less than half of the C budget")
         );
-        let lua = format!("Lua reads cognitive p99 = {:.0}", hi(Lang::Lua, COGNITIVE));
-        assert!(readme.contains(&lua), "README drifted: {lua:?} missing");
+        assert!(
+            hi(Lang::Cpp, COGNITIVE) * 2.0 < hi(Lang::C, COGNITIVE),
+            "the C++ `cognitive` budget is no longer less than half of the C budget"
+        );
     }
 
     #[test]
