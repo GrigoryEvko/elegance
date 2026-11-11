@@ -29,14 +29,14 @@ gates — 41 over budget across 26 bodies. Old sludge is tolerated until touched
           cyclomatic 33>14  cognitive 22>16  length 111>93
 ```
 
-## The ladder
+## Levels of checks
 
-Every metric sits on one rung, and the rung is the scope of code the metric
-reads. Low rungs read little and are exact. High rungs read more and need a
-person to interpret them. The rung therefore fixes what a finding is allowed to
-do.
+Every metric has a level: the scope of code it reads. A metric that reads a
+token or a function is exact. A metric that reads a class or a whole dependency
+graph needs a person to interpret it. The level therefore fixes what a finding
+is allowed to do.
 
-| Rung | Scope | Class | What a finding does |
+| Level | Scope | Class | What a finding does |
 | :--- | :--- | :--- | :--- |
 | 0 | token | gate | can fail a build |
 | 1 | expression | gate | can fail a build |
@@ -47,7 +47,7 @@ do.
 | 6 | evolution | description | states a fact about how the code changes |
 | 7 | tension | evidence | shows facts that are worse together |
 
-`--baseline check` and `--diff` exit 1 on a gate. `--fail-on RUNG` moves the
+`--baseline check` and `--diff` exit 1 on a gate. `--fail-on LEVEL` moves the
 line between gates and suspicions. The default is 2.
 
 ### Budgets
@@ -60,12 +60,12 @@ A budget is one of two kinds:
 - **Policy** (`P`): a fixed rule that calibration never touches. Most policy
   budgets are zero, because the thing they count has no acceptable density.
 
-A policy metric keeps its rung only while the gold corpus obeys it. `elegance
+A policy metric keeps its level only while the gold corpus obeys it. `elegance
 calibrate` lists every policy gate the corpus breaks in more than 1% of
 measurements, and every policy suspicion it breaks in more than 5%. A rule that
-admired code fails that often is measuring taste, and it moves up the ladder.
+admired code fails that often is measuring taste, and it moves to a level that cannot fail a build.
 
-### Rung 0: tokens
+### Level 0: tokens
 
 | Metric | Budget | What it finds |
 | :--- | :--- | :--- |
@@ -73,7 +73,7 @@ admired code fails that often is measuring taste, and it moves up the ladder.
 | `magic numbers` | C | unnamed non-trivial numbers outside constants and tests |
 | `abbreviated` | C | names with the vowels squeezed out: `usr`, `cfg`, `mgr` |
 
-### Rung 1: expressions
+### Level 1: expressions
 
 | Metric | Budget | What it finds |
 | :--- | :--- | :--- |
@@ -81,7 +81,7 @@ admired code fails that often is measuring taste, and it moves up the ladder.
 | `demeter` | C | chains of three or more data links (`a.b.c.d`). Fluent calls, namespace paths and tests are exempt |
 | `negations` | P | a negated `!=`, or a negated name that is already negative |
 
-### Rung 2: functions
+### Level 2: functions
 
 | Metric | Budget | What it finds |
 | :--- | :--- | :--- |
@@ -97,7 +97,7 @@ admired code fails that often is measuring taste, and it moves up the ladder.
 | `blocking async` | P | a call that parks the thread inside an `async` function |
 | `conditional hook` | P | a React hook called inside a branch |
 
-### Rung 3: interfaces
+### Level 3: interfaces
 
 Signatures:
 
@@ -168,7 +168,7 @@ Comments and documentation:
 | `comment ratio` | C | the share of comment lines in a file. This budget is a band |
 | `module doc` `type doc` `fn doc` `field doc` `inline doc` | C | prose words in one comment, with a separate budget per role. Code examples inside a comment do not count |
 
-### Rung 4: classes and modules
+### Level 4: classes and modules
 
 | Metric | Budget | What it finds |
 | :--- | :--- | :--- |
@@ -178,10 +178,10 @@ Comments and documentation:
 | `and name` | P | a name containing "and", which admits to two jobs |
 | `magic strings` | C | the same string literal written out again and again |
 
-### Rung 5: dependency graph and rates
+### Level 5: dependency graph and rates
 
 The tool resolves every import to a file in the repository and describes the
-graph that results. Nothing on this rung has a budget.
+graph that results. Nothing at this level has a budget.
 
 | Fact | Meaning |
 | :--- | :--- |
@@ -202,7 +202,7 @@ graph that results. Nothing on this rung has a budget.
 | idiom | how consistently each language's names are spelled |
 | `asserts` `public docs` | coverage rates, shown beside the gold corpus's own rate |
 
-### Rung 6: evolution
+### Level 6: evolution
 
 `--hotspots` and `--coupling` read the git history. `--history` keeps its own
 ledger of past scans, and `--by` regroups the findings of the current one.
@@ -214,7 +214,7 @@ ledger of past scans, and `--by` regroups the findings of the current one.
 | `--by` | findings rolled up per directory, worst first |
 | `--coupling` | files that change together without a declared dependency, and files with a single author |
 
-### Rung 7: tensions
+### Level 7: tensions
 
 A tension is a set of independent facts about one function that are worse
 together than apart: it is over budget, no test names it, many files import its
@@ -268,7 +268,7 @@ introduced. It is silent on clean files. See
 | `elegance --baseline check` | exit 1 on a violation that is new or worse than the baseline |
 | `elegance --diff REF` | judge only the code a change touched |
 | `elegance --api REF` | breaking changes to the public surface |
-| `elegance --fail-on RUNG` | the highest rung that may fail a build |
+| `elegance --fail-on LEVEL` | the highest level that may fail a build |
 | `elegance install-hook` | a pre-commit hook running `--diff HEAD`. `uninstall-hook` removes it |
 | `elegance calibrate <gold-dirs...>` | derive budgets from a gold corpus and write `calibration.toml` |
 | `elegance tidy FILES... [-- FLAGS]` | clang-tidy on C++ that its Clang does not read yet |
@@ -333,12 +333,12 @@ The sections:
 
 | Section | Content |
 | :--- | :--- |
-| `gates` | functions over a budget on rungs 0 to 2 |
-| `suspicions` | functions over a budget on rungs 3 and 4 |
+| `gates` | functions over a budget on levels 0 to 2 |
+| `suspicions` | functions over a budget on levels 3 and 4 |
 | `policy` | findings against a budget of zero, which have no distance to rank by |
 | `shape` | each metric's distribution in this scan, beside its budget |
 | `coverage` | the two rate metrics, beside the gold corpus's rates |
-| `architecture` | the facts of rung 5 |
+| `architecture` | the facts of level 5 |
 
 A budget is printed in one of three forms:
 
@@ -559,7 +559,7 @@ src/
   lang/          one pack per language, and the C++ dialect normalization
   facts/         the facts and the extractor
   metrics/       the metric registry, the budgets and the metric functions
-  graph/         import resolution and the facts of rung 5
+  graph/         import resolution and the facts of level 5
   report/        aggregation, and the text, JSON and SARIF output
   calibrate.rs   budgets from the gold corpus
   ratchet.rs  diff.rs  api.rs               the CI modes
@@ -567,7 +567,7 @@ src/
   ci.rs  sfc.rs  notebook.rs                workflows, Dockerfiles, components, notebooks
   tidy.rs  clangfmt.rs  factsdump.rs        `tidy`, clang-format macros, `--facts-dump`
   near.rs  prose.rs  docparam.rs            near-clones, comment prose, documented parameters
-  hotspots.rs  history.rs  coupling.rs  rollup.rs   the modes of rung 6
+  hotspots.rs  history.rs  coupling.rs  rollup.rs   the modes of level 6
   deps.rs  helm.rs  render.rs               dependencies and Helm charts
   main.rs        the command line, the file walk and the parallel scan
 ```
