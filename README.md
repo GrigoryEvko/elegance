@@ -18,15 +18,15 @@ dependency graph needs context to interpret, so it only reports.
 
 ```
 $ elegance .
-elegance — 60 files (rs 57, sh 3), 1750 units (27% test), 48772 lines, 1 with parse errors
+elegance — 65 files (rs 62, sh 3), 2065 units (28% test), 57427 lines, 1 with parse errors
 
-gates — clean — nothing here fails a build
-
-suspicions — 263 over budget across 184 bodies; is the design wrong, or does the metric not fit here?
-     23x  1 suspicion  src/metrics/mod.rs:1108  unit_shape
-          casts 23>1
-          casts — 10 of 29 bodies here are over it
-          10 casts findings in this one file
+gates — 41 over budget across 26 bodies. Old sludge is tolerated until touched, new sludge is blocked.
+     16x  1 gate       src/lang/cppseed.rs:363  sha256
+          magic numbers 31>2
+          magic numbers — alone here, the other 10 peak at 1
+          48 files import this one
+      2x  3 gates      src/lang/cpp/dialect.rs:2542  bitfield_initializer
+          cyclomatic 33>14  cognitive 22>16  length 111>93
 ```
 
 ## The ladder
@@ -271,7 +271,10 @@ introduced. It is silent on clean files. See
 | `elegance --fail-on RUNG` | the highest rung that may fail a build |
 | `elegance install-hook` | a pre-commit hook running `--diff HEAD`. `uninstall-hook` removes it |
 | `elegance calibrate <gold-dirs...>` | derive budgets from a gold corpus and write `calibration.toml` |
-| `elegance --errors FILE` | the parse errors of one file, for language-pack developers |
+| `elegance tidy FILES... [-- FLAGS]` | clang-tidy on C++ that its Clang does not read yet |
+| `elegance --cpp-seed FILE` | the names this C++ project declares. The default is `.elegance/cpp.seed` |
+| `elegance --errors FILE` | the parse errors of one file, and the C++ rules that applied to it |
+| `elegance --facts-dump FILE` | every unit, call and control event as rows, for language-pack developers |
 | `elegance --version` | the version |
 
 Beyond source code:
@@ -282,16 +285,41 @@ Beyond source code:
 | `--helm` | compares the keys each Helm values file sets, and finds credentials in YAML |
 | `--render` | runs `helm template` per environment and measures the manifests that come back |
 
+### `elegance tidy`
+
+clang-tidy parses with the Clang it was built with, and the Clang in each
+release reads only part of C++26. A contract clause that Clang cannot parse is
+an error, and no check then examines that declaration.
+
+`elegance tidy` removes, for clang-tidy only, what its Clang does not read and
+what does no work: contract clauses, `contract_assert`, annotations and class
+properties. A virtual file system overlay puts the changed text at the original
+path, so each diagnostic shows the original file, line and column. No file on
+disk changes.
+
+```sh
+elegance tidy --checks='bugprone-*' src/pool.cpp -- -std=c++26 -Iinclude
+elegance tidy --clang-tidy clang-tidy-23 -p build src/pool.cpp
+```
+
+`-p BUILD` reads `compile_commands.json` and drops from a copy of it the flags
+this clang-tidy does not know, such as `-fcontracts` from a GCC build.
+
+Reflection, a consteval block and, before Clang 23, an expansion statement have
+no removal that keeps their meaning. The command reports how many files use
+each one, and clang-tidy reports each use as an error. `--fix` is not
+available, because clang-tidy would compute the fix on the changed text.
+
 ## Reading the report
 
 An entry is one function, not one finding, and entries are ranked by distance
 from the budget.
 
 ```
-     23x  1 suspicion  src/metrics/mod.rs:1108  unit_shape
-          casts 23>1
-          casts — 10 of 29 bodies here are over it
-          10 casts findings in this one file
+     16x  1 gate       src/lang/cppseed.rs:363  sha256
+          magic numbers 31>2
+          magic numbers — alone here, the other 10 peak at 1
+          48 files import this one
 ```
 
 | Line | Content |
@@ -439,6 +467,13 @@ rather than removed, so line numbers stay true.
   it CUDA.
 - **C is not preprocessed.** Macro bodies are invisible, so C numbers are
   floors. `#if`, `#elif` and `#else` count as branches.
+- **C++ is normalized before it is parsed, up to C++2d.** The grammar is older
+  than the language, and one parse error removes the rest of its scope from the
+  tree. The normalization removes what does no work (contracts, attributes,
+  specifiers, reflection operators) and keeps every call, branch, loop and byte
+  offset, so findings point at the right line. `src/lang/cpp/dialect_probes.txt`
+  holds 676 probe sources, and a test parses each one after the normalization.
+  The macros a project declares to clang-format are read too.
 - **A file with too many parse errors is excluded from the metrics.** The first
   line of the report counts the excluded files.
 - **Haskell and PowerShell have no pack.** Their tree-sitter grammars could not
@@ -521,7 +556,7 @@ language, produces the same metric values.
 ```
 src/
   sem.rs         the closed set of semantic kinds
-  lang/          one pack per language
+  lang/          one pack per language, and the C++ dialect normalization
   facts/         the facts and the extractor
   metrics/       the metric registry, the budgets and the metric functions
   graph/         import resolution and the facts of rung 5
@@ -530,6 +565,7 @@ src/
   ratchet.rs  diff.rs  api.rs               the CI modes
   layers.rs                                 layer contracts
   ci.rs  sfc.rs  notebook.rs                workflows, Dockerfiles, components, notebooks
+  tidy.rs  clangfmt.rs  factsdump.rs        `tidy`, clang-format macros, `--facts-dump`
   near.rs  prose.rs  docparam.rs            near-clones, comment prose, documented parameters
   hotspots.rs  history.rs  coupling.rs  rollup.rs   the modes of rung 6
   deps.rs  helm.rs  render.rs               dependencies and Helm charts

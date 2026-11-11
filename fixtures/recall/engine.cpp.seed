@@ -74,6 +74,16 @@ public:
         return unrelated.value;
     }
 
+    int flags() {
+        return ready
+#ifdef ENGINE_TRACE
+            | kTraceFlag
+#else
+            | kQuietFlag
+#endif
+            ;
+    }
+
 private:
     Config cfg;
     Sink unrelated;

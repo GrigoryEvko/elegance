@@ -88,6 +88,7 @@ pub fn pack() -> Pack {
         file_level_scope: false,
         is_override,
         spooky,
+        unparsed_ctrl: |_, _| Vec::new(),
         negation_operand: |node, src| {
             (node.kind() == "unary_expression"
                 && node.utf8_text(src).is_ok_and(|t| t.starts_with('!')))

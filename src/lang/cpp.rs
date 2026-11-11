@@ -15,10 +15,12 @@
 //! and the drill takes that node's `name` child, so an out-of-line
 //! definition is named `get` and the class stays in the declarator.
 //!
-//! Tests arrive as macros. `TEST(Pool, TakesASlot) { ... }` is the only
-//! declaration form the grammar can read. Catch2's `TEST_CASE("a pool
-//! takes a slot")` puts a STRING where a parameter belongs and parses
-//! as an error, so Catch2 files declare no tests here.
+//! Tests arrive as macros. The grammar reads `TEST(Pool, TakesASlot) {
+//! ... }` as a `macro_invocation` with a body, which is a function
+//! definition after expansion, and the unit is named `Pool.TakesASlot`.
+//! Catch2's `TEST_CASE("a pool takes a slot") { ... }` has the same
+//! shape, and its unit keeps the name of the macro: nothing here reads
+//! the string as the name of a test.
 //!
 //! CUDA rides this pack the way TSX rides TypeScript: a second grammar,
 //! the same tables, one extra entry. `__global__` and `__device__` are
@@ -29,7 +31,7 @@
 
 use tree_sitter::Node;
 
-use super::{CatchSin, Lang, Pack, ParamInfo, field_text_is, sem_table};
+use super::{CatchSin, Lang, Pack, ParamInfo, TextCtrl, field_text_is, sem_table};
 use crate::sem::Sem;
 
 pub enum Dialect {
@@ -74,7 +76,9 @@ const KINDS: &[(&str, Sem)] = &[
     ("preproc_include", Sem::Import),
     // Inside a class or enum body `#include` is not a declaration
     // position, and the grammar reads the line as the generic
-    // `preproc_call` it shares with `#pragma` and `#error`.
+    // `preproc_call` it shares with `#pragma` and `#error`. The fork also
+    // reads each line of a conditional group that it cannot keep as one
+    // node as a `preproc_call`, and `refine` reads those by their name.
     ("preproc_call", Sem::Import),
     // `using_declaration` is absent by decision: it names a namespace
     // member, and the graph resolves against file paths. See `imports`.
@@ -119,6 +123,23 @@ const CUDA_ONLY: &[(&str, Sem)] = &[
     ("launch_bounds", Sem::None),
 ];
 
+/// The kinds that only the C++ grammar of the GrigoryEvko fork spells.
+/// The CUDA dialect reads with the stock CUDA grammar, which has none of
+/// them, so they sit in a table of their own.
+///
+/// `macro_invocation` is a macro that the grammar did not read as a call
+/// expression: a line with no `;`, a name with a block after it, an item
+/// at file scope. Most of them stand where a statement stands, so the
+/// table says `Call`, and `refine` reads the position. See `macro_sem`.
+///
+/// Qt's `foreach (x, xs)` and `Q_FOREACH` expand to a `for` statement,
+/// and `forever` to `for (;;)`. Each is a loop.
+const FORK_ONLY: &[(&str, Sem)] = &[
+    ("macro_invocation", Sem::Call),
+    ("qt_foreach_statement", Sem::Loop),
+    ("qt_forever_statement", Sem::Loop),
+];
+
 pub fn pack(dialect: Dialect) -> Pack {
     let (lang, ts): (Lang, tree_sitter::Language) = match dialect {
         Dialect::Cpp => (Lang::Cpp, tree_sitter_cpp::LANGUAGE.into()),
@@ -126,7 +147,7 @@ pub fn pack(dialect: Dialect) -> Pack {
     };
     let kinds: &[&[(&str, Sem)]] = match lang {
         Lang::Cuda => &[KINDS, CUDA_ONLY],
-        _ => &[KINDS],
+        _ => &[KINDS, FORK_ONLY],
     };
     let sems = sem_table(&ts, kinds);
     let def_sites = super::def_table(&ts, DEF_SITES);
@@ -146,7 +167,9 @@ pub fn pack(dialect: Dialect) -> Pack {
         scope_sep: "::",
         return_type_field: "type",
         bool_op_field: "operator",
-        call_target_fields: &["function"],
+        // A call expression fields its target as `function`, and a
+        // macro invocation fields its name as `name`.
+        call_target_fields: &["function", "name"],
         types_declared: true,
         refine,
         name_node,
@@ -162,6 +185,7 @@ pub fn pack(dialect: Dialect) -> Pack {
         file_level_scope: false,
         is_override: |_, _| false,
         spooky,
+        unparsed_ctrl,
         negation_operand: |node, src| {
             (node.kind() == "unary_expression" && field_text_is(node, "operator", src) == Some("!"))
                 .then(|| node.child_by_field_name("argument"))?
@@ -255,9 +279,30 @@ fn declares_a_method(field: Node) -> bool {
         if inner.kind() == "function_declarator" {
             return true;
         }
-        d = inner.child_by_field_name("declarator");
+        d = inner_declarator(inner);
     }
     false
+}
+
+/// The declarator that a declarator wraps. An `attributed_declarator`
+/// fields no child: in `void f [[deprecated]] (int a)` it holds the name
+/// and the attribute as two unnamed children, and a drill that reads
+/// only the `declarator` field stops there.
+fn inner_declarator(node: Node) -> Option<Node> {
+    if node.kind() != "attributed_declarator" {
+        return node.child_by_field_name("declarator");
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).find(|c| {
+        !matches!(
+            c.kind(),
+            "attribute_declaration"
+                | "attribute_macro"
+                | "attribute_specifier"
+                | "alignas_qualifier"
+                | "comment"
+        )
+    })
 }
 
 /// `virtual int a() = 0;`: the grammar records the `= 0` as a default
@@ -272,23 +317,30 @@ fn is_destructor(def: Node) -> bool {
         if inner.kind() == "destructor_name" {
             return true;
         }
-        d = inner.child_by_field_name("declarator");
+        d = inner_declarator(inner);
     }
     false
 }
 
-/// `&&`/`||` from the shared binary kind; `else if` flattens as in C.
+/// `&&`/`||` from the shared binary kind; `else if` flattens as in C, and
+/// so does an `else` before a macro that reads as an `if`.
 fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
+    if sem == Sem::Import
+        && node.kind() == "preproc_call"
+        && let Some(event) = field_text_is(node, "directive", src)
+            .and_then(directive_name)
+            .and_then(conditional_event)
+    {
+        return event;
+    }
+    let sem = match sem == Sem::Call && node.kind() == "macro_invocation" {
+        true => macro_sem(node),
+        false => sem,
+    };
     match sem {
         Sem::None if super::c::spliced_include(node, src) => Sem::Import,
         Sem::If if node.parent().is_some_and(|p| p.kind() == "else_clause") => Sem::ElseIf,
-        Sem::Else
-            if node
-                .named_child(0)
-                .is_some_and(|c| c.kind() == "if_statement") =>
-        {
-            Sem::None
-        }
+        Sem::Else if node.named_child(0).is_some_and(is_an_if) => Sem::None,
         Sem::BoolOp => match field_text_is(node, "operator", src) {
             Some("&&" | "||") => Sem::BoolOp,
             _ => Sem::None,
@@ -298,7 +350,25 @@ fn refine(node: Node, src: &[u8], sem: Sem) -> Sem {
         // reader, and `reinterpret_cast` is the loudest one in the
         // language, so the four named casts are reclassified here.
         Sem::Call if is_a_named_cast(node, src) => Sem::Cast,
+        // A callee that the grammar names as a TYPE builds a value of
+        // that type. It calls no function of that name, so an edge to
+        // the name is an edge to a function that nothing calls.
+        Sem::Call => match type_callee_arguments(node) {
+            Some(1) => Sem::Cast,
+            Some(_) => Sem::None,
+            None => Sem::Call,
+        },
         _ => sem,
+    }
+}
+
+/// An `if` statement, or a macro invocation with an `else`, which is one
+/// after expansion. See `macro_sem`.
+fn is_an_if(node: Node) -> bool {
+    match node.kind() {
+        "if_statement" => true,
+        "macro_invocation" => node.child_by_field_name("alternative").is_some(),
+        _ => false,
     }
 }
 
@@ -309,25 +379,278 @@ fn is_a_named_cast(call: Node, src: &[u8]) -> bool {
     )
 }
 
+/// The number of arguments of a call whose callee names a TYPE, or None
+/// when the callee names no type.
+///
+/// `T(x)` converts, and `Point(1, 2)` builds an object. The two call no
+/// function named `T` or `Point`. The grammar gives such a callee a KIND
+/// of its own: `type_identifier`, or `template_type` for `Vec<int>(n)`.
+/// The callee of `f(x)` is an `identifier`.
+///
+/// THE KIND IS THE ONLY DIFFERENCE, and the table of this pack gives
+/// `identifier` and `type_identifier` one `Sem::Ident`. So each of these
+/// counted as a call, and the graph held an edge to a function that
+/// nothing calls.
+///
+/// ONE ARGUMENT IS A CONVERSION. C++ makes `T(x)` equivalent to the cast
+/// `(T)x`, so it takes `Sem::Cast` with the four named casts. Each other
+/// count builds an object through a constructor, which is no cast and no
+/// call to the name.
+///
+/// THE PROJECT DECIDES THE KIND, AND NOT THE FILE. The scanner of the
+/// C++ fork names a callee `type_identifier` only where a source of the
+/// parse declares the name. A file that includes a header declares
+/// nothing, so a run with no seed reaches a small number of these sites.
+/// Refer to `cppseed`.
+///
+/// A `new_expression` and a `macro_invocation` reach this function as
+/// `Sem::Call` and carry no `function` field, so each one stays a call.
+/// `callee_name` shows the second one: it reads the `name` field where
+/// there is no `function` field. The test
+/// `a_macro_with_arguments_in_a_block_is_a_call` pins the reading.
+///
+/// THE ARGUMENT LIST COMES FROM THE KIND OF A CHILD AND NOT FROM THE
+/// FIELD. A `template_type` callee carries an `arguments` field of its
+/// own, the `template_argument_list` of `Vec<int>`, and
+/// `child_by_field_name("arguments")` on the call gives that list. It
+/// counts the TYPE arguments of the callee and not the arguments of the
+/// call. The test pins the count of each shape, so a grammar that
+/// renames `argument_list` fails there.
+///
+/// A call whose arguments are a `token_tree` stays a call. The tokens of
+/// such a list are no expressions, and no count of them is a count of
+/// arguments.
+fn type_callee_arguments(call: Node) -> Option<usize> {
+    let callee = call.child_by_field_name("function")?;
+    if !matches!(callee.kind(), "type_identifier" | "template_type") {
+        return None;
+    }
+    let mut children = call.walk();
+    let arguments = call
+        .named_children(&mut children)
+        .find(|child| child.kind() == "argument_list")?;
+    let mut cursor = arguments.walk();
+    Some(
+        arguments
+            .named_children(&mut cursor)
+            .filter(|argument| argument.kind() != "comment")
+            .count(),
+    )
+}
+
+/// Where a macro invocation stands, which is what decides what it
+/// expands to when no macro table is at hand.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MacroScope {
+    /// A translation unit, a namespace body or a class body. Only
+    /// declarations stand here, and nothing runs.
+    Declaration,
+    /// A block, a case body, a label or a substatement.
+    Statement,
+    /// An item of an enumerator list, an initializer list or a template
+    /// parameter list: a part of that list after expansion.
+    List,
+}
+
+/// What a `macro_invocation` is after expansion.
+///
+/// - A macro with a body at declaration scope is a function definition:
+///   gtest's `TEST(Suite, Case) { ... }` expands to the definition of
+///   `Suite_Case_Test::TestBody`, and GCC and Clang accept no statement
+///   there.
+/// - A macro with a body and an `else` after it is an `if` statement:
+///   only an `if` takes an `else` (GCC `cp_parser_selection_statement`),
+///   and Boost defines `BOOST_IF_CONSTEXPR` as `if constexpr` or as `if`.
+/// - A macro with arguments at statement scope is a call, as the C pack
+///   reads every function-like macro. The grammar itself reads
+///   `ASSERT(x);` as a call expression, and the same line with no `;`,
+///   `ASSERT(x)`, is this node. It counts wrongly where the macro
+///   expands to no call: `Q_UNUSED(x)` is a cast to `void`. With a body,
+///   as in `FOREACH(item, items) { ... }`, the macro opens a loop, a
+///   branch or a scope that nothing here can name, and the body counts
+///   as plain statements of the unit.
+/// - A name with no arguments is an object-like macro, and nothing here
+///   can tell a call inside its expansion: bde's `T_` prints a tab.
+/// - At declaration scope a macro with no body expands to declarations,
+///   and nothing runs there. In a list it expands to items of the list.
+fn macro_sem(node: Node) -> Sem {
+    let has = |field: &str| node.child_by_field_name(field).is_some();
+    match macro_scope(node) {
+        MacroScope::Declaration if has("body") => Sem::FnDef,
+        MacroScope::Statement if has("alternative") => Sem::If,
+        MacroScope::Statement if has("arguments") => Sem::Call,
+        _ => Sem::None,
+    }
+}
+
+/// The scope of a macro invocation, read from its nearest ancestor that
+/// is neither a conditional group nor an ERROR node. A group holds the
+/// items of the scope around it, and an ERROR node holds what the parser
+/// could not place. Cost: O(depth) calls to `Node::parent`, and each one
+/// walks down from the root.
+fn macro_scope(node: Node) -> MacroScope {
+    let mut up = node.parent();
+    while let Some(p) = up {
+        match p.kind() {
+            _ if p.is_error() => up = p.parent(),
+            "preproc_if" | "preproc_ifdef" | "preproc_elif" | "preproc_elifdef"
+            | "preproc_else" => up = p.parent(),
+            "translation_unit"
+            | "declaration_list"
+            | "field_declaration_list"
+            | "export_declaration" => return MacroScope::Declaration,
+            "enumerator_list" | "initializer_list" | "template_parameter_list" => {
+                return MacroScope::List;
+            }
+            _ => return MacroScope::Statement,
+        }
+    }
+    MacroScope::Declaration
+}
+
+/// The name of the directive that a line starts, without its `#` or
+/// `%:`: `if` for `#  if A`. None for a line that starts no directive.
+fn directive_name(line: &str) -> Option<&str> {
+    let rest = line.trim_start_matches([' ', '\t']);
+    let rest = rest
+        .strip_prefix('#')
+        .or_else(|| rest.strip_prefix("%:"))?
+        .trim_start_matches([' ', '\t']);
+    let end = rest
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// The control event of a conditional directive, as a structured group
+/// counts it: `#if`, `#ifdef` and `#ifndef` open a branch, the `#elif`
+/// family and `#else` continue the chain, and `#endif` closes the group
+/// with no event, which is `Sem::None`. None for every other directive.
+///
+/// The fork keeps a group as `preproc_if` or `preproc_ifdef` only where
+/// each branch holds whole declarations or statements. A group inside an
+/// expression or a function head is lines: each directive line of the
+/// branch that the parser reads is a `preproc_call`, and the text of the
+/// other branches is one `preproc_skipped` token.
+fn conditional_event(name: &str) -> Option<Sem> {
+    match name {
+        "if" | "ifdef" | "ifndef" => Some(Sem::If),
+        "elif" | "elifdef" | "elifndef" => Some(Sem::ElseIf),
+        "else" => Some(Sem::Else),
+        "endif" => Some(Sem::None),
+        _ => None,
+    }
+}
+
+/// The conditional directive lines in the text of a branch that the
+/// parser skipped, as a structured group counts them.
+///
+/// The text runs from the first skipped line to the line before the
+/// `#endif` of the group. It holds the `#elif` and `#else` lines of the
+/// group, and the whole of each group nested in it, so a nested `#if`
+/// takes the nesting of the groups that the text opens before it. The
+/// text has no tree: a call, a statement or a C++ `if` in it counts
+/// nothing, and that is a loss against a structured group.
+///
+/// A line that starts in a block comment is not a directive. A raw
+/// string literal that holds a line starting with `#if` is read as a
+/// directive. Cost: O(length of the text).
+fn unparsed_ctrl(node: Node, src: &[u8]) -> Vec<TextCtrl> {
+    if node.kind() != "preproc_skipped" {
+        return Vec::new();
+    }
+    let Ok(text) = node.utf8_text(src) else {
+        return Vec::new();
+    };
+    let first = node.start_position().row as u32 + 1;
+    let mut events = Vec::new();
+    let mut depth = 0u8;
+    let mut in_comment = false;
+    for (offset, line) in text.lines().enumerate() {
+        let starts_in_comment = in_comment;
+        in_comment = comment_open_after(line, in_comment);
+        let event = match starts_in_comment {
+            true => None,
+            false => directive_name(line).and_then(conditional_event),
+        };
+        let nesting = depth;
+        match event {
+            None => continue,
+            Some(Sem::None) => depth = depth.saturating_sub(1),
+            Some(sem) => {
+                if sem == Sem::If {
+                    depth = depth.saturating_add(1);
+                }
+                events.push(TextCtrl {
+                    sem,
+                    line: first + offset as u32,
+                    nesting,
+                });
+            }
+        }
+    }
+    events
+}
+
+/// Is a block comment open at the end of `line`, given that one was open
+/// at its start or not? A `//` ends the line, and a quoted literal hides
+/// the comment markers in it. Cost: O(length of the line).
+fn comment_open_after(line: &str, mut open: bool) -> bool {
+    let bytes = line.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let pair = (bytes[i], bytes.get(i + 1).copied());
+        match (open, quote, pair) {
+            (true, _, (b'*', Some(b'/'))) => {
+                open = false;
+                i += 1;
+            }
+            (false, Some(_), (b'\\', _)) => i += 1,
+            (false, Some(q), (b, _)) if b == q => quote = None,
+            (false, None, (b'/', Some(b'/'))) => return false,
+            (false, None, (b'/', Some(b'*'))) => {
+                open = true;
+                i += 1;
+            }
+            (false, None, (b @ (b'"' | b'\''), _)) => quote = Some(b),
+            _ => {}
+        }
+        i += 1;
+    }
+    open
+}
+
 /// The declarator chain, as in C, ending at an identifier or at a
 /// `qualified_identifier`, which is how an out-of-line definition
 /// carries its class. `int Store::get(...)` is named through that
 /// node's `name` child, so the unit is `get` and the class stays in
 /// the declarator.
 fn name_node(node: Node) -> Option<Node> {
-    if node.kind() != "function_definition" {
-        return None;
-    }
     if let Some(case) = macro_case_name(node) {
         return Some(case);
     }
+    if node.kind() != "function_definition" {
+        return None;
+    }
     let mut d = node.child_by_field_name("declarator")?;
-    while let Some(inner) = d.child_by_field_name("declarator") {
+    while let Some(inner) = inner_declarator(d) {
         d = inner;
     }
-    // `Store::get` and `~Store` both name the unit.
-    if matches!(d.kind(), "qualified_identifier" | "destructor_name") {
+    // `Store::get` names the unit `get`, and the class stays in the
+    // declarator. `Store::~Store` reaches its `destructor_name` through
+    // the same field, and that node reads `~Store`.
+    if d.kind() == "qualified_identifier" {
         return d.child_by_field_name("name").or(Some(d));
+    }
+    // A DESTRUCTOR KEEPS ITS `~`. The grammar gained the field `name` on
+    // `destructor_name`, and that field holds the CLASS. A unit named for
+    // the class would collide with the constructor of the same class, and
+    // the ratchet identifies a violation by (metric, path, unit), so the
+    // two would become one row. The same line served both kinds only
+    // while the field was missing and the fallback answered for it.
+    if d.kind() == "destructor_name" {
+        return Some(d);
     }
     matches!(
         d.kind(),
@@ -336,19 +659,56 @@ fn name_node(node: Node) -> Option<Node> {
     .then_some(d)
 }
 
-/// A macro invocation followed by a block — `TEST(Pool, TakesASlot)
-/// { ... }` — which the grammar can only read as a function called
-/// TEST. A definition with NO return type whose "parameters" are bare
-/// type names carrying no declarator: they are not parameters at all.
-/// Returns (macro, last argument), which is the name a human reads.
-/// Without this every gtest unit reports under the macro's own four
-/// letters, and every test-quality metric judges `TEST` instead of the
-/// case.
+/// A macro followed by a block whose arguments are two or more bare
+/// names: `TEST(Pool, TakesASlot) { ... }`. Returns (macro, first
+/// argument, last argument). The last argument is the name a human
+/// reads. Without this every gtest unit reports under the macro's own
+/// four letters, and every test-quality metric judges `TEST` instead of
+/// the case.
 ///
-/// A constructor also has no return type, but its parameters are
-/// named; the only collision is a constructor whose every parameter is
-/// unnamed, which could not use them.
-fn test_macro(node: Node) -> Option<(Node, Node)> {
+/// The grammar spells the block in two shapes, and both are read:
+///
+/// - A `macro_invocation` with a `body`. The fork reads an uppercase
+///   name, its argument tokens and a block that way.
+/// - A `function_definition` with no return type whose "parameters" are
+///   bare type names with no declarator, which are not parameters at
+///   all. The fork keeps this shape for a lowercase macro, and for a
+///   block that is a function try block. A constructor also has no
+///   return type, but its parameters are named. The only collision is a
+///   constructor whose every parameter is unnamed, which could not use
+///   them.
+fn test_macro(node: Node) -> Option<(Node, Node, Node)> {
+    let (macro_name, names) = match node.kind() {
+        "macro_invocation" => invoked_names(node)?,
+        "function_definition" => declared_names(node)?,
+        _ => return None,
+    };
+    match names[..] {
+        [first, .., last] => Some((macro_name, first, last)),
+        _ => None,
+    }
+}
+
+/// The macro and the argument names of a `macro_invocation` with a body,
+/// when every argument is one bare name. `TEST(a::B, C)` gives three
+/// identifiers and a `::` token, and names no test.
+fn invoked_names(node: Node) -> Option<(Node, Vec<Node>)> {
+    node.child_by_field_name("body")?;
+    let macro_name = node.child_by_field_name("name")?;
+    let args = node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let tokens: Vec<Node> = args.children(&mut cursor).collect();
+    let bare = tokens.iter().all(|t| match t.is_named() {
+        true => t.kind() == "identifier",
+        false => matches!(t.kind(), "(" | ")" | ","),
+    });
+    let names: Vec<Node> = tokens.into_iter().filter(|t| t.is_named()).collect();
+    bare.then_some((macro_name, names))
+}
+
+/// The macro and the "parameter" names of a `function_definition` that a
+/// macro spells, when every parameter is a bare type name.
+fn declared_names(node: Node) -> Option<(Node, Vec<Node>)> {
     if node.child_by_field_name("type").is_some() {
         return None;
     }
@@ -366,14 +726,11 @@ fn test_macro(node: Node) -> Option<(Node, Node)> {
         .filter_map(|a| a.child_by_field_name("type"))
         .filter(|t| t.kind() == "type_identifier")
         .collect();
-    match names.len() == args.len() && names.len() >= 2 {
-        true => Some((macro_name, *names.last()?)),
-        false => None,
-    }
+    (names.len() == args.len()).then_some((macro_name, names))
 }
 
 fn macro_case_name(node: Node) -> Option<Node> {
-    test_macro(node).map(|(_, case)| case)
+    test_macro(node).map(|(_, _, case)| case)
 }
 
 /// `TEST(args_test, basic)` names one test in two parts, and gtest
@@ -389,20 +746,12 @@ fn composed_name(node: Node, src: &[u8]) -> Option<String> {
     if !declares_test(node, src) {
         return None;
     }
-    let (_, case) = test_macro(node)?;
-    let suite = suite_argument(node)?;
+    let (_, suite, case) = test_macro(node)?;
     Some(format!(
         "{}.{}",
         suite.utf8_text(src).ok()?,
         case.utf8_text(src).ok()?
     ))
-}
-
-fn suite_argument(node: Node) -> Option<Node> {
-    let params = node
-        .child_by_field_name("declarator")?
-        .child_by_field_name("parameters")?;
-    params.named_child(0)?.child_by_field_name("type")
 }
 
 /// `#include <x>` keeps its brackets (definitionally external), and an
@@ -478,9 +827,12 @@ fn is_self_call(call: Node, src: &[u8], unit_name: &str) -> bool {
     callee_name(call, src) == Some(unit_name)
 }
 
-/// The called name, through the member and template spellings.
+/// The called name, through the member and template spellings. A macro
+/// invocation names its macro in `name`.
 fn callee_name<'a>(call: Node, src: &'a [u8]) -> Option<&'a str> {
-    let f = call.child_by_field_name("function")?;
+    let f = call
+        .child_by_field_name("function")
+        .or_else(|| call.child_by_field_name("name"))?;
     let named = match f.kind() {
         "field_expression" => f.child_by_field_name("field")?,
         "qualified_identifier" => f.child_by_field_name("name")?,
@@ -556,13 +908,13 @@ fn panicky(call: Node, src: &[u8]) -> bool {
     matches!(callee_name(call, src), Some("abort" | "terminate"))
 }
 
-/// The gtest family, the one that parses: every one of these takes two
-/// identifiers and a block. Catch2's string-argument macros are absent
-/// because the grammar rejects them, and google/benchmark's
+/// The gtest family: every one of these takes two identifiers and a
+/// block. Catch2's string-argument macros are absent because no name
+/// here is read from a string, and google/benchmark's
 /// `BENCHMARK(BM_Foo);` is a statement naming a function defined
 /// elsewhere, not a declaration of anything.
 fn declares_test(node: Node, src: &[u8]) -> bool {
-    let Some(name) = test_macro(node).and_then(|(m, _)| m.utf8_text(src).ok()) else {
+    let Some(name) = test_macro(node).and_then(|(m, _, _)| m.utf8_text(src).ok()) else {
         return false;
     };
     matches!(
@@ -580,6 +932,10 @@ fn spooky(node: Node, sem: Sem, src: &[u8]) -> bool {
         && callee_name(node, src).is_some_and(|t| matches!(t, "longjmp" | "setjmp" | "siglongjmp"))
 }
 
+mod dialect;
+
+pub use dialect::{clang_gaps, lower_for_clang, normalize, rewrites};
+
 #[cfg(test)]
 mod tests {
     use crate::facts::extract;
@@ -595,6 +951,74 @@ mod tests {
     fn cuda(src: &str) -> crate::facts::FileFacts {
         let pack = Lang::Cuda.pack();
         extract(pack, &mut pack.make_parser(), Path::new("k.cu"), src)
+    }
+
+    /// Each node of `kind` in the C++ tree of `src`, as (1-based line,
+    /// the pack's verdict). The kind pins the shape of the fork's tree,
+    /// so a grammar that stops spelling it fails here and not in a count.
+    fn sems_of(src: &str, kind: &str) -> Vec<(usize, Sem)> {
+        let pack = Lang::Cpp.pack();
+        let tree = pack
+            .make_parser()
+            .parse(src, None)
+            .expect("the parse finishes");
+        let mut out = Vec::new();
+        let mut stack = vec![tree.root_node()];
+        while let Some(node) = stack.pop() {
+            if node.kind() == kind {
+                out.push((
+                    node.start_position().row + 1,
+                    pack.sem_of(node, src.as_bytes()),
+                ));
+            }
+            // Reversed, so that the stack gives the nodes in source order.
+            let mut cursor = node.walk();
+            let children: Vec<_> = node.children(&mut cursor).collect();
+            stack.extend(children.into_iter().rev());
+        }
+        out
+    }
+
+    /// A CALLEE THAT THE GRAMMAR NAMES AS A TYPE IS NO CALL.
+    ///
+    /// `Alpha(x)` converts, and `Point(1, 2)` builds an object. The two
+    /// call no function named `Alpha` or `Point`. A data flow graph that
+    /// records one holds an edge to a function that nothing calls. Line
+    /// 9 is the control: the same shape with a callee that no source
+    /// declares as a type stays a call. That is the reading a run with
+    /// no seed gets everywhere.
+    ///
+    /// `new Point(1, 2)` is a `new_expression` and it stays a call,
+    /// because `operator new` runs.
+    ///
+    /// `Vec<int>(1, 2)` pins the ARGUMENTS THAT THE COUNT READS. The
+    /// callee carries a `template_argument_list` of one item under the
+    /// same field name, and a count of that list makes this line a
+    /// conversion of one argument.
+    #[test]
+    fn a_callee_that_is_a_type_is_a_conversion_or_a_construction() {
+        let src = "class Alpha {};\n\
+                   class Point { public: Point(int, int); };\n\
+                   template <class T> class Vec { public: Vec(int, int); };\n\
+                   int one(int x) { return Alpha(x); }\n\
+                   Point two() { return Point(1, 2); }\n\
+                   Alpha three() { return Alpha(); }\n\
+                   Vec<int> four() { return Vec<int>(1, 2); }\n\
+                   Point* five() { return new Point(1, 2); }\n\
+                   int six(int x) { return undeclared(x); }\n\
+                   int seven(int x) { return Alpha(/* why */ x); }\n";
+        assert_eq!(
+            sems_of(src, "call_expression"),
+            [
+                (4, Sem::Cast),
+                (5, Sem::None),
+                (6, Sem::None),
+                (7, Sem::None),
+                (9, Sem::Call),
+                (10, Sem::Cast),
+            ]
+        );
+        assert_eq!(sems_of(src, "new_expression"), [(8, Sem::Call)]);
     }
 
     #[test]
@@ -621,12 +1045,16 @@ mod tests {
             1,
             "a kernel's guard is an ordinary branch"
         );
-        // And the same source is unreadable to the plain C++ grammar,
-        // which is why the dialect exists.
-        assert!(
-            facts("void host(float* a, int n) {\n  add<<<grid, block>>>(a, n);\n}\n")
-                .low_confidence(),
-            "if C++ could read a launch there would be nothing to add"
+        // The C++ grammar of the fork reads a launch too: one call
+        // expression with the launch geometry in its `configuration`
+        // field. That field is no call, so the launch is one call there
+        // as well.
+        let launch = "void host(float* a, int n) {\n  add<<<grid, block>>>(a, n);\n}\n";
+        assert!(!facts(launch).low_confidence(), "the fork reads a launch");
+        assert_eq!(sems_of(launch, "call_expression"), [(2, Sem::Call)]);
+        assert_eq!(
+            sems_of(launch, "cuda_execution_configuration"),
+            [(2, Sem::None)]
         );
     }
 
@@ -696,6 +1124,609 @@ mod tests {
         let ctor = facts("struct S {\n  S(int a, int b) { x = a + b; }\n};\n");
         assert_eq!(&*ctor.units[1].name, "S");
         assert!(!ctor.units[1].named_test);
+    }
+
+    #[test]
+    fn a_macro_with_a_body_at_declaration_scope_is_a_definition() {
+        // The text of firefox xpcom/tests/gtest: TestThreadUtils.cpp
+        // writes the brace on the next line, and
+        // TestAvailableMemoryWatcherWin.cpp writes TEST_F. The fork reads
+        // each one as a `macro_invocation` with a body. After expansion
+        // it defines `Suite_Case_Test::TestBody`, which is one unit.
+        let src = "namespace mozilla {\n\
+                   TEST(ThreadUtils, NewRunnableFunction)\n\
+                   {\n\
+                   \x20 EXPECT_TRUE(ran);\n\
+                   }\n\
+                   }  // namespace mozilla\n\
+                   #ifdef XP_WIN\n\
+                   TEST_F(AvailableMemoryWatcherFixture, AlwaysActive) {\n\
+                   \x20 StartUserInteraction();\n\
+                   }\n\
+                   #endif\n\
+                   void Helper() {\n\
+                   \x20 FOREACH(item, items) { use(item); }\n\
+                   }\n";
+        let sems = sems_of(src, "macro_invocation");
+        assert_eq!(
+            sems,
+            [(2, Sem::FnDef), (8, Sem::FnDef), (13, Sem::Call)],
+            "a block at declaration scope defines a function, and a block in a function does not"
+        );
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        let units: Vec<(&str, &str, bool, u16)> = f.units[1..]
+            .iter()
+            .map(|u| (&*u.name, &*u.qualname, u.named_test, u.params.len() as u16))
+            .collect();
+        assert_eq!(
+            units,
+            [
+                (
+                    "ThreadUtils.NewRunnableFunction",
+                    "ThreadUtils.NewRunnableFunction",
+                    true,
+                    0
+                ),
+                (
+                    "AvailableMemoryWatcherFixture.AlwaysActive",
+                    "AvailableMemoryWatcherFixture.AlwaysActive",
+                    true,
+                    0
+                ),
+                ("Helper", "Helper", false, 0),
+            ],
+            "the suite and the case name the test, and a test body takes no parameters"
+        );
+        assert_eq!(f.units[1].assert_calls, 1, "the body belongs to the test");
+        // A name that is not one bare identifier names no test, and the
+        // unit keeps the name of its macro.
+        let qualified = facts("TEST(mozilla::Suite, Case) {\n  f();\n}\n");
+        assert_eq!(&*qualified.units[1].name, "TEST");
+        assert!(!qualified.units[1].named_test);
+    }
+
+    #[test]
+    fn a_macro_with_arguments_in_a_block_is_a_call() {
+        // The text of bde ball_userfieldvalue.t.cpp and its header. The
+        // grammar reads `ASSERT(x);` as a call expression, and the same
+        // line with no `;` as a macro invocation, which is the same call.
+        let src = "BSLMF_ASSERT(sizeof SUFFICIENTLY_LONG_STRING > sizeof(bsl::string));\n\
+                   class UserFieldValue {\n\
+                   \x20 public:\n\
+                   \x20   BSLMF_NESTED_TRAIT_DECLARATION(UserFieldValue,\n\
+                   \x20                                  bslma::UsesBslmaAllocator);\n\
+                   };\n\
+                   int main(int argc, char *argv[])\n\
+                   {\n\
+                   \x20   ball::UserFieldValue valueB(5);\n\
+                   \x20   ASSERT(ball::UserFieldType::e_INT64 == valueB.type());\n\
+                   \x20   ASSERT(5                            == valueB.theInt64())\n\
+                   //\n\
+                   \x20   ASSERT(valueA != valueB);\n\
+                   \x20   if (veryVerbose) { T_ T_ P_(CONFIG) P(X) }\n\
+                   \x20   return testStatus;\n\
+                   }\n";
+        assert_eq!(
+            sems_of(src, "macro_invocation"),
+            [
+                (1, Sem::None),
+                (4, Sem::None),
+                (11, Sem::Call),
+                (14, Sem::None),
+                (14, Sem::None),
+                (14, Sem::Call),
+                (14, Sem::Call),
+            ],
+            "a declaration scope runs nothing, and a name with no arguments is no call site"
+        );
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        let main = f.units.iter().find(|u| &*u.name == "main").expect("main");
+        assert_eq!(main.assert_calls, 3, "an assertion with no `;` asserts too");
+        assert_eq!(f.units[0].assert_calls, 0, "a static assertion is no call");
+    }
+
+    #[test]
+    fn a_macro_with_an_else_is_an_if() {
+        // The chain of boost uuid/detail/to_chars_x86.hpp, with the
+        // statements of each branch cut to one call. Only an `if` takes
+        // an `else`, so the chain costs what the same chain of `if`
+        // statements costs.
+        let chain = |head: &str| {
+            format!(
+                "template< typename Char >\n\
+                 inline void to_chars_simd(Char* out)\n\
+                 {{\n\
+                 \x20   {head} (sizeof(Char) == 1u)\n\
+                 \x20   {{\n\
+                 \x20       store(out);\n\
+                 \x20   }}\n\
+                 \x20   else {head} (sizeof(Char) == 2u)\n\
+                 \x20   {{\n\
+                 \x20       widen(out);\n\
+                 \x20   }}\n\
+                 \x20   else\n\
+                 \x20   {{\n\
+                 \x20       widen4(out);\n\
+                 \x20   }}\n\
+                 }}\n"
+            )
+        };
+        let macro_chain = chain("BOOST_IF_CONSTEXPR");
+        assert_eq!(
+            sems_of(&macro_chain, "macro_invocation"),
+            [(4, Sem::If), (8, Sem::ElseIf)]
+        );
+        assert_eq!(
+            sems_of(&macro_chain, "else_clause"),
+            [(8, Sem::None), (12, Sem::Else)],
+            "an `else` before an `if` flattens into the chain"
+        );
+        let f = facts(&macro_chain);
+        let g = facts(&chain("if"));
+        assert!(!f.low_confidence() && !g.low_confidence());
+        let events = |facts: &crate::facts::FileFacts| -> Vec<(Sem, u32, u8)> {
+            let unit = &facts.units[1];
+            unit.ctrl
+                .iter()
+                .map(|c| (c.sem, c.line, c.cog_depth))
+                .collect()
+        };
+        assert_eq!(events(&f), events(&g));
+        assert_eq!(
+            crate::metrics::complexity(&f.units[1]),
+            crate::metrics::complexity(&g.units[1])
+        );
+    }
+
+    #[test]
+    fn an_attribute_on_the_name_of_a_function_keeps_the_name() {
+        // The text of llvm-project libc/test/src/__support/OSUtil/linux/
+        // vdso_test.cpp:106 and clang/test/CodeGen/noduplicate-cxx11-test.cpp:8.
+        // The attribute appertains to the declarator id, and the grammar
+        // wraps the name in an `attributed_declarator` with no fields.
+        let src = "static void sigprof_handler [[gnu::used]] (int) { flag = true; }\n\
+                   \n\
+                   int noduplicatedfun [[clang::noduplicate]] (int a) {\n\
+                   \n\
+                   \x20 return a+1;\n\
+                   \n\
+                   }\n\
+                   struct Reader {\n\
+                   \x20 virtual int read [[nodiscard]] (char* b) = 0;\n\
+                   \x20 virtual ~Reader [[gnu::cold]] () = default;\n\
+                   };\n";
+        assert_eq!(
+            sems_of(src, "attributed_declarator").len(),
+            4,
+            "each attribute wraps its name"
+        );
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        let units: Vec<(&str, usize)> = f.units[1..]
+            .iter()
+            .map(|u| (&*u.name, u.params.len()))
+            .collect();
+        assert_eq!(
+            units,
+            [
+                ("sigprof_handler", 1),
+                ("noduplicatedfun", 1),
+                ("~Reader", 0)
+            ]
+        );
+        assert_eq!(f.interfaces.len(), 1, "a pure virtual behind an attribute");
+        assert_eq!(f.interfaces[0].methods, 1, "the destructor is not one");
+    }
+
+    #[test]
+    fn an_attribute_macro_on_a_function_is_no_call_and_no_name() {
+        // The text of firefox xpcom/threads/Monitor.h:30-37. The fork
+        // reads each macro after a parameter list as an
+        // `attribute_macro` of the function declarator.
+        let src = "class Monitor {\n\
+                   \x20public:\n\
+                   \x20 [[nodiscard]] bool TryLock() MOZ_TRY_ACQUIRE(true) {\n\
+                   \x20   return mMutex.TryLock();\n\
+                   \x20 }\n\
+                   \x20 void Unlock() MOZ_CAPABILITY_RELEASE() { mMutex.Unlock(); }\n\
+                   \n\
+                   \x20 void Wait() MOZ_REQUIRES(this) { mCondVar.Wait(); }\n\
+                   };\n";
+        assert_eq!(
+            sems_of(src, "attribute_macro"),
+            [(3, Sem::None), (6, Sem::None), (8, Sem::None)]
+        );
+        assert_eq!(
+            sems_of(src, "call_expression"),
+            [(4, Sem::Call), (6, Sem::Call), (8, Sem::Call)],
+            "the member calls and nothing else"
+        );
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        let units: Vec<(&str, bool, usize)> = f.units[1..]
+            .iter()
+            .map(|u| (&*u.name, u.is_method, u.params.len()))
+            .collect();
+        assert_eq!(
+            units,
+            [("TryLock", true, 0), ("Unlock", true, 0), ("Wait", true, 0)]
+        );
+    }
+
+    #[test]
+    fn a_type_macro_and_a_scope_macro_are_no_calls() {
+        // The text of firefox xpcom/base/CycleCollectedJSRuntime.h:30-37 and
+        // xpcom/base/nsCycleCollectionParticipant.h:548-559.
+        let src = "class JSGCThingParticipant : public nsCycleCollectionParticipant {\n\
+                   \x20public:\n\
+                   \x20 NS_IMETHOD_(void) Root(void*) override {\n\
+                   \x20   MOZ_ASSERT(false, \"Don't call Root on GC things\");\n\
+                   \x20 }\n\
+                   };\n\
+                   template <typename T>\n\
+                   struct DowncastCCParticipantImpl<T, true> {\n\
+                   \x20 static T* Run(void* aPtr) {\n\
+                   \x20   nsISupports* s = static_cast<nsISupports*>(aPtr);\n\
+                   \x20   T* rval = NS_CYCLE_COLLECTION_CLASSNAME(T)::Downcast(s);\n\
+                   \x20   NS_CHECK_FOR_RIGHT_PARTICIPANT(rval);\n\
+                   \x20   return rval;\n\
+                   \x20 }\n\
+                   };\n";
+        assert_eq!(sems_of(src, "macro_type_specifier"), [(3, Sem::None)]);
+        assert_eq!(sems_of(src, "macro_scope_specifier"), [(11, Sem::None)]);
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        let root = f.units.iter().find(|u| &*u.name == "Root").expect("Root");
+        assert_eq!(root.params.len(), 1);
+        assert_eq!(root.assert_calls, 1, "the assertion in the body");
+        let run = f.units.iter().find(|u| &*u.name == "Run").expect("Run");
+        assert_eq!(run.casts, 1, "static_cast is still a cast");
+        assert_eq!(
+            sems_of(src, "call_expression"),
+            [
+                (4, Sem::Call),
+                (10, Sem::Cast),
+                (11, Sem::Call),
+                (12, Sem::Call)
+            ],
+            "the call through a scope macro is one call, and the macro is none"
+        );
+    }
+
+    #[test]
+    fn a_call_with_a_token_tree_is_one_call() {
+        // The text of qt-creator src/libs/utils/fancymainwindow.cpp:602-606.
+        // An argument that is no expression, `return nullptr`, gives the
+        // call a `token_tree`, and the tokens in it are no calls.
+        let src = "QDockWidget *FancyMainWindow::addDockForWidget(QWidget *widget, bool immutable)\n\
+                   {\n\
+                   \x20   QTC_ASSERT(widget, return nullptr);\n\
+                   \x20   QTC_CHECK(widget->objectName().size());\n\
+                   }\n";
+        assert_eq!(sems_of(src, "token_tree"), [(3, Sem::None)]);
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        assert_eq!(f.units[1].assert_calls, 1, "QTC_ASSERT asserts");
+        assert_eq!(
+            sems_of(src, "call_expression").len(),
+            4,
+            "QTC_ASSERT, QTC_CHECK, objectName and size"
+        );
+    }
+
+    #[test]
+    fn a_qt_emit_is_the_call_it_emits() {
+        // The text of qt-creator src/libs/utils/fancylineedit.cpp:100-106.
+        let src = "class HistoryCompleterPrivate {\n\
+                   public:\n\
+                   \x20   void setKeySequence(const QKeySequence &key)\n\
+                   \x20   {\n\
+                   \x20       if (m_key != key) {\n\
+                   \x20           m_key = key;\n\
+                   \x20           emit keyChanged(key);\n\
+                   \x20       }\n\
+                   \x20   }\n\
+                   };\n";
+        assert_eq!(sems_of(src, "qt_emit_statement"), [(7, Sem::None)]);
+        assert_eq!(sems_of(src, "call_expression"), [(7, Sem::Call)]);
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        assert_eq!(ctrl_of(&f), [vec![(Sem::If, 5)]]);
+    }
+
+    #[test]
+    fn a_lambda_declarator_opens_no_unit() {
+        // The text of firefox xpcom/base/AvailableMemoryWatcherLinux.cpp:
+        // 331-339, with the call closed after the lambda.
+        let src = "nsresult nsAvailableMemoryWatcher::StartPolling(const MutexAutoLock&) {\n\
+                   \x20 bool isTesting = mIsTesting;\n\
+                   \x20 nsresult rv = mThread->Dispatch(NS_NewRunnableFunction(\n\
+                   \x20     \"MemoryPoller\", [self = RefPtr{this}, isTesting]() {\n\
+                   \x20       if (self->IsMemoryLow()) {\n\
+                   \x20         self->HandleLowMemory();\n\
+                   \x20       } else {\n\
+                   \x20         self->MaybeHandleHighMemory();\n\
+                   \x20       }\n\
+                   \x20     }));\n\
+                   \x20 return rv;\n\
+                   }\n";
+        assert_eq!(sems_of(src, "lambda_expression"), [(4, Sem::Lambda)]);
+        assert_eq!(sems_of(src, "lambda_declarator"), [(4, Sem::None)]);
+        let f = facts(src);
+        assert!(!f.low_confidence());
+        let names: Vec<&str> = f.units[1..].iter().map(|u| &*u.name).collect();
+        assert_eq!(names, ["StartPolling"], "a lambda is no unit");
+        let depths: Vec<(Sem, u8)> = f.units[1]
+            .ctrl
+            .iter()
+            .map(|c| (c.sem, c.cog_depth))
+            .collect();
+        assert_eq!(
+            depths,
+            [(Sem::If, 1), (Sem::Else, 2)],
+            "the branch in the lambda nests under it"
+        );
+    }
+
+    #[test]
+    fn a_case_range_is_one_arm() {
+        // The text of serenity Userland/Libraries/LibGL/Texture.cpp:395-404,
+        // with the GNU range `case GL_TEXTURE0 ... GL_TEXTURE31:`.
+        let src = "void GLContext::gl_tex_env(GLenum param_enum, GLenum pname)\n\
+                   {\n\
+                   \x20           switch (param_enum) {\n\
+                   \x20           case GL_CONSTANT:\n\
+                   \x20           case GL_PREVIOUS:\n\
+                   \x20           case GL_PRIMARY_COLOR:\n\
+                   \x20           case GL_TEXTURE:\n\
+                   \x20           case GL_TEXTURE0 ... GL_TEXTURE31:\n\
+                   \x20               m_active_texture_unit->set_alpha_source(pname - GL_SRC0_ALPHA, param_enum);\n\
+                   \x20               break;\n\
+                   \x20           default:\n\
+                   \x20               RETURN_WITH_ERROR_IF(true, GL_INVALID_ENUM);\n\
+                   \x20           }\n\
+                   }\n";
+        let f = facts(src);
+        assert!(!f.low_confidence(), "the range parses");
+        let arms = f.units[1]
+            .ctrl
+            .iter()
+            .filter(|c| c.sem == Sem::CaseArm)
+            .count();
+        assert_eq!(
+            arms, 6,
+            "five labels and `default`, the range among them once"
+        );
+        assert_eq!(f.units[1].magic_numbers, 0);
+    }
+
+    #[test]
+    fn an_operator_spelled_like_a_call_is_no_call() {
+        // The text of nlohmann-json single_include/nlohmann/json.hpp:
+        // 6734-6743, fmt include/fmt/std.h:660-666, bde
+        // bsla_nullterminated.t.cpp:150-156 and bslmf_ispolymorphic.h:
+        // 157-159. `noexcept`, `typeid`, `va_arg` and `__is_polymorphic`
+        // are operators, and the fork gives each a kind of its own. The
+        // stock grammar read `noexcept(...)` and `va_arg(...)` as calls.
+        let src = "struct to_json_fn\n\
+                   {\n\
+                   \x20   template<typename BasicJsonType, typename T>\n\
+                   \x20   auto operator()(BasicJsonType& j, T&& val) const noexcept(noexcept(to_json(j, std::forward<T>(val))))\n\
+                   \x20   -> decltype(to_json(j, std::forward<T>(val)), void())\n\
+                   \x20   {\n\
+                   \x20       return to_json(j, std::forward<T>(val));\n\
+                   \x20   }\n\
+                   };\n\
+                   template <typename OutputIt>\n\
+                   auto write(OutputIt out, const std::exception& ex) const -> OutputIt {\n\
+                   \x20   out = detail::write_demangled_name(out, typeid(ex));\n\
+                   \x20   return out;\n\
+                   }\n\
+                   void join(char *outputBuffer, ...)\n\
+                   {\n\
+                   \x20       va_list ap;\n\
+                   \x20       va_start(ap, outputBuffer);\n\
+                   \x20       const char *next;\n\
+                   \x20       for (bool first = 1; (next = va_arg(ap, const char *)); first = 0) {\n\
+                   \x20           ::strcat(outputBuffer, next);\n\
+                   \x20       }\n\
+                   }\n\
+                   template <class t_TYPE>\n\
+                   struct IsPolymorphic_Imp {\n\
+                   \x20   enum { Value = __is_polymorphic(t_TYPE) };\n\
+                   };\n";
+        for kind in [
+            "noexcept_expression",
+            "typeid_expression",
+            "va_arg_expression",
+            "type_trait_expression",
+        ] {
+            let sems = sems_of(src, kind);
+            assert_eq!(sems.len(), 1, "{kind}");
+            assert_eq!(sems[0].1, Sem::None, "{kind} is no call");
+        }
+        let calls: Vec<usize> = sems_of(src, "call_expression")
+            .into_iter()
+            .filter(|(_, sem)| *sem == Sem::Call)
+            .map(|(line, _)| line)
+            .collect();
+        assert_eq!(
+            calls,
+            [4, 4, 5, 5, 5, 7, 7, 12, 18, 21],
+            "the calls inside an operator still count"
+        );
+        assert!(!facts(src).low_confidence());
+    }
+
+    #[test]
+    fn a_qt_loop_is_a_loop() {
+        // The text of qt-creator src/libs/utils/commandline.cpp:131-141
+        // and of the qtbase containers snippet, which spell the loops of
+        // Qt. After expansion each one is the `for` statement below it.
+        let qt = "QStringList ProcessArgs::splitArgsWin(const QString &args)\n\
+                  {\n\
+                  \x20   forever {\n\
+                  \x20       forever {\n\
+                  \x20           if (p == length)\n\
+                  \x20               return ret;\n\
+                  \x20           if (!isWhiteSpaceWin(args.unicode()[p].unicode()))\n\
+                  \x20               break;\n\
+                  \x20           ++p;\n\
+                  \x20       }\n\
+                  \x20       foreach (const QString &str, values)\n\
+                  \x20           qDebug() << str;\n\
+                  \x20   }\n\
+                  }\n";
+        let plain = qt.replacen("forever", "for (;;)", 2).replace(
+            "foreach (const QString &str, values)",
+            "for (const QString &str : values)",
+        );
+        let (f, g) = (facts(qt), facts(&plain));
+        assert!(!f.low_confidence() && !g.low_confidence());
+        assert_eq!(
+            sems_of(qt, "qt_forever_statement"),
+            [(3, Sem::Loop), (4, Sem::Loop)]
+        );
+        assert_eq!(sems_of(qt, "qt_foreach_statement"), [(11, Sem::Loop)]);
+        assert_eq!(ctrl_of(&f), ctrl_of(&g));
+        assert_eq!(f.units[1].max_loop_depth, 2);
+        assert_eq!(
+            crate::metrics::complexity(&f.units[1]),
+            crate::metrics::complexity(&g.units[1])
+        );
+    }
+
+    /// The (event, line) pairs of each unit after the module, in order.
+    fn ctrl_of(f: &crate::facts::FileFacts) -> Vec<Vec<(Sem, u32)>> {
+        f.units[1..]
+            .iter()
+            .map(|u| u.ctrl.iter().map(|c| (c.sem, c.line)).collect())
+            .collect()
+    }
+
+    #[test]
+    fn a_conditional_group_of_lines_counts_each_directive() {
+        // The text of bde balb_pipecontrolchannel.cpp:355-383, and of the
+        // tables of baljsn_encodeimplutil.t.cpp:177-188 and
+        // bdlsb_memoutstreambuf.t.cpp:1290-1309. The fork keeps no group
+        // node where a branch holds a part of a statement. Each directive
+        // line that it reads is a `preproc_call`, and the other branches
+        // are one `preproc_skipped` token of text.
+        let src = "void PipeControlChannel::backgroundProcessor()\n\
+                   {\n\
+                   \x20           if (0 == bytesRead) {\n\
+                   \x20               continue;\n\
+                   \x20           }\n\
+                   \x20           else if (0 > bytesRead) {\n\
+                   #if EAGAIN != EWOULDBLOCK\n\
+                   \x20               if (EAGAIN == savedErrno || EWOULDBLOCK == savedErrno) {\n\
+                   #else\n\
+                   \x20               if (EAGAIN == savedErrno) {\n\
+                   #endif\n\
+                   \x20                   continue;\n\
+                   \x20               } else {\n\
+                   \x20                   bail();\n\
+                   \x20               }\n\
+                   \x20           }\n\
+                   }\n\
+                   void testEncode()\n\
+                   {\n\
+                   \x20   static const struct {\n\
+                   \x20       int         d_line;\n\
+                   \x20       Int64       d_value;\n\
+                   \x20       const char *d_result;\n\
+                   \x20   } DATA[] = {\n\
+                   \x20       { L_,   UINT_MAX,           \"4294967295\" },\n\
+                   #if   defined(BSLS_PLATFORM_CPU_32_BIT)                                       \\\n\
+                   \x20 || (defined(BSLS_PLATFORM_CPU_64_BIT) && defined(BSLS_PLATFORM_OS_WINDOWS))\n\
+                   \x20       { L_,   LONG_MAX,           \"2147483647\" },\n\
+                   #elif defined(BSLS_PLATFORM_CPU_64_BIT)\n\
+                   \x20       { L_,   LONG_MAX,  \"9223372036854775807\" },\n\
+                   #else\n\
+                   # error \"baljsn_encoder.t.cpp does not support the platform's bitness.\"\n\
+                   #endif\n\
+                   \x20       { L_,  LLONG_MAX,  \"9223372036854775807\" },\n\
+                   \x20   };\n\
+                   }\n\
+                   void testReserve()\n\
+                   {\n\
+                   \x20   static const struct { int d_line; int d_size; } DATA[] = {\n\
+                   \x20              { L_,   INIT_BUFSIZE, IBPO,           TWICE_INIT_BUFSIZE },\n\
+                   #if   defined(BSLS_PLATFORM_OS_WINDOWS)\n\
+                   \x20 #if   defined(BSLS_PLATFORM_CPU_32_BIT)\n\
+                   \x20              { L_,   0,            SZ_INT_MAX/8,   SZ_INT_MAX/8 +1    },\n\
+                   \x20 #elif defined(BSLS_PLATFORM_CPU_64_BIT)\n\
+                   \x20              { L_,   0,            SZ_INT_MAX/2,   SZ_INT_MAX/2 +1    },\n\
+                   \x20 #else\n\
+                   \x20       #error \"Unknown CPU\"\n\
+                   \x20 #endif\n\
+                   #elif defined(BSLS_PLATFORM_OS_UNIX)\n\
+                   \x20 /* #if defined(BSLS_PLATFORM_CPU_16_BIT)\n\
+                   #if a comment line starts no group\n\
+                   \x20 */\n\
+                   \x20 #if   defined(BSLS_PLATFORM_CPU_32_BIT)\n\
+                   \x20              { L_,   0,            SZ_INT_MAX/4,   SZ_INT_MAX/4 +1    },\n\
+                   \x20 #elif defined(BSLS_PLATFORM_CPU_64_BIT)\n\
+                   \x20              { L_,   0,            SZ_INT_MAX,    (SZ_INT_MAX+1)*1    },\n\
+                   \x20 #else\n\
+                   \x20       #error \"Unknown CPU\"\n\
+                   \x20 #endif\n\
+                   #else\n\
+                   \x20   #error \"Unknown OS\"\n\
+                   #endif\n\
+                   \x20           };\n\
+                   }\n";
+        let f = facts(src);
+        assert!(!f.low_confidence(), "the fork reads each group as lines");
+        assert_eq!(
+            sems_of(src, "preproc_call")
+                .into_iter()
+                .map(|(line, sem)| (sem, line))
+                .collect::<Vec<_>>(),
+            [
+                (Sem::If, 7),
+                (Sem::None, 11),
+                (Sem::If, 26),
+                (Sem::None, 33),
+                (Sem::If, 41),
+                (Sem::If, 42),
+                (Sem::None, 48),
+                (Sem::None, 62),
+            ],
+            "a directive line counts by its name, and `#endif` closes with no event"
+        );
+        use Sem::{Else, ElseIf, If, Jump};
+        assert_eq!(
+            ctrl_of(&f),
+            [
+                vec![
+                    (If, 3),
+                    (Jump, 4),
+                    (ElseIf, 6),
+                    (If, 7),
+                    (If, 8),
+                    (Sem::BoolOp, 8),
+                    (Else, 9),
+                    (Jump, 12),
+                    (Else, 13),
+                ],
+                vec![(If, 26), (ElseIf, 29), (Else, 31)],
+                vec![
+                    (If, 41),
+                    (If, 42),
+                    (ElseIf, 44),
+                    (Else, 46),
+                    (ElseIf, 49),
+                    (If, 53),
+                    (ElseIf, 55),
+                    (Else, 57),
+                    (Else, 60),
+                ],
+            ],
+            "the skipped text counts its `#elif`, `#else` and nested `#if` lines, and a comment counts none"
+        );
     }
 
     #[test]

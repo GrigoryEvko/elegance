@@ -5,8 +5,15 @@
 
 mod c;
 mod cpp;
+/// The names a C++ project declares, which the parser of one file
+/// cannot know. The whole run reads one seed, before any file.
+pub(crate) mod cppseed;
 mod csharp;
 mod elixir;
+/// The C++ text with what a Clang does not read removed, and the
+/// constructs that no removal keeps the meaning of. `elegance tidy`
+/// reads both.
+pub(crate) use cpp::{clang_gaps, lower_for_clang};
 /// A module name written the way Elixir writes it as a path, the bridge
 /// the graph needs to match `Plug.Conn` against `plug/conn.ex`.
 pub(crate) use elixir::underscore;
@@ -328,6 +335,38 @@ impl Lang {
         DESCS.iter().find(|d| d.exts.contains(&ext)).map(|d| d.lang)
     }
 
+    /// Source rewritten into what this pack's grammar can read, or
+    /// `None` when it already reads it. A grammar lags its language, and
+    /// a parse error is not local — the failing node swallows the rest
+    /// of its scope — so a pack that has drifted reports the complexity
+    /// of a tree that never matched the code. Only C++ needs this today.
+    ///
+    /// `macros` names what the project declared to clang-format, which
+    /// is the only thing that identifies a macro in a declarator.
+    ///
+    /// Every rewrite preserves byte offsets, because the line a finding
+    /// prints is an offset into this text.
+    pub fn normalize(self, src: &str, macros: &crate::clangfmt::Macros) -> Option<String> {
+        match self {
+            Lang::Cpp | Lang::Cuda => cpp::normalize(src, macros),
+            _ => None,
+        }
+    }
+
+    /// The rewrites `normalize` makes to this source, by name and by the
+    /// paper that adds the syntax, with how many times each one fired.
+    /// Empty for a language that needs none. `--errors` prints them.
+    pub fn rewrites(
+        self,
+        src: &str,
+        macros: &crate::clangfmt::Macros,
+    ) -> Vec<(&'static str, &'static str, usize)> {
+        match self {
+            Lang::Cpp | Lang::Cuda => cpp::rewrites(src, macros),
+            _ => Vec::new(),
+        }
+    }
+
     /// The language a file is MEASURED as. `.h` is the one extension in
     /// this tool that underdetermines its language, and reading it as C
     /// unconditionally is measurably wrong: of leveldb's 56 headers 47
@@ -367,6 +406,7 @@ impl Lang {
         match by_extension {
             Lang::C | Lang::Cpp if looks_like_cuda(source) => Some(Lang::Cuda),
             Lang::C if path.extension()? == "h" && looks_like_cpp(source) => Some(Lang::Cpp),
+            Lang::TypeScript if is_linguist_catalog(source) => None,
             lang => Some(lang),
         }
     }
@@ -383,8 +423,9 @@ impl Lang {
         };
         match by_extension {
             // Every C-family extension is readable: `.h` may be any of
-            // the three, and `.cpp`/`.hpp` may be CUDA.
-            lang @ (Lang::C | Lang::Cpp) => match std::fs::read_to_string(path) {
+            // the three, and `.cpp`/`.hpp` may be CUDA. `.ts` may be a
+            // Qt Linguist catalog, which is no code at all.
+            lang @ (Lang::C | Lang::Cpp | Lang::TypeScript) => match std::fs::read_to_string(path) {
                 Ok(source) => Lang::of_source(path, &source),
                 Err(_) => Some(lang),
             },
@@ -594,6 +635,19 @@ pub type RecordKeys = fn(Node, &[u8]) -> Option<Vec<Box<str>>>;
 /// The byte range of a definition's documentation, when it has any.
 pub type DocSpan = fn(Node, &[u8]) -> Option<(u32, u32)>;
 
+/// A control event in text that the grammar kept as one token and did
+/// not parse: a directive line in a preprocessor branch that the parser
+/// skipped.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TextCtrl {
+    pub sem: Sem,
+    /// 1-based line of the event.
+    pub line: u32,
+    /// The nesting of the event under the node that holds the text. The
+    /// core adds it to the cognitive depth of that node.
+    pub nesting: u8,
+}
+
 /// What a parameter contributes to interface metrics.
 #[derive(Clone, Default)]
 pub struct ParamInfo {
@@ -766,6 +820,12 @@ pub struct Pack {
     /// Consulted for EVERY node: seeing only calls and typedefs leaves
     /// Solidity's `assembly` block and Perl's `eval "..."` invisible.
     spooky: fn(Node, Sem, &[u8]) -> bool,
+    /// The control events in the text of a leaf that the grammar did not
+    /// parse. The C++ fork keeps each preprocessor branch that its parser
+    /// skipped as one `preproc_skipped` token, and the `#elif`, `#else`
+    /// and nested `#if` lines of that text are branches of the source.
+    /// Consulted for each leaf that the pack classifies as `Sem::None`.
+    unparsed_ctrl: fn(Node, &[u8]) -> Vec<TextCtrl>,
     /// If this node is a logical NOT, its operand.
     negation_operand: for<'t> fn(Node<'t>, &[u8]) -> Option<Node<'t>>,
     /// Error-handling sin of a Catch node, if any.
@@ -1000,11 +1060,19 @@ impl Pack {
         refined
     }
 
+    /// A parser of this grammar, with the seed of the run where the
+    /// grammar reads one.
+    ///
+    /// THE SEED GOES ON EVERY PARSER AND NOT ON ONE. The walk builds a
+    /// parser for each rayon task, so a seed set in one place reaches
+    /// one thread of the walk and the run then measures two kinds of
+    /// tree with no sign of it.
     pub fn make_parser(&self) -> Parser {
         let mut parser = Parser::new();
         parser
             .set_language(&self.ts)
             .expect("grammar/runtime version mismatch");
+        cppseed::install_in(&mut parser, self.lang);
         parser
     }
 
@@ -1357,6 +1425,18 @@ fn looks_like_cpp(source: &str) -> bool {
                 .strip_prefix("class ")
                 .is_some_and(|rest| rest.starts_with(|c: char| c.is_alphabetic() || c == '_'))
     })
+}
+
+/// A Qt Linguist catalog: XML under the extension of TypeScript. Qt
+/// keeps its translations that way, MuseScore in 142 files of 2 MB and
+/// bitcoin in 101, and the TypeScript grammar reads each one as errors
+/// only. No TypeScript file opens with an XML declaration or a `TS`
+/// element.
+fn is_linguist_catalog(source: &str) -> bool {
+    let head = source.trim_start_matches('\u{feff}').trim_start();
+    ["<?xml", "<!DOCTYPE TS", "<TS ", "<TS>"]
+        .iter()
+        .any(|opening| head.starts_with(opening))
 }
 
 /// Does this declared type text name one of the language's escape
@@ -3635,7 +3715,7 @@ let classify items limit =
             .collect();
         assert_eq!(
             pinned.join(", "),
-            "py 15, rs 15, ts 14, tsx 14, go 15, js 15, zig 14, lua 15, rb 14, pl 15, php 15, java 14, cs 15, swift 15, scala 15, ex 14, sol 15, c 15, ml 14, sh 15, cpp 14, cu 15"
+            "py 15, rs 15, ts 14, tsx 14, go 15, js 15, zig 14, lua 15, rb 14, pl 15, php 15, java 14, cs 15, swift 15, scala 15, ex 14, sol 15, c 15, ml 15, sh 15, cpp 1019, cu 15"
         );
     }
 
@@ -3681,6 +3761,21 @@ fn beta(items: Vec<i64>) -> i64 {
             .filter(|s| f.clone_sites.iter().filter(|t| t.hash == s.hash).count() >= 2)
             .collect();
         assert!(!dup.is_empty(), "renamed twin functions must collide");
+    }
+
+    #[test]
+    fn a_qt_linguist_catalog_is_not_typescript() {
+        let catalog = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE TS>\n\
+                       <TS version=\"2.1\" language=\"de\">\n</TS>\n";
+        assert_eq!(Lang::of_source(Path::new("locale/app_de.ts"), catalog), None);
+        // bitcoin's catalogs open with the element and no declaration.
+        let bare = "<TS version=\"2.1\" language=\"kn\">\n</TS>\n";
+        assert_eq!(Lang::of_source(Path::new("locale/app_kn.ts"), bare), None);
+        let code = "export const x: number = 1;\n";
+        assert_eq!(
+            Lang::of_source(Path::new("src/x.ts"), code),
+            Some(Lang::TypeScript)
+        );
     }
 
     #[test]

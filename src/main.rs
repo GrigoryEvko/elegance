@@ -2,6 +2,7 @@ mod api;
 mod cache;
 mod calibrate;
 mod ci;
+mod clangfmt;
 mod config;
 mod context;
 mod coupling;
@@ -9,6 +10,7 @@ mod deps;
 mod diff;
 mod docparam;
 mod facts;
+mod factsdump;
 mod git;
 mod graph;
 mod helm;
@@ -28,6 +30,7 @@ mod report;
 mod rollup;
 mod sem;
 mod sfc;
+mod tidy;
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -105,11 +108,50 @@ struct Args {
     helm: bool,
     /// Render each environment and measure the manifests that ship.
     render: bool,
+    /// The C++ seed of this project, when it is not at the usual place.
+    /// `cargo xtask seed collect` of the tree-sitter-cpp fork writes it.
+    cpp_seed: Option<PathBuf>,
+    /// Pack development aid: every unit, call and control event of the
+    /// scan as rows, so that two scans can be compared site by site.
+    facts_dump: Option<PathBuf>,
 }
 
+/// Where a C++ project keeps its seed, below the first root.
+///
+/// The directory is the one the ratchet and the trend ledger already
+/// use, so a project that seeds its parse grows no new directory.
+const CPP_SEED: &str = ".elegance/cpp.seed";
+
 fn main() -> Result<(), Box<dyn Error>> {
+    // `tidy` sends every argument after it to clang-tidy as written, so it
+    // leaves before the parser of elegance's own flags reads them.
+    let mut raw = std::env::args_os().skip(1);
+    if raw.next().is_some_and(|first| first == "tidy") {
+        let rest: Vec<String> = raw.map(|arg| arg.to_string_lossy().into_owned()).collect();
+        std::process::exit(tidy::main(&rest));
+    }
     let args = parse_args()?;
+    // Before any file is read: the C++ rewrite needs the macro names
+    // the project declares, and `--errors` on one file needs them too.
+    // A mode that reads one file looks up from that file. The default
+    // root is `.`, and a walk of `.` reads every directory of the
+    // repository before the one file is measured.
+    let scope = match (&args.explain, &args.errors) {
+        (Some((path, _)), _) | (None, Some(path)) => path.as_path(),
+        (None, None) => args.roots[0].as_path(),
+    };
+    let macros = clangfmt::Registry::discover(scope);
+    let declared = macros.count();
+    clangfmt::install(macros);
+    // Also before any file is read: the names the C++ project declares.
+    // A parser of one file cannot know them, because it parses no
+    // header.
+    lang::cppseed::install(cpp_seed(&args)?);
+    if let Some(path) = &args.facts_dump {
+        factsdump::open(path)?;
+    }
     if single_file_mode(&args)? {
+        factsdump::close();
         return Ok(());
     }
 
@@ -133,14 +175,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     let shape = shape(&args);
     let complete = shape != Shape::Brief;
     let layers = config::layers(&args.roots[0])?;
-    // A reader of one table should know it is not one budget.
-    match layers.count() {
-        0 => {}
-        1 => println!("1 package sets its own budgets\n"),
-        n => println!("{n} packages set their own budgets\n"),
+    // What the run read before it read any code. Machine output carries
+    // one document and nothing else, so neither line says anything
+    // there: a line above the JSON is a parse error for whatever reads
+    // it.
+    if !matches!(shape, Shape::Json | Shape::Sarif) {
+        // A reader of one table should know it is not one budget.
+        match layers.count() {
+            0 => {}
+            1 => println!("1 package sets its own budgets\n"),
+            n => println!("{n} packages set their own budgets\n"),
+        }
+        // A reader who declared the names should see that they arrived.
+        if declared > 0 {
+            println!("{declared} macro names read from .clang-format\n");
+        }
     }
     let wants = wants_for(shape);
     let mut agg = scan(&files, layers, complete, wants);
+    // Every file is read by now, and a mode below can leave through
+    // `process::exit`. A buffered writer that nothing flushes loses its
+    // last rows, and a dump short by its last file reads as a scan that
+    // found less.
+    factsdump::close();
     // Which pack hooks this corpus actually reached. A diagnostic, not a
     // report: the counters only exist under debug assertions, and a
     // release binary built with `-C debug-assertions=on` measures a whole
@@ -158,6 +215,41 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     present(&args, &mut agg)
+}
+
+/// The seed of this run: the file `--cpp-seed` names, or
+/// `.elegance/cpp.seed` below the first path when that file is there.
+///
+/// A FILE THAT THE READER REFUSES STOPS THE RUN. It is not a file the
+/// parser can skip: the scanner reads a seed of another version as no
+/// name, with no message and no ERROR node, so a run that went on would
+/// measure the trees of a parser with no seed while every reader of the
+/// report believed it was seeded. The message names the version in the
+/// file, the version this build reads, and the command that writes the
+/// file again.
+///
+/// A project with no seed file at the usual place gets no seed and no
+/// message. That is not a fall back, because there is nothing to fall
+/// back from. `--cpp-seed` on a file that is not there is an error, so a
+/// misspelled path never reads as a project with no seed.
+fn cpp_seed(args: &Args) -> Result<Option<lang::cppseed::Seed>, Box<dyn Error>> {
+    let (path, named) = match &args.cpp_seed {
+        Some(path) => (path.clone(), true),
+        None => (args.roots[0].join(CPP_SEED), false),
+    };
+    if !named && !path.exists() {
+        return Ok(None);
+    }
+    let seed = lang::cppseed::Seed::read(&path)?;
+    // On stderr, so that a machine reader of stdout still reads one
+    // document. Every C++ number of this run is a function of this file.
+    eprintln!(
+        "C++ seed: {} names from {}, id {}",
+        seed.names(),
+        path.display(),
+        seed.id()
+    );
+    Ok(Some(seed))
 }
 
 /// Modes that own the whole run: each walks what it needs, decides its
@@ -229,11 +321,32 @@ fn compare_modes(args: &Args, cfg: &config::Config) -> Result<(), Box<dyn Error>
     Ok(())
 }
 
+/// The text of the one source file that a flag names.
+///
+/// A bare `Os { code: 2, kind: NotFound }` names no path and no flag. The
+/// reader of it cannot know which of the two happened: a file that is not
+/// there, or a flag that reads where the reader wanted it to write.
+/// `--errors` and `--explain` each READ one source file. `--errors`
+/// stands beside `--facts-dump` in the usage, whose argument IS a path to
+/// write, and the message below is what tells the two apart.
+///
+/// The message is one line, because `main` prints an error through
+/// `Debug` and a line break arrives at the reader as the two characters
+/// `\n`.
+fn read_source(path: &std::path::Path, flag: &str) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| {
+        format!(
+            "cannot read {}: {e}. {flag} reads one source file. It writes no file",
+            path.display()
+        )
+    })
+}
+
 /// Modes that read ONE file and never scan a tree. Returns whether one
 /// ran, so main can stop.
 fn single_file_mode(args: &Args) -> Result<bool, Box<dyn Error>> {
     if let Some((path, line)) = &args.explain {
-        let source = std::fs::read_to_string(path)?;
+        let source = read_source(path, "--explain")?;
         let (lang, text) = measurable(path, &source).ok_or("no code in this file")?;
         let pack = lang.pack();
         let f = facts::extract(pack, &mut pack.make_parser(), path, &text);
@@ -439,8 +552,17 @@ fn measurable<'a>(
     source: &'a str,
 ) -> Option<(Lang, std::borrow::Cow<'a, str>)> {
     let Some(container) = ci::Container::of(path) else {
-        return Lang::of_source(path, source)
-            .map(|lang| (lang, std::borrow::Cow::Borrowed(source)));
+        return Lang::of_source(path, source).map(|lang| {
+            // C++26 ships syntax the bundled grammar cannot read, and a
+            // parse error swallows the rest of its scope rather than
+            // just itself. Normalising first is what keeps a header
+            // that uses contracts or reflection from reporting the
+            // complexity of a tree that never matched the code.
+            let text = lang
+                .normalize(source, clangfmt::for_file(path))
+                .map_or(std::borrow::Cow::Borrowed(source), std::borrow::Cow::Owned);
+            (lang, text)
+        });
     };
     let owned = |lang: Lang, text: String| (lang, std::borrow::Cow::Owned(text));
     match container {
@@ -533,6 +655,8 @@ fn defaults() -> Args {
         deps: false,
         helm: false,
         render: false,
+        cpp_seed: None,
+        facts_dump: None,
     }
 }
 
@@ -612,10 +736,14 @@ usage: elegance [paths...]                 report; defaults to .
   --deps                                   look inside the dependencies you did not write
   --helm                                   values-overlay drift and credentials in YAML
   --render                                 render each environment, measure what ships
-  --errors FILE                            parse errors and pack drift (pack developers)
+  --errors FILE                            parse errors and pack drift, read from one source file
+  --cpp-seed FILE                          the names this C++ project declares; the default is
+                                           .elegance/cpp.seed below the first path
+  --facts-dump FILE                        every unit, call and control event as rows (pack developers)
 
   elegance calibrate <gold-dirs...>        re-derive budgets, write calibration.toml
-  elegance install-hook|uninstall-hook     pre-commit hook running --diff HEAD";
+  elegance install-hook|uninstall-hook     pre-commit hook running --diff HEAD
+  elegance tidy FILES... [-- FLAGS]        clang-tidy on C++ that its Clang does not read yet";
 
 /// Flags whose meaning is the argument that follows them.
 fn takes_value(flag: &str) -> bool {
@@ -629,6 +757,8 @@ fn takes_value(flag: &str) -> bool {
             | "--top"
             | "--explain"
             | "--history"
+            | "--cpp-seed"
+            | "--facts-dump"
     )
 }
 
@@ -639,6 +769,8 @@ fn set_valued(args: &mut Args, flag: &str, value: &str) -> Result<(), Box<dyn Er
         "--diff" => args.diff = Some(value.to_string()),
         "--api" => args.api = Some(value.to_string()),
         "--errors" => args.errors = Some(PathBuf::from(value)),
+        "--cpp-seed" => args.cpp_seed = Some(PathBuf::from(value)),
+        "--facts-dump" => args.facts_dump = Some(PathBuf::from(value)),
         "--fail-on" => args.fail_on = value.parse()?,
         "--top" => args.top = value.parse()?,
         // `file:line` where the suffix is digits, else a bare path: a
@@ -707,7 +839,7 @@ fn hook(root: &std::path::Path, install: bool, fail_on: u8) -> Result<(), Box<dy
 /// outright.
 fn debug_errors(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
     use std::io::Write;
-    let raw = std::fs::read_to_string(path)?;
+    let raw = read_source(path, "--errors")?;
     let (lang, text) = measurable(path, &raw).ok_or("unsupported file type")?;
     let source = text.into_owned();
     let lines: Vec<&str> = source.lines().collect();
@@ -716,11 +848,18 @@ fn debug_errors(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
     for name in lang.pack().unresolved() {
         println!("{lang:?} pack drift: {name} does not exist in this grammar");
     }
-    let tree = lang
-        .pack()
-        .make_parser()
-        .parse(&source, None)
-        .ok_or("parse returned nothing")?;
+    // Then what the rewrite changed before the grammar read the file. A
+    // parse error that remains after a rule fired near it points at
+    // that rule, and one with no rule near it points at a missing rule.
+    for (name, paper, count) in lang.rewrites(&raw, clangfmt::for_file(path)) {
+        println!("{lang:?} rewrite: {name} ({paper}), {count} times");
+    }
+    let tree = facts::parse_bounded(
+        &mut lang.pack().make_parser(),
+        &source,
+        facts::parse_limit(source.len()),
+    )
+    .ok_or("the parse stopped: tree-sitter's error recovery ran past the time limit")?;
     let mut out = std::io::stdout().lock();
     let mut stack = vec![tree.root_node()];
     let mut count = 0;
